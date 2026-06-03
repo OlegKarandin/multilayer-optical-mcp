@@ -252,3 +252,43 @@ def compute_qot(
     )
 
     return state, result_id
+
+
+def gated_qot(
+    *,
+    model: NetworkModel,
+    store: QoTResultStore,
+    oms_sequence: Tuple[str, ...],
+    mode_id: str,
+    loading: LoadingState,
+) -> Tuple[QoTState, str]:
+    """Return the worse of forward/backward QoT, along with its breakdown id."""
+    fwd_state, fwd_rid = compute_qot(model=model, store=store,
+                                     oms_sequence=oms_sequence,
+                                     direction=Direction.FORWARD,
+                                     mode_id=mode_id, loading=loading)
+    bwd_state, bwd_rid = compute_qot(model=model, store=store,
+                                     oms_sequence=oms_sequence,
+                                     direction=Direction.BACKWARD,
+                                     mode_id=mode_id, loading=loading)
+    if fwd_state.gsnr_db <= bwd_state.gsnr_db:
+        return fwd_state, fwd_rid
+    return bwd_state, bwd_rid
+
+
+def recompute_qot_under_loading(
+    *, model: NetworkModel, store: QoTResultStore, loading: LoadingState,
+) -> dict[str, Tuple[QoTState, str]]:
+    """Compute gated QoT for every lightpath in model under loading.
+
+    Writes QoTState on the model and returns {lp_id: (QoTState, result_id)}
+    so callers can pull per-lightpath breakdowns on demand.
+    """
+    results: dict[str, Tuple[QoTState, str]] = {}
+    for lp in model.list_lightpaths():
+        state, rid = gated_qot(model=model, store=store,
+                               oms_sequence=lp.oms_sequence,
+                               mode_id=lp.mode_id, loading=loading)
+        model.set_qot_state(lp.id, state)
+        results[lp.id] = (state, rid)
+    return results
