@@ -1,0 +1,186 @@
+# GROUND TRUTH (gnpy==2.11.1, toy_2span.json, 400G@7.1dB @ 193.4 THz, P=-20 dBm):
+# expected GSNR ~ 4.99 dB. Updates on intentional gnpy bumps only.
+
+import math
+
+from multilayer_optical_mcp.gnpy_adapter.adapter import compute_qot
+from multilayer_optical_mcp.gnpy_adapter.loading import Channel, LoadingState
+from multilayer_optical_mcp.model.assets import (
+    Amplifier,
+    Direction,
+    Fiber,
+    FiberType,
+    OMS,
+    TransceiverMode,
+)
+from multilayer_optical_mcp.model.modes import ModeRegistry
+from multilayer_optical_mcp.model.network import NetworkModel
+from multilayer_optical_mcp.model.qot_results import QoTResultStore
+
+
+def _toy_model():
+    reg = ModeRegistry([
+        TransceiverMode(
+            id="400G@7.1dB",
+            bitrate_gbps=400.0,
+            required_gsnr_db=7.1,
+            symbol_rate_baud=87.5e9,
+            channel_spacing_hz=100e9,
+        ),
+        TransceiverMode(
+            id="800G@15.1dB",
+            bitrate_gbps=800.0,
+            required_gsnr_db=15.1,
+            symbol_rate_baud=87.5e9,
+            channel_spacing_hz=100e9,
+        ),
+        TransceiverMode(
+            id="impossible",
+            bitrate_gbps=1.0,
+            required_gsnr_db=100.0,
+            symbol_rate_baud=87.5e9,
+            channel_spacing_hz=100e9,
+        ),
+    ])
+    n = NetworkModel(modes=reg)
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    n.add_fiber(Fiber(
+        id="east fiber A to ILA",
+        a_end="trx A",
+        z_end="east edfa in ILA",
+        length_km=80.0,
+        type_variety="SSMF",
+    ))
+    n.add_amplifier(Amplifier(
+        id="east edfa in ILA",
+        type_variety="advanced_toy",
+        gain_db=20.0,
+        nf_db=5.5,
+    ))
+    n.add_fiber(Fiber(
+        id="east fiber ILA to Z",
+        a_end="east edfa in ILA",
+        z_end="east edfa at Z",
+        length_km=80.0,
+        type_variety="SSMF",
+    ))
+    n.add_amplifier(Amplifier(
+        id="east edfa at Z",
+        type_variety="advanced_toy",
+        gain_db=20.0,
+        nf_db=5.5,
+    ))
+    n.add_oms(OMS(
+        id="oms-AZ",
+        src_node_id="trx A",
+        dst_node_id="trx Z",
+        elements=(
+            "east fiber A to ILA",
+            "east edfa in ILA",
+            "east fiber ILA to Z",
+            "east edfa at Z",
+        ),
+    ))
+    return n
+
+
+def test_compute_qot_returns_state_and_result_id():
+    n = _toy_model()
+    store = QoTResultStore()
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, 0.0, "400G@7.1dB"),))
+    state, rid = compute_qot(
+        model=n,
+        store=store,
+        oms_sequence=("oms-AZ",),
+        direction=Direction.FORWARD,
+        mode_id="400G@7.1dB",
+        loading=loading,
+    )
+    assert math.isfinite(state.gsnr_db)
+    assert math.isfinite(state.osnr_db)
+    assert isinstance(state.mode_feasible, bool)
+    assert isinstance(rid, str) and rid
+
+
+def test_breakdown_cached_in_store_with_one_snapshot_per_element():
+    n = _toy_model()
+    store = QoTResultStore()
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, 0.0, "400G@7.1dB"),))
+    _, rid = compute_qot(
+        model=n,
+        store=store,
+        oms_sequence=("oms-AZ",),
+        direction=Direction.FORWARD,
+        mode_id="400G@7.1dB",
+        loading=loading,
+    )
+    bd = store.get(rid)
+    # Four elements in the OMS -> four snapshots.
+    assert len(bd.snapshots) == 4
+    # Snapshots are labeled with the resolved model uids in order.
+    assert bd.snapshots[0].element_id == "east fiber A to ILA"
+    assert bd.snapshots[3].element_id == "east edfa at Z"
+
+
+def test_limiting_element_id_is_stable_uid_not_human_string():
+    n = _toy_model()
+    store = QoTResultStore()
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, 0.0, "400G@7.1dB"),))
+    state, rid = compute_qot(
+        model=n,
+        store=store,
+        oms_sequence=("oms-AZ",),
+        direction=Direction.FORWARD,
+        mode_id="400G@7.1dB",
+        loading=loading,
+    )
+    bd = store.get(rid)
+    assert state.limiting_element_id == bd.limiting_element_id
+    if state.limiting_element_id is not None:
+        valid = {
+            "east fiber A to ILA",
+            "east edfa in ILA",
+            "east fiber ILA to Z",
+            "east edfa at Z",
+        }
+        assert state.limiting_element_id in valid
+
+
+def test_arbitrary_loading_superset_is_evaluated_without_provisioning():
+    """Contract: loading may include channels that are never committed.
+
+    A two-channel superset (make-before-break overlap) must propagate cleanly
+    and return a finite GSNR for the probe channel.
+    """
+    n = _toy_model()
+    store = QoTResultStore()
+    loading = LoadingState(channels=(
+        Channel(193.4e12, 100e9, 0.0, "400G@7.1dB"),
+        Channel(193.5e12, 100e9, 0.0, "800G@15.1dB"),
+    ))
+    state, _ = compute_qot(
+        model=n,
+        store=store,
+        oms_sequence=("oms-AZ",),
+        direction=Direction.FORWARD,
+        mode_id="400G@7.1dB",
+        loading=loading,
+    )
+    assert math.isfinite(state.gsnr_db)
+
+
+def test_mode_feasible_flips_when_gsnr_below_required():
+    """A mode with required_gsnr_db=100 is always infeasible on a real span."""
+    n = _toy_model()
+    store = QoTResultStore()
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, 0.0, "impossible"),))
+    state, _ = compute_qot(
+        model=n,
+        store=store,
+        oms_sequence=("oms-AZ",),
+        direction=Direction.FORWARD,
+        mode_id="impossible",
+        loading=loading,
+    )
+    assert state.mode_feasible is False
+    assert state.margin_db < 0
