@@ -1,4 +1,5 @@
 from __future__ import annotations
+from dataclasses import replace
 from typing import Dict, Tuple
 from .assets import (
     OpticalNode, FiberType, Fiber, Amplifier, ROADM, Transceiver, OMS,
@@ -137,3 +138,34 @@ class NetworkModel:
 
     def list_risk_groups(self) -> Tuple[RiskGroup, ...]:
         return tuple(self._risk_groups.values())
+
+    # ---------------------------------------------------------------- QoT state
+
+    def set_qot_state(self, lp_id: str, state: QoTState) -> None:
+        if lp_id not in self._lightpaths:
+            raise KeyError(lp_id)
+        self._qot_state[lp_id] = state
+
+    def get_qot_state(self, lp_id: str) -> QoTState:
+        if lp_id not in self._qot_state:
+            raise LookupError(f"no QoT state recorded for lightpath {lp_id!r}")
+        return self._qot_state[lp_id]
+
+    # ---------------------------------------------------------------- mode mutation
+
+    def set_lightpath_mode(self, lp_id: str, mode_id: str) -> None:
+        self.modes.get(mode_id)  # raises KeyError if unknown mode
+        lp = self._lightpaths[lp_id]
+        self._lightpaths[lp_id] = replace(lp, mode_id=mode_id)
+
+    # ---------------------------------------------------------------- derived capacity
+
+    def ip_link_capacity_gbps(self, link_id: str) -> float:
+        link = self._ip_links[link_id]
+        lp = self._lightpaths[link.lightpath_id]
+        state = self._qot_state.get(lp.id)
+        if state is None:
+            raise LookupError(f"no QoT state recorded for lightpath {lp.id!r}")
+        if state.margin_db < 0:
+            return 0.0
+        return self.modes.get(lp.mode_id).bitrate_gbps
