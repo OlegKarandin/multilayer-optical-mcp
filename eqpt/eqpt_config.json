@@ -1,0 +1,103 @@
+{
+  "Edfa": [
+    {
+      "type_variety": "advanced_toy",
+      "type_def": "advanced_model",
+      "gain_flatmax": 25,
+      "gain_min": 15,
+      "p_max": 21,
+      "advanced_config_from_json": "advanced_toy_config.json",
+      "out_voa_auto": false,
+      "allowed_for_design": true
+    }
+  ],
+  "Fiber": [
+    {
+      "type_variety": "SSMF",
+      "dispersion": 1.67e-05,
+      "effective_area": 83e-12,
+      "pmd_coef": 1.265e-15
+    }
+  ],
+  "Span": [
+    {
+      "power_mode": true,
+      "delta_power_range_db": [0, 0, 0.5],
+      "max_fiber_lineic_loss_for_raman": 0.25,
+      "target_extended_gain": 2.5,
+      "max_length": 150,
+      "length_units": "km",
+      "max_loss": 28,
+      "padding": 10,
+      "EOL": 0,
+      "con_in": 0,
+      "con_out": 0
+    }
+  ],
+  "Roadm": [
+    {
+      "target_pch_out_db": -20,
+      "add_drop_osnr": 38,
+      "pmd": 0,
+      "pdl": 0,
+      "restrictions": {
+        "preamp_variety_list": [],
+        "booster_variety_list": []
+      }
+    }
+  ],
+  "SI": [
+    {
+      "f_min": 191.3e12,
+      "baud_rate": 87.5e9,
+      "f_max": 196.1e12,
+      "spacing": 100e9,
+      "power_dbm": 0,
+      "power_range_db": [0, 0, 1],
+      "roll_off": 0.15,
+      "tx_osnr": 40,
+      "sys_margins": 2
+    }
+  ],
+  "Transceiver": [
+    {
+      "type_variety": "vendor-A",
+      "frequency": {
+        "min": 191.35e12,
+        "max": 196.1e12
+      },
+      "mode": [
+        {
+          "format": "300G",
+          "baud_rate": 87.5e9,
+          "OSNR": 4.8,
+          "bit_rate": 300e9,
+          "roll_off": 0.15,
+          "tx_osnr": 40,
+          "min_spacing": 100e9,
+          "cost": 1
+        },
+        {
+          "format": "400G",
+          "baud_rate": 87.5e9,
+          "OSNR": 7.1,
+          "bit_rate": 400e9,
+          "roll_off": 0.15,
+          "tx_osnr": 40,
+          "min_spacing": 100e9,
+          "cost": 1
+        },
+        {
+          "format": "800G",
+          "baud_rate": 87.5e9,
+          "OSNR": 15.1,
+          "bit_rate": 800e9,
+          "roll_off": 0.15,
+          "tx_osnr": 40,
+          "min_spacing": 100e9,
+          "cost": 1
+        }
+      ]
+    }
+  ]
+}
