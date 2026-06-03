@@ -1,0 +1,104 @@
+from __future__ import annotations
+import time
+import uuid
+from collections import OrderedDict
+from typing import Dict, Tuple
+from .network import NetworkModel
+
+
+class SnapshotStore:
+    def __init__(
+        self,
+        initial: NetworkModel,
+        max_snapshots: int | None = None,
+        ttl_seconds: float | None = None,
+    ) -> None:
+        self._current = initial
+        self._snapshots: OrderedDict[str, NetworkModel] = OrderedDict()
+        self._created_at: Dict[str, float] = {}
+        self._max = max_snapshots
+        self._ttl = ttl_seconds
+
+    def _store(self, sid: str, model: NetworkModel) -> None:
+        self._snapshots[sid] = model
+        self._created_at[sid] = time.monotonic()
+        if self._max is not None and len(self._snapshots) > self._max:
+            oldest, _ = self._snapshots.popitem(last=False)
+            self._created_at.pop(oldest, None)
+
+    def current(self) -> NetworkModel:
+        return self._current
+
+    def create(self) -> str:
+        sid = uuid.uuid4().hex
+        self._store(sid, self._clone(self._current))
+        return sid
+
+    def branch(self, parent_id: str) -> str:
+        parent = self._snapshots[parent_id]
+        bid = uuid.uuid4().hex
+        new = self._clone(parent)
+        self._store(bid, new)
+        self._current = new
+        return bid
+
+    def get(self, sid: str) -> NetworkModel:
+        return self._snapshots[sid]
+
+    def restore(self, sid: str) -> None:
+        self._current = self._clone(self._snapshots[sid])
+
+    def reap(self) -> Tuple[str, ...]:
+        if self._ttl is None:
+            return ()
+        now = time.monotonic()
+        expired = [sid for sid, t in self._created_at.items() if now - t > self._ttl]
+        for sid in expired:
+            self._snapshots.pop(sid, None)
+            self._created_at.pop(sid, None)
+        return tuple(expired)
+
+    def diff(self, a_id: str, b_id: str) -> dict:
+        a = self._snapshots[a_id]
+        b = self._snapshots[b_id]
+        return {
+            "fiber_types": _delta(a._fiber_types, b._fiber_types),
+            "fibers": _delta(a._fibers, b._fibers),
+            "amplifiers": _delta(a._amplifiers, b._amplifiers),
+            "oms": _delta(a._oms, b._oms),
+            "lightpaths": _delta(a._lightpaths, b._lightpaths),
+            "ip_links": _delta(a._ip_links, b._ip_links),
+            "routers": _delta(a._routers, b._routers),
+            "services": _delta(a._services, b._services),
+            "srlgs": _delta(a._srlgs, b._srlgs),
+            "risk_groups": _delta(a._risk_groups, b._risk_groups),
+            "qot_state": _delta(a._qot_state, b._qot_state),
+        }
+
+    @staticmethod
+    def _clone(m: NetworkModel) -> NetworkModel:
+        clone = NetworkModel(modes=m.modes)
+        clone._fiber_types = dict(m._fiber_types)
+        clone._optical_nodes = dict(m._optical_nodes)
+        clone._fibers = dict(m._fibers)
+        clone._amplifiers = dict(m._amplifiers)
+        clone._roadms = dict(m._roadms)
+        clone._transceivers = dict(m._transceivers)
+        clone._oms = dict(m._oms)
+        clone._lightpaths = dict(m._lightpaths)
+        clone._routers = dict(m._routers)
+        clone._ip_links = dict(m._ip_links)
+        clone._services = dict(m._services)
+        clone._srlgs = dict(m._srlgs)
+        clone._risk_groups = dict(m._risk_groups)
+        clone._qot_state = dict(m._qot_state)
+        return clone
+
+
+def _delta(a: dict, b: dict) -> dict:
+    a_keys, b_keys = set(a), set(b)
+    return {
+        "added": tuple(sorted(b_keys - a_keys)),
+        "removed": tuple(sorted(a_keys - b_keys)),
+        "modified": tuple(sorted(k for k in a_keys & b_keys if a[k] != b[k])),
+    }
