@@ -73,9 +73,11 @@ class NetworkModel:
 
     def add_oms(self, oms: OMS) -> None:
         for el in oms.elements:
-            if el not in self._fibers and el not in self._amplifiers:
+            if (el not in self._fibers
+                    and el not in self._amplifiers
+                    and el not in self._roadms):
                 raise ValueError(
-                    f"OMS {oms.id!r}: element {el!r} is neither fiber nor amplifier"
+                    f"OMS {oms.id!r}: element {el!r} is neither fiber, amplifier, nor roadm"
                 )
         self._oms[oms.id] = oms
 
@@ -122,7 +124,16 @@ class NetworkModel:
     # ---------------------------------------------------------------- services / risk
 
     def add_service(self, s: Service) -> None:
+        for ip in s.working_path:
+            if ip not in self._ip_links:
+                raise ValueError(f"Service {s.id!r}: unknown IP link {ip!r} in working_path")
+        for ip in s.protection_path:
+            if ip not in self._ip_links:
+                raise ValueError(f"Service {s.id!r}: unknown IP link {ip!r} in protection_path")
         self._services[s.id] = s
+
+    def get_service(self, sid: str) -> Service:
+        return self._services[sid]
 
     def add_srlg(self, g: SRLG) -> None:
         self._srlgs[g.id] = g
