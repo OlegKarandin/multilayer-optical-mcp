@@ -149,6 +149,84 @@ def build_app() -> FastMCP:
             "snapshots": [asdict(s) for s in bd.snapshots],
         }
 
+    from .model.views import (
+        topology_dict, lightpaths_dict, services_dict,
+        traffic_matrix_dict, srlgs_dict, risk_groups_dict,
+    )
+    from .model.exposure import compute_exposure
+
+    # Expose the SnapshotStore on the app so tests can reach the current model.
+    app._snapshots = snapshots  # type: ignore[attr-defined]
+
+    @app.tool()
+    def get_topology(layer: str = "both") -> dict:
+        """Return network topology. layer ∈ {'optical', 'ip', 'both'}."""
+        return topology_dict(snapshots.current(), layer=layer)
+
+    @app.tool()
+    def get_lightpaths() -> list[dict]:
+        """Return all lightpaths with mode, OMS path, and QoT if available."""
+        return lightpaths_dict(snapshots.current())
+
+    @app.tool()
+    def get_services() -> dict:
+        """Return all services with working/protection paths and grooming map."""
+        return services_dict(snapshots.current())
+
+    @app.tool()
+    def get_traffic_matrix() -> dict:
+        """Return the IP demand matrix aggregated across services."""
+        return traffic_matrix_dict(snapshots.current())
+
+    @app.tool()
+    def list_srlgs() -> list[dict]:
+        """Return all static, design-time shared risk link groups."""
+        return srlgs_dict(snapshots.current())
+
+    @app.tool()
+    def get_srlg_members(srlg_id: str) -> list[str]:
+        """Return the asset ids belonging to an SRLG."""
+        return list(snapshots.current().get_srlg_members(srlg_id))
+
+    @app.tool()
+    def define_risk_group(
+        rg_id: str, asset_ids: list[str], metadata: dict | None = None,
+    ) -> dict:
+        """Define a runtime risk group as an abstract asset partition.
+        asset_ids are not validated against the model."""
+        rg = snapshots.current().define_risk_group(
+            rg_id=rg_id, asset_ids=tuple(asset_ids), metadata=metadata or {},
+        )
+        return {"id": rg.id, "asset_ids": list(rg.asset_ids),
+                "metadata": dict(rg.metadata)}
+
+    @app.tool()
+    def list_risk_groups() -> list[dict]:
+        """Return all runtime risk groups with their asset lists and metadata."""
+        return risk_groups_dict(snapshots.current())
+
+    @app.tool()
+    def get_risk_group(rg_id: str) -> dict:
+        """Return a single risk group by id."""
+        rg = snapshots.current().get_risk_group(rg_id)
+        return {"id": rg.id, "asset_ids": list(rg.asset_ids),
+                "metadata": dict(rg.metadata)}
+
+    @app.tool()
+    def get_exposure(service_id: str, risk_group_id: str) -> dict:
+        """Intersect a service's working and protection asset footprints with a risk group.
+        both_intersect=True signals the design-time-disjoint-but-now-correlated case."""
+        res = compute_exposure(snapshots.current(), service_id, risk_group_id)
+        return {
+            "service_id": res.service_id,
+            "risk_group_id": res.risk_group_id,
+            "working_intersects": res.working_intersects,
+            "protection_intersects": res.protection_intersects,
+            "both_intersect": res.both_intersect,
+            "working_intersection": list(res.working_intersection),
+            "protection_intersection": list(res.protection_intersection),
+        }
+
     return app
 
 

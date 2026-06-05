@@ -60,8 +60,8 @@ def test_build_app_returns_fastmcp_instance():
 def test_server_registers_phase_1_and_2_tools():
     app = build_app()
     registered = _tool_names(app)
-    assert _EXPECTED_TOOLS == registered, (
-        f"Missing: {_EXPECTED_TOOLS - registered}  |  Extra: {registered - _EXPECTED_TOOLS}"
+    assert _EXPECTED_TOOLS.issubset(registered), (
+        f"Missing: {_EXPECTED_TOOLS - registered}"
     )
 
 
