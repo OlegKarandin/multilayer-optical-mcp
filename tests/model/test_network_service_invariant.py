@@ -1,7 +1,7 @@
 import pytest
 from multilayer_optical_mcp.model.assets import (
     FiberType, Fiber, Amplifier, OMS, Lightpath, Router, IPLink, Service,
-    TransceiverMode,
+    SRLG, RiskGroup, TransceiverMode,
 )
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
@@ -62,3 +62,30 @@ def test_service_accepts_valid_paths():
                           demand_gbps=10.0,
                           working_path=("ip1",),
                           protection_path=("ip1",)))
+
+
+def test_srlg_get_and_members():
+    n = _seed_with_one_iplink()
+    n.add_srlg(SRLG(id="srlg-aerial-A", asset_ids=("f1", "amp1")))
+    g = n.get_srlg("srlg-aerial-A")
+    assert g.asset_ids == ("f1", "amp1")
+    assert n.get_srlg_members("srlg-aerial-A") == ("f1", "amp1")
+
+
+def test_define_risk_group_is_permissive_about_asset_ids():
+    """Risk groups are abstract partitions; ids need not be in the model."""
+    n = _seed_with_one_iplink()
+    rg = n.define_risk_group(
+        rg_id="rg-storm-1",
+        asset_ids=("f1", "duct-7", "pole-13"),  # last two unknown
+        metadata={"source": "operator-injected"},
+    )
+    assert rg.id == "rg-storm-1"
+    assert n.get_risk_group("rg-storm-1").asset_ids == ("f1", "duct-7", "pole-13")
+
+
+def test_define_risk_group_rejects_duplicate_id():
+    n = _seed_with_one_iplink()
+    n.define_risk_group(rg_id="rg1", asset_ids=("f1",))
+    with pytest.raises(ValueError, match="risk group .* already exists"):
+        n.define_risk_group(rg_id="rg1", asset_ids=("amp1",))

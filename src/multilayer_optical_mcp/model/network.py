@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import replace
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 from .assets import (
     OpticalNode, FiberType, Fiber, Amplifier, ROADM, Transceiver, OMS,
     Lightpath, Router, IPLink, Service, SRLG, RiskGroup,
@@ -138,8 +138,34 @@ class NetworkModel:
     def add_srlg(self, g: SRLG) -> None:
         self._srlgs[g.id] = g
 
+    def get_srlg(self, gid: str) -> SRLG:
+        return self._srlgs[gid]
+
+    def get_srlg_members(self, gid: str) -> Tuple[str, ...]:
+        return self._srlgs[gid].asset_ids
+
     def add_risk_group(self, g: RiskGroup) -> None:
         self._risk_groups[g.id] = g
+
+    def get_risk_group(self, gid: str) -> RiskGroup:
+        return self._risk_groups[gid]
+
+    def define_risk_group(
+        self,
+        rg_id: str,
+        asset_ids: Tuple[str, ...],
+        metadata: Optional[dict] = None,
+    ) -> RiskGroup:
+        """Permissive runtime risk-group constructor. asset_ids are NOT
+        validated against the model — risk groups are abstract partitions
+        and a downstream app may reference assets this server does not own.
+        Reject only on duplicate id."""
+        if rg_id in self._risk_groups:
+            raise ValueError(f"risk group {rg_id!r} already exists")
+        rg = RiskGroup(id=rg_id, asset_ids=tuple(asset_ids),
+                       metadata=dict(metadata or {}))
+        self._risk_groups[rg_id] = rg
+        return rg
 
     def list_services(self) -> Tuple[Service, ...]:
         return tuple(self._services.values())
