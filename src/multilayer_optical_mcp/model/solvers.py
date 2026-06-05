@@ -70,34 +70,63 @@ def build_oms_graph(model: NetworkModel) -> nx.MultiGraph:
     return g
 
 
-def _oms_between(model: NetworkModel, u: str, v: str) -> List[str]:
-    """OMS ids whose endpoints are {u, v}, sorted for deterministic expansion."""
+def oms_length_km(model: NetworkModel, oms_id: str) -> float:
+    """Total fiber length (km) of an OMS — Σ of its constituent fibers' lengths.
+    Non-fiber elements (amps, roadms) contribute zero."""
+    total = 0.0
+    for el in model.get_oms(oms_id).elements:
+        try:
+            total += model.get_fiber(el).length_km
+        except KeyError:
+            pass
+    return total
+
+
+def _oms_between(
+    model: NetworkModel, u: str, v: str, *, by_length: bool = False,
+) -> List[str]:
+    """OMS ids whose endpoints are {u, v}, ordered deterministically — by
+    (length, id) when *by_length*, else by id."""
     out = [oms.id for oms in model.list_oms()
            if {oms.src_node_id, oms.dst_node_id} == {u, v}]
+    if by_length:
+        return sorted(out, key=lambda o: (oms_length_km(model, o), o))
     return sorted(out)
 
 
 def _enumerate_oms_paths(
-    model: NetworkModel, src: str, dst: str, k: int,
+    model: NetworkModel, src: str, dst: str, k: int, weight: str = "hops",
 ) -> Iterator[OmsPath]:
-    """Yield up to `k` OMS-sequence routes src->dst, shortest (fewest hops)
-    first, expanding parallel OMS per hop. Deterministic ordering."""
+    """Yield up to `k` OMS-sequence routes src->dst, shortest first, expanding
+    parallel OMS per hop. `weight="hops"` (default) orders by segment count;
+    `weight="length"` orders by total fiber km (the routing objective for RSA,
+    since reachable SNR tracks length)."""
     g = build_oms_graph(model)
     if src not in g or dst not in g or src == dst:
         return
+    by_length = weight == "length"
     # Collapse parallels to a simple graph for node-simple-path enumeration,
-    # then re-expand the OMS choices per hop.
+    # then re-expand the OMS choices per hop. For length weighting, each simple
+    # edge carries the *shortest* parallel OMS length between the node pair.
     simple = nx.Graph()
     simple.add_nodes_from(g.nodes)
     for u, v in g.edges():
-        simple.add_edge(u, v)
+        if by_length:
+            w = min(oms_length_km(model, o) for o in _oms_between(model, u, v))
+            if simple.has_edge(u, v):
+                simple[u][v]["weight"] = min(simple[u][v]["weight"], w)
+            else:
+                simple.add_edge(u, v, weight=w)
+        else:
+            simple.add_edge(u, v)
     emitted = 0
     try:
-        node_paths = nx.shortest_simple_paths(simple, src, dst)
+        node_paths = nx.shortest_simple_paths(
+            simple, src, dst, weight="weight" if by_length else None)
     except nx.NetworkXNoPath:
         return
     for node_path in node_paths:
-        hop_options = [_oms_between(model, u, v)
+        hop_options = [_oms_between(model, u, v, by_length=by_length)
                        for u, v in zip(node_path, node_path[1:])]
         for combo in itertools.product(*hop_options):
             yield OmsPath(node_sequence=tuple(node_path), oms_sequence=tuple(combo))
@@ -108,10 +137,11 @@ def _enumerate_oms_paths(
 
 def compute_paths(
     model: NetworkModel, src: str, dst: str, k: int,
-    constraints: Optional[dict] = None,
+    constraints: Optional[dict] = None, weight: str = "hops",
 ) -> RoutingResult:
-    """k-shortest OMS routes src->dst. No route -> typed NO_SOLUTION."""
-    paths = tuple(_enumerate_oms_paths(model, src, dst, k))
+    """k-shortest OMS routes src->dst (`weight` ∈ {"hops", "length"}). No route
+    -> typed NO_SOLUTION."""
+    paths = tuple(_enumerate_oms_paths(model, src, dst, k, weight=weight))
     if not paths:
         return RoutingResult(status=SolverStatus.NO_SOLUTION, paths=())
     return RoutingResult(status=SolverStatus.SOLUTION, paths=paths)
@@ -161,13 +191,15 @@ def check_disjointness(
 
 def compute_disjoint_paths(
     model: NetworkModel, src: str, dst: str,
-    basis: str, level: str, best_effort: bool = False,
+    basis: str, level: str, best_effort: bool = False, weight: str = "hops",
 ) -> DisjointnessResult:
     """Find a disjoint pair src->dst under a basis/level. Returns the first
     fully-disjoint pair as SOLUTION; with best_effort=True returns the
     minimum-overlap pair as PARTIAL when no fully-disjoint pair exists; with
-    best_effort=False and none disjoint, NO_SOLUTION."""
-    cands = list(_enumerate_oms_paths(model, src, dst, _DISJOINT_CANDIDATE_CAP))
+    best_effort=False and none disjoint, NO_SOLUTION. `weight` ∈ {"hops",
+    "length"} orders candidate routes."""
+    cands = list(_enumerate_oms_paths(model, src, dst, _DISJOINT_CANDIDATE_CAP,
+                                      weight=weight))
     keyed = [(p, path_basis_keys(model, p.oms_sequence, basis=basis, level=level))
              for p in cands]
 
