@@ -142,10 +142,11 @@ def compute_qot(
     # ------------------------------------------------------------------ setup
     eqpt, network = load_toy()
 
-    # Set amplifier gain targets and fiber input powers from the equipment spec.
-    # pref_ch_db = -20 dBm matches the default tx_power_dbm used in build_si_for_loading.
+    # Set amplifier gain targets from the equipment spec.
+    # pref_ch_db=0.0 dBm = target fiber launch power after the booster; build_network
+    # computes booster gain = 0 - (-20 dBm ROADM output) = 20 dB, ILA/preamp ≈ 16 dB.
     from gnpy.core.network import build_network as _build_network
-    _build_network(network, eqpt, pref_ch_db=-20.0, pref_total_db=-20.0)
+    _build_network(network, eqpt, pref_ch_db=0.0, pref_total_db=0.0)
 
     # Resolve the OMS sequence to gnpy element uids.
     uids = resolve_oms_path_to_uids(model, oms_sequence)
@@ -172,7 +173,6 @@ def compute_qot(
         loading_for_gnpy,
         baud_rate=mode.symbol_rate_baud,
         roll_off=0.15,
-        tx_osnr=40.0,
     )
 
     # ------------------------------------------------------------------ propagation
@@ -184,11 +184,42 @@ def compute_qot(
     if "trx A" in by_uid:
         si = by_uid["trx A"](si)
 
+    # Pre-compute adjacency for ROADM degree resolution (degree and from_degree are
+    # required positional args on gnpy Roadm.__call__ with no defaults).
+    from gnpy.core.elements import Roadm as _GnpyRoadm
+    _gnpy_predecessors = {
+        n.uid: [p.uid for p in network.predecessors(n)] for n in network.nodes
+    }
+
     prev_gsnr_db = math.inf
     snapshots: list[ElementSnapshot] = []
+    _roadm_propagated: set[str] = set()
 
-    for uid, el in zip(uids, elements):
-        si = el(si)
+    uids_list = list(uids)
+    for i, (uid, el) in enumerate(zip(uids_list, elements)):
+        if isinstance(el, _GnpyRoadm):
+            # Derive degree (output port uid) and from_degree (input port uid).
+            # For a ROADM at position 0 (forward add): from_degree = network predecessor.
+            # For a ROADM at the last position (backward drop): degree = network predecessor
+            # (the add/drop peer on the "upstream" side in the original graph).
+            from_uid = (
+                uids_list[i - 1] if i > 0
+                else (_gnpy_predecessors.get(uid) or [uid])[0]
+            )
+            to_uid = (
+                uids_list[i + 1] if i < len(uids_list) - 1
+                else (_gnpy_predecessors.get(uid) or [uid])[0]
+            )
+            # Only propagate if this from→to path is registered in the gnpy network.
+            # In backward direction the ROADM is a drop port whose path is not in
+            # the unidirectional gnpy topology; skip and do not collect add_drop_osnr
+            # penalty for that direction.
+            if any(rp.from_degree == from_uid and rp.to_degree == to_uid
+                   for rp in el.roadm_paths):
+                si = el(si, degree=to_uid, from_degree=from_uid)
+                _roadm_propagated.add(uid)
+        else:
+            si = el(si)
 
         gsnr_db, osnr_db = _extract_gsnr_osnr(si, probe_idx)
 
@@ -221,6 +252,27 @@ def compute_qot(
     # The last finite GSNR in the snapshot chain is the end-to-end value.
     final_gsnr_db = prev_gsnr_db if math.isfinite(prev_gsnr_db) else math.inf
     final_osnr_db = snapshots[-1].osnr_db_after if snapshots else math.inf
+
+    # ------------------------------------------------------------------ post-propagation penalties
+    # gnpy does not apply add_drop_osnr or tx_osnr to si.ase during bare element propagation;
+    # they are metadata consumed only by request.py's Transceiver.update_snr(). We apply them
+    # here using gnpy's own snr_sum, which normalises each penalty from 12.5 GHz to baud_rate.
+    from gnpy.core.utils import snr_sum as _snr_sum, lin2db as _lin2db, db2lin as _db2lin
+
+    baud_rate = mode.symbol_rate_baud
+
+    penalties_noise_lin = 0.0
+    for _uid, _el in zip(uids_list, elements):
+        if isinstance(_el, _GnpyRoadm) and _uid in _roadm_propagated:
+            penalties_noise_lin += _db2lin(-_el.params.add_drop_osnr)
+
+    tx_osnr_db = float(si.tx_osnr[probe_idx])  # at 12.5 GHz ref BW
+    penalties_noise_lin += _db2lin(-tx_osnr_db)
+
+    if penalties_noise_lin > 0.0:
+        combined_penalty_db = -_lin2db(penalties_noise_lin)
+        final_gsnr_db = float(_snr_sum(final_gsnr_db, baud_rate, combined_penalty_db))
+        final_osnr_db = float(_snr_sum(final_osnr_db, baud_rate, combined_penalty_db))
 
     margin_db = final_gsnr_db - mode.required_gsnr_db
 

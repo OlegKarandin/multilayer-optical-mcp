@@ -1,6 +1,10 @@
 {
   "elements": [
     {"uid": "trx A", "type": "Transceiver"},
+    {"uid": "ROADM A", "type": "Roadm"},
+    {"uid": "booster A", "type": "Edfa",
+     "type_variety": "advanced_toy",
+     "operational": {"gain_target": 20, "tilt_target": 0}},
     {"uid": "east fiber A to ILA", "type": "Fiber",
      "type_variety": "SSMF",
      "params": {"length": 80, "length_units": "km", "loss_coef": 0.2, "att_in": 0, "con_in": 0, "con_out": 0}},
@@ -16,10 +20,12 @@
     {"uid": "trx Z", "type": "Transceiver"}
   ],
   "connections": [
-    {"from_node": "trx A", "to_node": "east fiber A to ILA"},
+    {"from_node": "trx A",      "to_node": "ROADM A"},
+    {"from_node": "ROADM A",    "to_node": "booster A"},
+    {"from_node": "booster A",  "to_node": "east fiber A to ILA"},
     {"from_node": "east fiber A to ILA", "to_node": "east edfa in ILA"},
-    {"from_node": "east edfa in ILA", "to_node": "east fiber ILA to Z"},
+    {"from_node": "east edfa in ILA",    "to_node": "east fiber ILA to Z"},
     {"from_node": "east fiber ILA to Z", "to_node": "east edfa at Z"},
-    {"from_node": "east edfa at Z", "to_node": "trx Z"}
+    {"from_node": "east edfa at Z",      "to_node": "trx Z"}
   ]
 }

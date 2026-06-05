@@ -37,7 +37,7 @@
   "Roadm": [
     {
       "target_pch_out_db": -20,
-      "add_drop_osnr": 38,
+      "add_drop_osnr": 33,
       "pmd": 0,
       "pdl": 0,
       "restrictions": {

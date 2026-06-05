@@ -39,7 +39,7 @@ def test_oms_requires_existing_elements():
     n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
     n.add_amplifier(Amplifier(id="amp1", type_variety="advanced_toy",
                               gain_db=20.0, nf_db=5.5))
-    with pytest.raises(ValueError, match="neither fiber nor amplifier"):
+    with pytest.raises(ValueError, match="neither fiber, amplifier, nor roadm"):
         n.add_oms(OMS(id="oms1", src_node_id="A", dst_node_id="B",
                       elements=("amp1", "fiber-missing")))
 

@@ -43,7 +43,7 @@ def build_si_for_loading(
     *,
     baud_rate: float,
     roll_off: float,
-    tx_osnr: float,
+    tx_osnr: float = 35.0,
     tx_power_dbm: float = -20.0,
 ) -> Any:
     """Build a gnpy SpectralInformation with one carrier per channel in *loading*.

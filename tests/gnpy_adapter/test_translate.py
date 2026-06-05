@@ -22,7 +22,7 @@ def test_toy_topology_loads_with_advanced_amp_model():
 # ---------------------------------------------------------------------------
 
 from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, TransceiverMode,
+    FiberType, Fiber, Amplifier, OMS, ROADM, TransceiverMode,
 )
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
@@ -39,6 +39,9 @@ def _toy_model_oms():
                         channel_spacing_hz=100e9),
     ]))
     n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    n.add_roadm(ROADM(id="ROADM A", target_pch_out_db=-20.0))
+    n.add_amplifier(Amplifier(id="booster A",
+        type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
     n.add_amplifier(Amplifier(id="east fiber A to ILA",
         type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
     n.add_amplifier(Amplifier(id="east edfa in ILA",
@@ -49,6 +52,8 @@ def _toy_model_oms():
         type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
     n.add_oms(OMS(id="oms-AZ", src_node_id="trx A", dst_node_id="trx Z",
                   elements=(
+                      "ROADM A",
+                      "booster A",
                       "east fiber A to ILA",
                       "east edfa in ILA",
                       "east fiber ILA to Z",
@@ -60,6 +65,8 @@ def _toy_model_oms():
 def test_resolve_single_oms_returns_its_elements():
     n = _toy_model_oms()
     assert resolve_oms_path_to_uids(n, ("oms-AZ",)) == (
+        "ROADM A",
+        "booster A",
         "east fiber A to ILA",
         "east edfa in ILA",
         "east fiber ILA to Z",

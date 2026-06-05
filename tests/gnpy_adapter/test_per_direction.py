@@ -13,11 +13,13 @@ LOADING = LoadingState(channels=(Channel(193.4e12, 100e9, 0.0, "400G@7.1dB"),))
 def test_both_directions_return_finite_gsnr():
     """Both propagation directions must return a finite GSNR.
 
-    The toy topology is a unidirectional amp-at-span-end chain, so forward and
-    backward GSNRs are NOT expected to match — the amp-first backward path gives
-    a much higher GSNR than the fiber-first forward path.  What matters is that
-    both directions complete without error and return a finite (non-inf) result,
-    and that gated_qot selects the worse (lower) of the two.
+    Topology: trx A → ROADM A → booster A → fiber(80km) → ILA → fiber(80km) → preamp → trx Z
+    Forward: booster (G=20 dB) first, then two 16 dB amps.
+    Backward (reversed): two 16 dB amps first, then booster (G=20 dB) last.
+    In backward the first two amps' ASE is multiplied by G_booster/L_fiber = 2.5×,
+    making total backward ASE ≈ 1.66× forward ASE → cascade ~2.2 dB worse GSNR.
+    After add_drop_osnr=33 dB + tx_osnr=35 dB penalties: fwd ~18.85 dB, bwd ~17.53 dB.
+    Both must complete without error and gated_qot must select the lower of the two.
     """
     n = _toy_model(); store = QoTResultStore()
     fwd, _ = compute_qot(model=n, store=store, oms_sequence=("oms-AZ",),
@@ -28,8 +30,8 @@ def test_both_directions_return_finite_gsnr():
                          mode_id="400G@7.1dB", loading=LOADING)
     assert math.isfinite(fwd.gsnr_db)
     assert math.isfinite(bwd.gsnr_db)
-    # Forward (fiber-first) is the harder path on this topology.
-    assert fwd.gsnr_db < bwd.gsnr_db
+    # Backward (booster-last) is the harder path: earlier amps' ASE gets amplified by booster.
+    assert bwd.gsnr_db < fwd.gsnr_db
 
 
 def test_gated_qot_returns_worse_of_two_directions(monkeypatch):

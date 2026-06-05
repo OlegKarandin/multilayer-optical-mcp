@@ -1,5 +1,8 @@
-# GROUND TRUTH (gnpy==2.11.1, toy_2span.json, 400G@7.1dB @ 193.4 THz, P=-20 dBm):
-# expected GSNR ~ 4.99 dB. Updates on intentional gnpy bumps only.
+# GROUND TRUTH (gnpy==2.11.1, toy_2span.json, 400G@7.1dB @ 193.4 THz):
+# Topology: trx A → ROADM A → booster A → fiber(80km) → ILA → fiber(80km) → preamp → trx Z
+# Cascade GSNR (no penalties): fwd ~21.36 dB, bwd ~19.22 dB.
+# After add_drop_osnr=33 dB + tx_osnr=35 dB (OpenROADM v4/v5): fwd ~18.85 dB, bwd ~17.53 dB.
+# Updates on intentional gnpy bumps only.
 
 import math
 
@@ -11,6 +14,7 @@ from multilayer_optical_mcp.model.assets import (
     Fiber,
     FiberType,
     OMS,
+    ROADM,
     TransceiverMode,
 )
 from multilayer_optical_mcp.model.modes import ModeRegistry
@@ -44,9 +48,16 @@ def _toy_model():
     ])
     n = NetworkModel(modes=reg)
     n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    n.add_roadm(ROADM(id="ROADM A", target_pch_out_db=-20.0))
+    n.add_amplifier(Amplifier(
+        id="booster A",
+        type_variety="advanced_toy",
+        gain_db=20.0,
+        nf_db=5.5,
+    ))
     n.add_fiber(Fiber(
         id="east fiber A to ILA",
-        a_end="trx A",
+        a_end="ROADM A",
         z_end="east edfa in ILA",
         length_km=80.0,
         type_variety="SSMF",
@@ -75,6 +86,8 @@ def _toy_model():
         src_node_id="trx A",
         dst_node_id="trx Z",
         elements=(
+            "ROADM A",
+            "booster A",
             "east fiber A to ILA",
             "east edfa in ILA",
             "east fiber ILA to Z",
@@ -115,11 +128,11 @@ def test_breakdown_cached_in_store_with_one_snapshot_per_element():
         loading=loading,
     )
     bd = store.get(rid)
-    # Four elements in the OMS -> four snapshots.
-    assert len(bd.snapshots) == 4
+    # Six elements in the OMS -> six snapshots.
+    assert len(bd.snapshots) == 6
     # Snapshots are labeled with the resolved model uids in order.
-    assert bd.snapshots[0].element_id == "east fiber A to ILA"
-    assert bd.snapshots[3].element_id == "east edfa at Z"
+    assert bd.snapshots[0].element_id == "ROADM A"
+    assert bd.snapshots[-1].element_id == "east edfa at Z"
 
 
 def test_limiting_element_id_is_stable_uid_not_human_string():
@@ -138,6 +151,8 @@ def test_limiting_element_id_is_stable_uid_not_human_string():
     assert state.limiting_element_id == bd.limiting_element_id
     if state.limiting_element_id is not None:
         valid = {
+            "ROADM A",
+            "booster A",
             "east fiber A to ILA",
             "east edfa in ILA",
             "east fiber ILA to Z",
