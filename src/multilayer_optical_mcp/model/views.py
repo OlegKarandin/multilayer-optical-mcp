@@ -100,3 +100,28 @@ def risk_groups_dict(model: NetworkModel) -> List[dict]:
     return [{"id": g.id, "asset_ids": list(g.asset_ids),
              "metadata": dict(g.metadata)}
             for g in model.list_risk_groups()]
+
+
+def _oms_path(p) -> dict:
+    return {"node_sequence": list(p.node_sequence),
+            "oms_sequence": list(p.oms_sequence)}
+
+
+def routing_result_dict(res) -> Dict[str, Any]:
+    return {
+        "status": res.status.value,
+        "paths": [_oms_path(p) for p in res.paths],
+    }
+
+
+def disjointness_result_dict(res) -> Dict[str, Any]:
+    return {
+        "status": res.status.value,
+        "disjoint": res.disjoint,
+        "basis": res.basis,
+        "level": res.level,
+        "path_a": _oms_path(res.path_a) if res.path_a is not None else None,
+        "path_b": _oms_path(res.path_b) if res.path_b is not None else None,
+        "shared_assets": list(res.shared_assets),
+        "shared_groups": list(res.shared_groups),
+    }

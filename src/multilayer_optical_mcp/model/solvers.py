@@ -1,0 +1,200 @@
+"""Step-4 solvers: routing + disjointness over the optical OMS graph.
+
+Deterministic, pure functions over the NetworkModel. Outcomes are typed
+(`SolverStatus`); "no path" / "no disjoint pair" are typed results, never
+raised exceptions (CLAUDE.md core design rule).
+
+Routing is over an OMS graph: optical nodes are vertices, each OMS is an edge.
+Parallel OMS between the same node pair are distinct routes, so candidate
+enumeration walks node-simple-paths and expands the parallel-edge choices per
+hop (node-level k-shortest alone would collapse parallel OMS into one route).
+"""
+from __future__ import annotations
+
+import itertools
+from dataclasses import dataclass
+from enum import Enum
+from typing import Iterator, List, Optional, Sequence, Tuple
+
+import networkx as nx
+
+from .network import NetworkModel
+from .exposure import path_basis_keys, split_shared_keys
+
+
+class SolverStatus(str, Enum):
+    SOLUTION = "solution"
+    NO_SOLUTION = "no_solution"
+    PARTIAL = "partial"
+
+
+@dataclass(frozen=True)
+class OmsPath:
+    """A route through the optical layer: the optical-node sequence and the
+    OMS-id sequence realising it."""
+    node_sequence: Tuple[str, ...]
+    oms_sequence: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RoutingResult:
+    status: SolverStatus
+    paths: Tuple[OmsPath, ...] = ()
+
+
+@dataclass(frozen=True)
+class DisjointnessResult:
+    status: SolverStatus
+    disjoint: bool
+    basis: str
+    level: str
+    path_a: Optional[OmsPath] = None
+    path_b: Optional[OmsPath] = None
+    shared_assets: Tuple[str, ...] = ()
+    shared_groups: Tuple[str, ...] = ()
+
+
+# Cap on candidate routes enumerated for disjoint-pair search. Bounds the
+# pairwise search on dense graphs while covering the toy/demo topologies.
+_DISJOINT_CANDIDATE_CAP = 32
+
+
+def build_oms_graph(model: NetworkModel) -> nx.MultiGraph:
+    """Optical nodes as vertices, one edge per OMS (carrying its id). MultiGraph
+    so parallel OMS between the same node pair are preserved as distinct edges."""
+    g: nx.MultiGraph = nx.MultiGraph()
+    for oms in model.list_oms():
+        g.add_node(oms.src_node_id)
+        g.add_node(oms.dst_node_id)
+        g.add_edge(oms.src_node_id, oms.dst_node_id, key=oms.id, oms_id=oms.id)
+    return g
+
+
+def _oms_between(model: NetworkModel, u: str, v: str) -> List[str]:
+    """OMS ids whose endpoints are {u, v}, sorted for deterministic expansion."""
+    out = [oms.id for oms in model.list_oms()
+           if {oms.src_node_id, oms.dst_node_id} == {u, v}]
+    return sorted(out)
+
+
+def _enumerate_oms_paths(
+    model: NetworkModel, src: str, dst: str, k: int,
+) -> Iterator[OmsPath]:
+    """Yield up to `k` OMS-sequence routes src->dst, shortest (fewest hops)
+    first, expanding parallel OMS per hop. Deterministic ordering."""
+    g = build_oms_graph(model)
+    if src not in g or dst not in g or src == dst:
+        return
+    # Collapse parallels to a simple graph for node-simple-path enumeration,
+    # then re-expand the OMS choices per hop.
+    simple = nx.Graph()
+    simple.add_nodes_from(g.nodes)
+    for u, v in g.edges():
+        simple.add_edge(u, v)
+    emitted = 0
+    try:
+        node_paths = nx.shortest_simple_paths(simple, src, dst)
+    except nx.NetworkXNoPath:
+        return
+    for node_path in node_paths:
+        hop_options = [_oms_between(model, u, v)
+                       for u, v in zip(node_path, node_path[1:])]
+        for combo in itertools.product(*hop_options):
+            yield OmsPath(node_sequence=tuple(node_path), oms_sequence=tuple(combo))
+            emitted += 1
+            if emitted >= k:
+                return
+
+
+def compute_paths(
+    model: NetworkModel, src: str, dst: str, k: int,
+    constraints: Optional[dict] = None,
+) -> RoutingResult:
+    """k-shortest OMS routes src->dst. No route -> typed NO_SOLUTION."""
+    paths = tuple(_enumerate_oms_paths(model, src, dst, k))
+    if not paths:
+        return RoutingResult(status=SolverStatus.NO_SOLUTION, paths=())
+    return RoutingResult(status=SolverStatus.SOLUTION, paths=paths)
+
+
+def _node_sequence(model: NetworkModel, oms_sequence: Sequence[str]) -> Tuple[str, ...]:
+    """Best-effort node sequence for an OMS-sequence by chaining endpoints."""
+    nodes: List[str] = []
+    for oms_id in oms_sequence:
+        oms = model.get_oms(oms_id)
+        if not nodes:
+            nodes = [oms.src_node_id, oms.dst_node_id]
+        elif oms.src_node_id == nodes[-1]:
+            nodes.append(oms.dst_node_id)
+        elif oms.dst_node_id == nodes[-1]:
+            nodes.append(oms.src_node_id)
+        else:
+            nodes.extend([oms.src_node_id, oms.dst_node_id])
+    return tuple(nodes)
+
+
+def check_disjointness(
+    model: NetworkModel,
+    path_a: Sequence[str],
+    path_b: Sequence[str],
+    basis: str,
+    level: str,
+) -> DisjointnessResult:
+    """Audit whether two existing OMS-sequence paths are disjoint under a named
+    basis/level. Returns shared assets/groups when they are not. Always a
+    SOLUTION (the audit computed an answer); `disjoint` carries the verdict."""
+    keys_a = path_basis_keys(model, tuple(path_a), basis=basis, level=level)
+    keys_b = path_basis_keys(model, tuple(path_b), basis=basis, level=level)
+    shared = keys_a & keys_b
+    shared_assets, shared_groups = split_shared_keys(shared)
+    return DisjointnessResult(
+        status=SolverStatus.SOLUTION,
+        disjoint=not shared,
+        basis=basis,
+        level=level,
+        path_a=OmsPath(_node_sequence(model, path_a), tuple(path_a)),
+        path_b=OmsPath(_node_sequence(model, path_b), tuple(path_b)),
+        shared_assets=shared_assets,
+        shared_groups=shared_groups,
+    )
+
+
+def compute_disjoint_paths(
+    model: NetworkModel, src: str, dst: str,
+    basis: str, level: str, best_effort: bool = False,
+) -> DisjointnessResult:
+    """Find a disjoint pair src->dst under a basis/level. Returns the first
+    fully-disjoint pair as SOLUTION; with best_effort=True returns the
+    minimum-overlap pair as PARTIAL when no fully-disjoint pair exists; with
+    best_effort=False and none disjoint, NO_SOLUTION."""
+    cands = list(_enumerate_oms_paths(model, src, dst, _DISJOINT_CANDIDATE_CAP))
+    keyed = [(p, path_basis_keys(model, p.oms_sequence, basis=basis, level=level))
+             for p in cands]
+
+    best: Optional[Tuple[OmsPath, OmsPath, frozenset]] = None
+    best_overlap = None
+    for i in range(len(keyed)):
+        for j in range(i + 1, len(keyed)):
+            (pa, ka), (pb, kb) = keyed[i], keyed[j]
+            shared = ka & kb
+            if not shared:
+                return DisjointnessResult(
+                    status=SolverStatus.SOLUTION, disjoint=True,
+                    basis=basis, level=level, path_a=pa, path_b=pb,
+                )
+            if best is None or len(shared) < best_overlap:
+                best = (pa, pb, shared)
+                best_overlap = len(shared)
+
+    if best_effort and best is not None:
+        pa, pb, shared = best
+        shared_assets, shared_groups = split_shared_keys(shared)
+        return DisjointnessResult(
+            status=SolverStatus.PARTIAL, disjoint=False,
+            basis=basis, level=level, path_a=pa, path_b=pb,
+            shared_assets=shared_assets, shared_groups=shared_groups,
+        )
+    return DisjointnessResult(
+        status=SolverStatus.NO_SOLUTION, disjoint=False,
+        basis=basis, level=level,
+    )

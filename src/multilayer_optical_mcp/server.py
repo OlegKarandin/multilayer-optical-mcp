@@ -152,8 +152,14 @@ def build_app() -> FastMCP:
     from .model.views import (
         topology_dict, lightpaths_dict, services_dict,
         traffic_matrix_dict, srlgs_dict, risk_groups_dict,
+        routing_result_dict, disjointness_result_dict,
     )
     from .model.exposure import compute_exposure
+    from .model.solvers import (
+        compute_paths as _compute_paths,
+        check_disjointness as _check_disjointness,
+        compute_disjoint_paths as _compute_disjoint_paths,
+    )
 
     # Expose the SnapshotStore on the app so tests can reach the current model.
     app._snapshots = snapshots  # type: ignore[attr-defined]
@@ -226,6 +232,39 @@ def build_app() -> FastMCP:
             "working_intersection": list(res.working_intersection),
             "protection_intersection": list(res.protection_intersection),
         }
+
+    @app.tool()
+    def compute_paths(
+        src: str, dst: str, k: int = 3, constraints: dict | None = None,
+    ) -> dict:
+        """k-shortest OMS routes from src to dst over the optical layer.
+        Returns a typed status; no route yields status 'no_solution'."""
+        res = _compute_paths(snapshots.current(), src, dst, k, constraints)
+        return routing_result_dict(res)
+
+    @app.tool()
+    def check_disjointness(
+        path_a: list[str], path_b: list[str],
+        basis: str = "physical", level: str = "link",
+    ) -> dict:
+        """Audit whether two existing OMS-sequence paths are disjoint under a
+        basis ∈ {physical, srlg, risk_group, union} and level ∈ {node, link,
+        srlg, risk_group}. Returns shared_assets/shared_groups when not disjoint."""
+        res = _check_disjointness(snapshots.current(), path_a, path_b, basis, level)
+        return disjointness_result_dict(res)
+
+    @app.tool()
+    def compute_disjoint_paths(
+        src: str, dst: str,
+        basis: str = "physical", level: str = "link",
+        best_effort: bool = False,
+    ) -> dict:
+        """Find a disjoint pair src->dst under a basis/level. status 'solution'
+        for a fully-disjoint pair, 'partial' for the best-effort minimum-overlap
+        pair, 'no_solution' when none disjoint and best_effort is false."""
+        res = _compute_disjoint_paths(
+            snapshots.current(), src, dst, basis, level, best_effort)
+        return disjointness_result_dict(res)
 
     return app
 
