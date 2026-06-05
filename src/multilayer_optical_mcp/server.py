@@ -153,12 +153,21 @@ def build_app() -> FastMCP:
         topology_dict, lightpaths_dict, services_dict,
         traffic_matrix_dict, srlgs_dict, risk_groups_dict,
         routing_result_dict, disjointness_result_dict,
+        feasibility_result_dict, placement_result_dict,
     )
     from .model.exposure import compute_exposure
     from .model.solvers import (
         compute_paths as _compute_paths,
         check_disjointness as _check_disjointness,
         compute_disjoint_paths as _compute_disjoint_paths,
+    )
+    from .model.spectrum import (
+        SpectrumGrid, check_spectrum_feasibility as _check_spectrum_feasibility,
+    )
+    from .model.allocation import (
+        make_adapter_evaluator,
+        solve_rsa as _solve_rsa,
+        solve_allocation as _solve_allocation,
     )
 
     # Expose the SnapshotStore on the app so tests can reach the current model.
@@ -265,6 +274,44 @@ def build_app() -> FastMCP:
         res = _compute_disjoint_paths(
             snapshots.current(), src, dst, basis, level, best_effort)
         return disjointness_result_dict(res)
+
+    @app.tool()
+    def check_spectrum_feasibility(path: list[str], center_freq_hz: float) -> dict:
+        """Is the channel at center_freq_hz free on every OMS along the path?
+        Returns typed per-OMS clashes when not. slot_width is the fixed grid
+        spacing (100 GHz)."""
+        grid = SpectrumGrid.default()
+        slot = grid.slot_of(center_freq_hz)
+        res = _check_spectrum_feasibility(snapshots.current(), tuple(path), slot, grid=grid)
+        return feasibility_result_dict(res)
+
+    @app.tool()
+    def solve_rsa(
+        demands: list[dict], objective: str = "shortest",
+        constraints: dict | None = None,
+    ) -> dict:
+        """Route + spectrum-assign optical demands. Each demand:
+        {id, src, dst, protected?, required_gbps?, constraints?}. Mode falls out
+        of the GNPy GSNR on the chosen route (highest feasible bitrate)."""
+        model = snapshots.current()
+        qot = make_adapter_evaluator(model, results)
+        return placement_result_dict(
+            _solve_rsa(model, qot, demands, objective=objective, constraints=constraints))
+
+    @app.tool()
+    def solve_allocation(
+        demands: list[dict], spare_inventory: dict,
+        objective: str = "max_placed", weights: dict | None = None,
+    ) -> dict:
+        """Greenfield heuristic: light new lightpaths from a per-site transponder
+        count to serve as many weighted demands as possible. Each demand:
+        {id, src, dst, demand_gbps, protected?}. Returns a typed
+        solution/partial/no_solution with placed and unplaced demands."""
+        model = snapshots.current()
+        qot = make_adapter_evaluator(model, results)
+        return placement_result_dict(
+            _solve_allocation(model, qot, demands, spare_inventory,
+                              objective=objective, weights=weights))
 
     return app
 

@@ -125,3 +125,37 @@ def disjointness_result_dict(res) -> Dict[str, Any]:
         "shared_assets": list(res.shared_assets),
         "shared_groups": list(res.shared_groups),
     }
+
+
+def feasibility_result_dict(res) -> Dict[str, Any]:
+    return {
+        "feasible": res.feasible,
+        "clashes": [{"oms_id": c.oms_id, "slot": c.slot} for c in res.clashes],
+    }
+
+
+def _spectrum_assignment(a) -> dict:
+    return {
+        "oms_path": _oms_path(a.oms_path),
+        "slot_index": a.slot_index,
+        "center_freq_hz": a.center_freq_hz,
+        "mode_id": a.mode_id,
+        "gsnr_db": a.gsnr_db,
+    }
+
+
+def _demand_placement(p) -> dict:
+    return {
+        "demand_id": p.demand_id,
+        "working": _spectrum_assignment(p.working),
+        "protection": _spectrum_assignment(p.protection) if p.protection else None,
+    }
+
+
+def placement_result_dict(res) -> Dict[str, Any]:
+    """Serializer shared by solve_rsa and solve_allocation (same result shape)."""
+    return {
+        "status": res.status.value,
+        "placements": [_demand_placement(p) for p in res.placements],
+        "unplaced": [{"demand_id": did, "reason": r} for did, r in res.unplaced],
+    }
