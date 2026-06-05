@@ -18,12 +18,12 @@ from typing import Dict, Optional, Tuple
 
 from .network import NetworkModel
 
-# Default C-band grid: 48 channels @ 100 GHz (modulation_formats.yaml), anchored
-# so slot 24 (cut_channel_index) lands on 193.4 THz (the toy carrier).
+# Default C-band grid: 48 channels @ 100 GHz (modulation_formats.yaml). Anchored
+# at 191.4 THz so every slot (191.4–196.1 THz) lies inside gnpy's C-band and the
+# toy carrier 193.4 THz stays on-grid (slot 20).
 _DEFAULT_SPACING_HZ = 100e9
 _DEFAULT_NUM_SLOTS = 48
-_DEFAULT_CUT_INDEX = 24
-_DEFAULT_CUT_FREQ_HZ = 193.4e12
+_DEFAULT_ANCHOR_HZ = 191.4e12
 
 
 @dataclass(frozen=True)
@@ -34,8 +34,7 @@ class SpectrumGrid:
 
     @classmethod
     def default(cls) -> "SpectrumGrid":
-        anchor = _DEFAULT_CUT_FREQ_HZ - _DEFAULT_CUT_INDEX * _DEFAULT_SPACING_HZ
-        return cls(anchor_hz=anchor, spacing_hz=_DEFAULT_SPACING_HZ,
+        return cls(anchor_hz=_DEFAULT_ANCHOR_HZ, spacing_hz=_DEFAULT_SPACING_HZ,
                    num_slots=_DEFAULT_NUM_SLOTS)
 
     def freq(self, slot: int) -> float:

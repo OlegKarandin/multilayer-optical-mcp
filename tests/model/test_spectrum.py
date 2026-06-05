@@ -16,7 +16,7 @@ from multilayer_optical_mcp.model.spectrum import (
 
 
 def _grid() -> SpectrumGrid:
-    return SpectrumGrid.default()  # 48 slots @ 100 GHz, slot 24 == 193.4 THz
+    return SpectrumGrid.default()  # 48 slots @ 100 GHz, slot 20 == 193.4 THz
 
 
 def _model(*, lit_slot=None) -> NetworkModel:
@@ -41,8 +41,10 @@ def _model(*, lit_slot=None) -> NetworkModel:
 def test_grid_freq_slot_roundtrip():
     g = _grid()
     assert g.num_slots == 48
-    assert g.slot_of(g.freq(24)) == 24
-    assert abs(g.freq(24) - 193.4e12) < 1.0
+    assert g.slot_of(g.freq(20)) == 20
+    assert abs(g.freq(20) - 193.4e12) < 1.0
+    # Every slot lies inside gnpy's C-band (191.4–196.1 THz).
+    assert 191.3e12 <= g.freq(0) and g.freq(g.num_slots - 1) <= 196.2e12
 
 
 def test_build_state_reflects_lightpaths():
