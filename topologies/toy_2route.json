@@ -1,0 +1,59 @@
+{
+  "elements": [
+    {"uid": "trx A", "type": "Transceiver"},
+    {"uid": "ROADM A", "type": "Roadm"},
+    {"uid": "ROADM Z", "type": "Roadm"},
+    {"uid": "trx Z", "type": "Transceiver"},
+
+    {"uid": "booster N", "type": "Edfa",
+     "type_variety": "advanced_toy",
+     "operational": {"gain_target": 20, "tilt_target": 0}},
+    {"uid": "north fiber A to ILA", "type": "Fiber",
+     "type_variety": "SSMF",
+     "params": {"length": 80, "length_units": "km", "loss_coef": 0.2, "att_in": 0, "con_in": 0, "con_out": 0}},
+    {"uid": "north edfa in ILA", "type": "Edfa",
+     "type_variety": "advanced_toy",
+     "operational": {"gain_target": 20, "tilt_target": 0}},
+    {"uid": "north fiber ILA to Z", "type": "Fiber",
+     "type_variety": "SSMF",
+     "params": {"length": 80, "length_units": "km", "loss_coef": 0.2, "att_in": 0, "con_in": 0, "con_out": 0}},
+    {"uid": "north preamp at Z", "type": "Edfa",
+     "type_variety": "advanced_toy",
+     "operational": {"gain_target": 20, "tilt_target": 0}},
+
+    {"uid": "booster S", "type": "Edfa",
+     "type_variety": "advanced_toy",
+     "operational": {"gain_target": 20, "tilt_target": 0}},
+    {"uid": "south fiber A to ILA", "type": "Fiber",
+     "type_variety": "SSMF",
+     "params": {"length": 100, "length_units": "km", "loss_coef": 0.2, "att_in": 0, "con_in": 0, "con_out": 0}},
+    {"uid": "south edfa in ILA", "type": "Edfa",
+     "type_variety": "advanced_toy",
+     "operational": {"gain_target": 20, "tilt_target": 0}},
+    {"uid": "south fiber ILA to Z", "type": "Fiber",
+     "type_variety": "SSMF",
+     "params": {"length": 100, "length_units": "km", "loss_coef": 0.2, "att_in": 0, "con_in": 0, "con_out": 0}},
+    {"uid": "south preamp at Z", "type": "Edfa",
+     "type_variety": "advanced_toy",
+     "operational": {"gain_target": 20, "tilt_target": 0}}
+  ],
+  "connections": [
+    {"from_node": "trx A",   "to_node": "ROADM A"},
+
+    {"from_node": "ROADM A",              "to_node": "booster N"},
+    {"from_node": "booster N",            "to_node": "north fiber A to ILA"},
+    {"from_node": "north fiber A to ILA", "to_node": "north edfa in ILA"},
+    {"from_node": "north edfa in ILA",    "to_node": "north fiber ILA to Z"},
+    {"from_node": "north fiber ILA to Z", "to_node": "north preamp at Z"},
+    {"from_node": "north preamp at Z",    "to_node": "ROADM Z"},
+
+    {"from_node": "ROADM A",              "to_node": "booster S"},
+    {"from_node": "booster S",            "to_node": "south fiber A to ILA"},
+    {"from_node": "south fiber A to ILA", "to_node": "south edfa in ILA"},
+    {"from_node": "south edfa in ILA",    "to_node": "south fiber ILA to Z"},
+    {"from_node": "south fiber ILA to Z", "to_node": "south preamp at Z"},
+    {"from_node": "south preamp at Z",    "to_node": "ROADM Z"},
+
+    {"from_node": "ROADM Z", "to_node": "trx Z"}
+  ]
+}

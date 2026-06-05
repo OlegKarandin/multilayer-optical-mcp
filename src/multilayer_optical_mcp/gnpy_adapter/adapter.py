@@ -21,14 +21,21 @@ gnpy single-channel limitation:
 from __future__ import annotations
 
 import math
-from typing import Tuple
+from pathlib import Path
+from typing import Optional, Tuple
 
 from ..model.assets import Direction
 from ..model.network import NetworkModel
 from ..model.qot import ElementSnapshot, QoTBreakdown, QoTState
 from ..model.qot_results import QoTResultStore
 from .loading import Channel, LoadingState
-from .translate import build_si_for_loading, load_toy, resolve_oms_path_to_uids
+from .translate import (
+    DEFAULT_EQPT,
+    DEFAULT_TOPO,
+    build_si_for_loading,
+    load_toy,
+    resolve_oms_path_to_uids,
+)
 
 # Spacing (Hz) used for the synthetic dummy channel injected when the loading
 # state contains only a single carrier.
@@ -104,6 +111,8 @@ def compute_qot(
     direction: Direction,
     mode_id: str,
     loading: LoadingState,
+    topo_path: Optional[Path] = None,
+    eqpt_path: Optional[Path] = None,
 ) -> Tuple[QoTState, str]:
     """Propagate *loading* through the gnpy toy network and return QoT.
 
@@ -140,7 +149,10 @@ def compute_qot(
         If any OMS id or element uid cannot be resolved.
     """
     # ------------------------------------------------------------------ setup
-    eqpt, network = load_toy()
+    eqpt, network = load_toy(
+        eqpt_path=eqpt_path or DEFAULT_EQPT,
+        topo_path=topo_path or DEFAULT_TOPO,
+    )
 
     # Set amplifier gain targets from the equipment spec.
     # pref_ch_db=0.0 dBm = target fiber launch power after the booster; build_network
