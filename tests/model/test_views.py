@@ -109,3 +109,64 @@ def test_risk_groups_dict_carries_metadata():
     r = risk_groups_dict(n)
     assert r[0]["id"] == "rg-storm"
     assert r[0]["metadata"]["source"] == "operator"
+
+
+# ---------------------------------------------------------------------------
+# New tests for Task 7 serializers
+# ---------------------------------------------------------------------------
+from multilayer_optical_mcp.model.assets import Service
+from multilayer_optical_mcp.model.qot import QoTState
+from multilayer_optical_mcp.model import views
+from tests.model.test_ip_routing import _two_link_model
+
+
+def _model_with_services():
+    n = _two_link_model()
+    n.add_service(Service(id="svc-AC", src_router="R-A", dst_router="R-C",
+                          demand_gbps=120.0, working_path=("ipAB", "ipBC")))
+    return n
+
+
+def test_ip_topology_dict_annotates_capacity_and_load():
+    n = _model_with_services()
+    d = views.ip_topology_dict(n)
+    links = {l["id"]: l for l in d["ip_links"]}
+    assert links["ipAB"]["lightpath_id"] == "lpAB"
+    assert links["ipAB"]["capacity_gbps"] == 200.0
+    assert links["ipAB"]["load_gbps"] == 120.0
+    assert {r["id"] for r in d["routers"]} == {"R-A", "R-B", "R-C"}
+
+
+def test_ip_topology_dict_capacity_null_when_no_qot():
+    n = _two_link_model()
+    # Wipe one lightpath's QoT so capacity is unknown, not a crash.
+    n._qot_state.pop("lpAB")
+    d = views.ip_topology_dict(n)
+    links = {l["id"]: l for l in d["ip_links"]}
+    assert links["ipAB"]["capacity_gbps"] is None
+
+
+def test_grooming_map_dict_both_directions():
+    n = _model_with_services()
+    d = views.grooming_map_dict(n)
+    assert d["by_service"]["svc-AC"] == ["lpAB", "lpBC"]
+    assert d["by_lightpath"]["lpAB"] == ["svc-AC"]
+
+
+def test_ip_routing_result_dict_shape():
+    n = _model_with_services()
+    from multilayer_optical_mcp.model import ip_routing
+    d = views.ip_routing_result_dict(ip_routing.simulate_ip_routing(n))
+    assert set(d) == {"utilizations", "congestion", "dropped"}
+    u = {x["ip_link_id"]: x for x in d["utilizations"]}
+    assert u["ipAB"]["utilization"] == 0.6
+    assert d["congestion"] == []
+    assert d["dropped"]["services"] == []
+    assert d["dropped"]["overflow_gbps"] == 0.0
+    assert d["dropped"]["down_links"] == []
+
+
+def test_affected_services_dict_shape():
+    n = _model_with_services()
+    d = views.affected_services_dict(n, "lpBC")
+    assert d == {"asset_id": "lpBC", "services": ["svc-AC"]}

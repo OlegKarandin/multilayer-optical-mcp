@@ -2,6 +2,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Dict, List
 from .network import NetworkModel
+from . import ip_routing as _ipr
 
 
 def _fiber(f) -> dict:
@@ -159,3 +160,63 @@ def placement_result_dict(res) -> Dict[str, Any]:
         "placements": [_demand_placement(p) for p in res.placements],
         "unplaced": [{"demand_id": did, "reason": r} for did, r in res.unplaced],
     }
+
+
+def ip_topology_dict(model: NetworkModel) -> Dict[str, Any]:
+    load = _ipr.offered_load_per_link(model)
+    links = []
+    for link in model.list_ip_links():
+        try:
+            cap = model.ip_link_capacity_gbps(link.id)
+        except LookupError:
+            cap = None
+        links.append({
+            "id": link.id,
+            "a_router": link.a_router,
+            "z_router": link.z_router,
+            "lightpath_id": link.lightpath_id,
+            "capacity_gbps": cap,
+            "load_gbps": load[link.id],
+        })
+    return {
+        "routers": [_router(r) for r in model._routers.values()],
+        "ip_links": links,
+    }
+
+
+def grooming_map_dict(model: NetworkModel) -> Dict[str, Any]:
+    gm = _ipr.build_grooming_map(model)
+    return {
+        "by_service": {sid: list(lps) for sid, lps in gm.by_service.items()},
+        "by_lightpath": {lp: list(svcs) for lp, svcs in gm.by_lightpath.items()},
+    }
+
+
+def ip_routing_result_dict(res) -> Dict[str, Any]:
+    return {
+        "utilizations": [
+            {
+                "ip_link_id": u.ip_link_id,
+                "offered_gbps": u.offered_gbps,
+                "capacity_gbps": u.capacity_gbps,
+                "utilization": u.utilization,
+                "down": u.down,
+            }
+            for u in res.utilizations
+        ],
+        "congestion": list(res.congested_links),
+        "dropped": {
+            "services": [
+                {"service_id": d.service_id, "reason": d.reason,
+                 "on_link": d.on_link}
+                for d in res.dropped_services
+            ],
+            "down_links": list(res.down_links),
+            "overflow_gbps": res.overflow_gbps,
+        },
+    }
+
+
+def affected_services_dict(model: NetworkModel, asset_id: str) -> Dict[str, Any]:
+    return {"asset_id": asset_id,
+            "services": list(_ipr.affected_services(model, asset_id))}
