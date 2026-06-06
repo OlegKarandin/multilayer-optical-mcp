@@ -154,6 +154,8 @@ def build_app() -> FastMCP:
         traffic_matrix_dict, srlgs_dict, risk_groups_dict,
         routing_result_dict, disjointness_result_dict,
         feasibility_result_dict, placement_result_dict,
+        ip_topology_dict, grooming_map_dict, ip_routing_result_dict,
+        affected_services_dict,
     )
     from .model.exposure import compute_exposure
     from .model.solvers import (
@@ -169,6 +171,7 @@ def build_app() -> FastMCP:
         solve_rsa as _solve_rsa,
         solve_allocation as _solve_allocation,
     )
+    from .model.ip_routing import simulate_ip_routing as _simulate_ip_routing
 
     # Expose the SnapshotStore on the app so tests can reach the current model.
     app._snapshots = snapshots  # type: ignore[attr-defined]
@@ -192,6 +195,39 @@ def build_app() -> FastMCP:
     def get_traffic_matrix() -> dict:
         """Return the IP demand matrix aggregated across services."""
         return traffic_matrix_dict(snapshots.current())
+
+    @app.tool()
+    def get_ip_topology() -> dict:
+        """Routers and IP links; each link annotated with its underlying
+        lightpath, derived (margin-gated) capacity, and current offered load."""
+        return ip_topology_dict(snapshots.current())
+
+    @app.tool()
+    def get_grooming_map() -> dict:
+        """Coupling #3: which demands ride which lightpaths, both directions
+        (by_service and by_lightpath)."""
+        return grooming_map_dict(snapshots.current())
+
+    @app.tool()
+    def get_affected_services(asset_id: str) -> dict:
+        """Reverse lookup: services whose working or protection path crosses
+        asset_id (IP link, lightpath, OMS, or fiber/amp/roadm uid)."""
+        return affected_services_dict(snapshots.current(), asset_id)
+
+    @app.tool()
+    def simulate_ip_routing() -> dict:
+        """Read-only: account pinned working_path demand onto IP links and
+        report {utilizations, congestion, dropped}. Routes nothing."""
+        return ip_routing_result_dict(_simulate_ip_routing(snapshots.current()))
+
+    @app.tool()
+    def reroute_service(service_id: str, ip_path: list[str]) -> dict:
+        """Move a service's working_path onto a different IP-link sequence.
+        Validates contiguity src->dst; raises on an invalid path."""
+        model = snapshots.current()
+        model.set_service_working_path(service_id, tuple(ip_path))
+        svc = model.get_service(service_id)
+        return {"service_id": svc.id, "working_path": list(svc.working_path)}
 
     @app.tool()
     def list_srlgs() -> list[dict]:
