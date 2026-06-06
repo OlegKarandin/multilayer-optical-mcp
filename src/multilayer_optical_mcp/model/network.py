@@ -121,6 +121,14 @@ class NetworkModel:
     def list_ip_links(self) -> Tuple[IPLink, ...]:
         return tuple(self._ip_links.values())
 
+    def ip_links_for_lightpath(self, lp_id: str) -> Tuple[str, ...]:
+        if lp_id not in self._lightpaths:
+            raise KeyError(lp_id)
+        return tuple(
+            link.id for link in self._ip_links.values()
+            if link.lightpath_id == lp_id
+        )
+
     # ---------------------------------------------------------------- services / risk
 
     def add_service(self, s: Service) -> None:
