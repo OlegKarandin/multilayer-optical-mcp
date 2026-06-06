@@ -73,3 +73,65 @@ def test_grooming_map_both_directions():
     # by_lightpath: each lightpath -> the services riding it (sorted)
     assert gm.by_lightpath["lpAB"] == ("svc-AB", "svc-AC")
     assert gm.by_lightpath["lpBC"] == ("svc-AC",)
+
+
+def test_simulate_offered_load_and_utilization():
+    from multilayer_optical_mcp.model import ip_routing
+    n = _two_link_model()
+    n.add_service(Service(id="svc-AC", src_router="R-A", dst_router="R-C",
+                          demand_gbps=120.0, working_path=("ipAB", "ipBC")))
+    n.add_service(Service(id="svc-AB", src_router="R-A", dst_router="R-B",
+                          demand_gbps=40.0, working_path=("ipAB",)))
+    res = ip_routing.simulate_ip_routing(n)
+    util = {u.ip_link_id: u for u in res.utilizations}
+    # ipAB carries 120 + 40 = 160 of 200 -> util 0.8; ipBC carries 120 -> 0.6
+    assert util["ipAB"].offered_gbps == 160.0
+    assert util["ipAB"].capacity_gbps == 200.0
+    assert util["ipAB"].utilization == pytest.approx(0.8)
+    assert util["ipBC"].utilization == pytest.approx(0.6)
+    assert res.congested_links == ()
+    assert res.down_links == ()
+    assert res.dropped_services == ()
+    assert res.overflow_gbps == 0.0
+
+
+def test_simulate_unrouted_service_carries_no_load():
+    from multilayer_optical_mcp.model import ip_routing
+    n = _two_link_model()
+    n.add_service(Service(id="svc-pending", src_router="R-A", dst_router="R-C",
+                          demand_gbps=999.0))  # empty working_path
+    res = ip_routing.simulate_ip_routing(n)
+    assert all(u.offered_gbps == 0.0 for u in res.utilizations)
+
+
+def test_simulate_oversubscription_reports_overflow():
+    from multilayer_optical_mcp.model import ip_routing
+    n = _two_link_model()
+    # 260G offered onto a 200G link -> congested, overflow 60, not down.
+    n.add_service(Service(id="svc-big", src_router="R-A", dst_router="R-B",
+                          demand_gbps=260.0, working_path=("ipAB",)))
+    res = ip_routing.simulate_ip_routing(n)
+    util = {u.ip_link_id: u for u in res.utilizations}
+    assert util["ipAB"].utilization == pytest.approx(1.3)
+    assert res.congested_links == ("ipAB",)
+    assert res.down_links == ()
+    assert res.overflow_gbps == pytest.approx(60.0)
+    assert res.dropped_services == ()  # not down: congested, not lost
+
+
+def test_simulate_down_link_drops_its_services():
+    from multilayer_optical_mcp.model import ip_routing
+    n = _two_link_model()
+    n.add_service(Service(id="svc-AC", src_router="R-A", dst_router="R-C",
+                          demand_gbps=120.0, working_path=("ipAB", "ipBC")))
+    # Push lpBC margin negative -> capacity 0 -> ipBC down.
+    n.set_qot_state("lpBC", QoTState(gsnr_db=18.0, osnr_db=20.0, margin_db=-0.5))
+    res = ip_routing.simulate_ip_routing(n)
+    util = {u.ip_link_id: u for u in res.utilizations}
+    assert util["ipBC"].down is True
+    assert util["ipBC"].utilization is None
+    assert res.down_links == ("ipBC",)
+    assert res.dropped_services == (
+        ip_routing.DroppedService(service_id="svc-AC", reason="link_down",
+                                  on_link="ipBC"),
+    )
