@@ -171,3 +171,37 @@ def test_reroute_rejects_unknown_link():
                           demand_gbps=120.0, working_path=("ipAB", "ipBC")))
     with pytest.raises(ValueError, match="unknown IP link"):
         n.set_service_working_path("svc-AC", ("ipNope",))
+
+
+def test_affected_services_by_lightpath_oms_and_fiber():
+    from multilayer_optical_mcp.model import ip_routing
+    n = _two_link_model()
+    n.add_service(Service(id="svc-AC", src_router="R-A", dst_router="R-C",
+                          demand_gbps=120.0, working_path=("ipAB", "ipBC")))
+    n.add_service(Service(id="svc-AB", src_router="R-A", dst_router="R-B",
+                          demand_gbps=40.0, working_path=("ipAB",)))
+    # By lightpath id.
+    assert ip_routing.affected_services(n, "lpAB") == ("svc-AB", "svc-AC")
+    assert ip_routing.affected_services(n, "lpBC") == ("svc-AC",)
+    # By OMS id and by fiber uid (deeper layers) resolve through the lightpath.
+    assert ip_routing.affected_services(n, "omsBC") == ("svc-AC",)
+    assert ip_routing.affected_services(n, "fBC") == ("svc-AC",)
+    # By IP link id.
+    assert ip_routing.affected_services(n, "ipAB") == ("svc-AB", "svc-AC")
+    # Unknown asset -> empty, not an error.
+    assert ip_routing.affected_services(n, "ghost") == ()
+
+
+def test_affected_services_includes_protection_path():
+    from multilayer_optical_mcp.model import ip_routing
+    n = _two_link_model()
+    n.add_lightpath(Lightpath(id="lpAC", oms_sequence=("omsAB", "omsBC"),
+                              mode_id="200G-16QAM", center_freq_hz=193.5e12))
+    n.set_qot_state("lpAC", QoTState(gsnr_db=20.0, osnr_db=22.0, margin_db=1.0))
+    n.add_ip_link(IPLink(id="ipAC", a_router="R-A", z_router="R-C",
+                         lightpath_id="lpAC"))
+    n.add_service(Service(id="svc-AC", src_router="R-A", dst_router="R-C",
+                          demand_gbps=120.0, working_path=("ipAC",),
+                          protection_path=("ipAB", "ipBC")))
+    # lpBC only on the protection path -> still affected.
+    assert ip_routing.affected_services(n, "lpBC") == ("svc-AC",)

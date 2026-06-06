@@ -142,3 +142,17 @@ def is_contiguous_path(
         else:
             return False
     return cur == dst_router
+
+
+def affected_services(model: NetworkModel, asset_id: str) -> Tuple[str, ...]:
+    """Reverse lookup: services whose working OR protection path touches
+    asset_id, where asset_id may be an IP link, lightpath, OMS, or
+    fiber/amp/roadm uid. Unknown asset -> empty tuple (not an error)."""
+    from .exposure import _path_asset_set
+    hits = []
+    for svc in model.list_services():
+        footprint = (_path_asset_set(model, svc.working_path)
+                     | _path_asset_set(model, svc.protection_path))
+        if asset_id in footprint:
+            hits.append(svc.id)
+    return tuple(sorted(hits))
