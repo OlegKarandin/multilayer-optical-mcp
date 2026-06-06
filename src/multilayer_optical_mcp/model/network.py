@@ -143,6 +143,20 @@ class NetworkModel:
     def get_service(self, sid: str) -> Service:
         return self._services[sid]
 
+    def set_service_working_path(
+        self, service_id: str, ip_path: Tuple[str, ...],
+    ) -> None:
+        from .ip_routing import is_contiguous_path
+        svc = self._services[service_id]
+        for ip_id in ip_path:
+            if ip_id not in self._ip_links:
+                raise ValueError(f"unknown IP link {ip_id!r}")
+        if not is_contiguous_path(self, svc.src_router, svc.dst_router, ip_path):
+            raise ValueError(
+                f"ip_path does not connect {svc.src_router!r}->{svc.dst_router!r}"
+            )
+        self._services[service_id] = replace(svc, working_path=tuple(ip_path))
+
     def add_srlg(self, g: SRLG) -> None:
         self._srlgs[g.id] = g
 

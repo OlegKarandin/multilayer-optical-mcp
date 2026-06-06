@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from .network import NetworkModel
 
@@ -123,3 +123,22 @@ def simulate_ip_routing(model: NetworkModel) -> IPRoutingResult:
         dropped_services=tuple(dropped),
         overflow_gbps=overflow,
     )
+
+
+def is_contiguous_path(
+    model: NetworkModel, src_router: str, dst_router: str,
+    ip_path: Tuple[str, ...],
+) -> bool:
+    """True iff ip_path forms a connected walk src_router -> dst_router,
+    traversing each IP link in either orientation. Empty path is contiguous
+    only when src == dst."""
+    cur = src_router
+    for ip_id in ip_path:
+        link = model.get_ip_link(ip_id)
+        if link.a_router == cur:
+            cur = link.z_router
+        elif link.z_router == cur:
+            cur = link.a_router
+        else:
+            return False
+    return cur == dst_router

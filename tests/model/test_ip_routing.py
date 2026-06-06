@@ -135,3 +135,39 @@ def test_simulate_down_link_drops_its_services():
         ip_routing.DroppedService(service_id="svc-AC", reason="link_down",
                                   on_link="ipBC"),
     )
+
+
+def test_reroute_repins_working_path():
+    from multilayer_optical_mcp.model import ip_routing
+    n = _two_link_model()
+    # Add a direct A->C express link so a reroute target exists.
+    n.add_lightpath(Lightpath(id="lpAC", oms_sequence=("omsAB", "omsBC"),
+                              mode_id="200G-16QAM", center_freq_hz=193.5e12))
+    n.set_qot_state("lpAC", QoTState(gsnr_db=20.0, osnr_db=22.0, margin_db=1.0))
+    n.add_ip_link(IPLink(id="ipAC", a_router="R-A", z_router="R-C",
+                         lightpath_id="lpAC"))
+    n.add_service(Service(id="svc-AC", src_router="R-A", dst_router="R-C",
+                          demand_gbps=120.0, working_path=("ipAB", "ipBC")))
+    n.set_service_working_path("svc-AC", ("ipAC",))
+    assert n.get_service("svc-AC").working_path == ("ipAC",)
+    # Load now lands on ipAC, not the old two-hop path.
+    load = ip_routing.offered_load_per_link(n)
+    assert load["ipAC"] == 120.0
+    assert load["ipAB"] == 0.0
+
+
+def test_reroute_rejects_noncontiguous_path():
+    n = _two_link_model()
+    n.add_service(Service(id="svc-AC", src_router="R-A", dst_router="R-C",
+                          demand_gbps=120.0, working_path=("ipAB", "ipBC")))
+    # ipAB alone goes A->B, not A->C.
+    with pytest.raises(ValueError, match="does not connect"):
+        n.set_service_working_path("svc-AC", ("ipAB",))
+
+
+def test_reroute_rejects_unknown_link():
+    n = _two_link_model()
+    n.add_service(Service(id="svc-AC", src_router="R-A", dst_router="R-C",
+                          demand_gbps=120.0, working_path=("ipAB", "ipBC")))
+    with pytest.raises(ValueError, match="unknown IP link"):
+        n.set_service_working_path("svc-AC", ("ipNope",))
