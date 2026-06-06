@@ -56,3 +56,20 @@ def test_ip_links_for_lightpath_unknown_raises():
     n = _two_link_model()
     with pytest.raises(KeyError):
         n.ip_links_for_lightpath("nope")
+
+
+def test_grooming_map_both_directions():
+    from multilayer_optical_mcp.model import ip_routing
+    n = _two_link_model()
+    # One service A->C rides both lightpaths; one service A->B rides only lpAB.
+    n.add_service(Service(id="svc-AC", src_router="R-A", dst_router="R-C",
+                          demand_gbps=120.0, working_path=("ipAB", "ipBC")))
+    n.add_service(Service(id="svc-AB", src_router="R-A", dst_router="R-B",
+                          demand_gbps=40.0, working_path=("ipAB",)))
+    gm = ip_routing.build_grooming_map(n)
+    # by_service: each service -> the lightpaths along its working_path
+    assert gm.by_service["svc-AC"] == ("lpAB", "lpBC")
+    assert gm.by_service["svc-AB"] == ("lpAB",)
+    # by_lightpath: each lightpath -> the services riding it (sorted)
+    assert gm.by_lightpath["lpAB"] == ("svc-AB", "svc-AC")
+    assert gm.by_lightpath["lpBC"] == ("svc-AC",)
