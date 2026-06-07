@@ -66,3 +66,47 @@ def test_failed_assets_isolated_on_branch(tmp_path):
     store.current().mark_failed(("fiber_0_1_0",))
     assert store.current().is_failed("fiber_0_1_0")
     assert not store.get(sid).is_failed("fiber_0_1_0")  # parent untouched
+
+
+# ---------------------------------------------------------------------------
+# Task 3: loading_from_model + margin_threshold_sweep
+# ---------------------------------------------------------------------------
+
+from multilayer_optical_mcp.model.whatif import (
+    loading_from_model, margin_threshold_sweep, MarginSweepRow,
+)
+from multilayer_optical_mcp.model.assets import OMS, Lightpath
+from multilayer_optical_mcp.model.qot import QoTState
+
+
+def _model_with_two_lightpaths():
+    m = _one_edge_model()
+    # oms_0_1 and oms_1_0 are both created by model_from_abstract_graph
+    m.add_lightpath(Lightpath(id="lp0", oms_sequence=("oms_0_1",),
+                              mode_id=MODE, center_freq_hz=193.4e12))
+    m.add_lightpath(Lightpath(id="lp1", oms_sequence=("oms_1_0",),
+                              mode_id=MODE, center_freq_hz=193.5e12))
+    m.set_qot_state("lp0", QoTState(gsnr_db=9.0, osnr_db=20.0, margin_db=1.9))
+    m.set_qot_state("lp1", QoTState(gsnr_db=8.0, osnr_db=19.0, margin_db=0.9))
+    return m
+
+
+def test_loading_from_model_one_channel_per_lightpath():
+    m = _model_with_two_lightpaths()
+    loading = loading_from_model(m)
+    assert len(loading.channels) == 2
+    freqs = sorted(c.center_freq_hz for c in loading.channels)
+    assert freqs == [193.4e12, 193.5e12]
+
+
+def test_sweep_returns_fragile_sorted_by_margin():
+    m = _model_with_two_lightpaths()
+    rows = margin_threshold_sweep(m, threshold_db=2.0)
+    assert [r.lightpath_id for r in rows] == ["lp1", "lp0"]  # ascending margin
+    assert all(isinstance(r, MarginSweepRow) for r in rows)
+
+
+def test_sweep_excludes_well_margined():
+    m = _model_with_two_lightpaths()
+    rows = margin_threshold_sweep(m, threshold_db=1.0)
+    assert [r.lightpath_id for r in rows] == ["lp1"]  # lp0 margin 1.9 > 1.0
