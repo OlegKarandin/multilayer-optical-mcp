@@ -16,9 +16,18 @@ def load_toy(
     eqpt_path: Path = DEFAULT_EQPT,
     topo_path: Path = DEFAULT_TOPO,
 ) -> tuple[Any, Any]:
-    from gnpy.tools.json_io import load_equipment, load_network
+    from gnpy.tools.json_io import load_equipment, load_network, load_json
 
-    eqpt = load_equipment(eqpt_path)
+    # gnpy 2.14+ requires extra_configs passed explicitly: scan the equipment
+    # directory for JSON files (filename key → parsed dict), so that
+    # advanced_config_from_json = "file.json" resolves correctly.
+    eqpt_dir = Path(eqpt_path).parent
+    extra_configs = {
+        p.name: load_json(p)
+        for p in eqpt_dir.iterdir()
+        if p.suffix.lower() == ".json" and p != Path(eqpt_path)
+    }
+    eqpt = load_equipment(eqpt_path, extra_configs)
     network = load_network(topo_path, eqpt)
     return eqpt, network
 
@@ -74,7 +83,7 @@ def build_si_for_loading(
         empty = np.array([], dtype=float)
         return create_arbitrary_spectral_information(
             frequency=empty,
-            signal=empty,
+            pch=empty,
             baud_rate=empty,
             tx_osnr=empty,
             tx_power=empty,
@@ -108,7 +117,7 @@ def build_si_for_loading(
 
     return create_arbitrary_spectral_information(
         frequency=frequencies,
-        signal=powers_w,
+        pch=powers_w,
         baud_rate=baud_rates,
         tx_osnr=tx_osnrs,
         tx_power=tx_power_w,

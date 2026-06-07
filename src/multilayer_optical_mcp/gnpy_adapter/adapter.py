@@ -165,15 +165,11 @@ def compute_qot(
         If any OMS id or element uid cannot be resolved.
     """
     # ------------------------------------------------------------------ setup
-    from .synthesize import build_gnpy_network
+    from .synthesize import build_gnpy_network, gnpy_design_network
     if topo_path is not None or eqpt_path is not None:
         eqpt, network = load_toy(eqpt_path=eqpt_path or DEFAULT_EQPT,
                                  topo_path=topo_path or DEFAULT_TOPO)
-        # Set amplifier gain targets from the equipment spec.
-        # pref_ch_db=0.0 dBm = target fiber launch power after the booster; build_network
-        # computes booster gain = 0 - (-20 dBm ROADM output) = 20 dB, ILA/preamp ≈ 16 dB.
-        from gnpy.core.network import build_network as _build_network
-        _build_network(network, eqpt, pref_ch_db=0.0, pref_total_db=0.0)
+        gnpy_design_network(network, eqpt)
     else:
         eqpt, network = build_gnpy_network(model)
 

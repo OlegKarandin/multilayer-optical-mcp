@@ -1,5 +1,5 @@
 from pathlib import Path
-from gnpy.tools.json_io import load_equipment, load_network
+from multilayer_optical_mcp.gnpy_adapter.translate import load_toy
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -8,8 +8,7 @@ TOPO = REPO_ROOT / "topologies" / "toy_2span.json"
 
 
 def test_toy_topology_loads_with_advanced_amp_model():
-    eqpt = load_equipment(EQPT)
-    network = load_network(TOPO, eqpt)
+    eqpt, network = load_toy(eqpt_path=EQPT, topo_path=TOPO)
     from gnpy.core.elements import Edfa
     amps = [n for n in network.nodes if isinstance(n, Edfa)]
     assert amps

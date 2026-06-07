@@ -152,41 +152,63 @@ def model_to_gnpy_topology(model: NetworkModel) -> Dict[str, Any]:
 def build_gnpy_network(model: NetworkModel):
     """Return (equipment, network) built from the model, ready to propagate.
 
-    Reuses gnpy's network_from_json + build_network — the same code path load_toy
-    uses — so synthesized results match a hand-written topology of the same shape.
+    Reuses gnpy's network_from_json + design_network so synthesized results
+    match a hand-written topology of the same shape.
     """
     from gnpy.tools.json_io import network_from_json
-    from gnpy.core.network import build_network
 
     equipment = _equipment_from_dict(model_to_gnpy_equipment(model))
     network = network_from_json(model_to_gnpy_topology(model), equipment)
-    build_network(network, equipment, pref_ch_db=0.0, pref_total_db=0.0)
+    gnpy_design_network(network, equipment)
     return equipment, network
+
+
+def gnpy_design_network(network, equipment) -> None:
+    """Call gnpy design_network with a reference channel derived from equipment SI.
+
+    gnpy 2.14+ replaced build_network(pref_ch_db, pref_total_db) with
+    design_network(reference_channel, ...) where reference_channel is a
+    PathRequest built from the equipment's SI parameters.
+    """
+    from gnpy.core.network import design_network
+    from gnpy.core.utils import automatic_nch, dbm2watt
+    from gnpy.topology.request import PathRequest
+
+    si = equipment['SI']['default']
+    nb_ch = automatic_nch(si.f_min, si.f_max, si.spacing)
+    pwr = dbm2watt(si.power_dbm)
+    ref_ch = PathRequest(
+        request_id='reference', power=pwr, tx_power=pwr,
+        nb_channel=nb_ch, spacing=si.spacing,
+        f_min=si.f_min, f_max=si.f_max,
+    )
+    design_network(ref_ch, network, equipment)
 
 
 def _equipment_from_dict(eqpt_dict: Dict[str, Any]):
     """Turn the equipment dict into gnpy Equipment objects.
 
-    gnpy 2.11.1's ``Amp.from_json`` resolves ``advanced_config_from_json`` relative
-    to the equipment file, so the dict must be written to a real file next to the
-    already-written NF config files.  We use the same parent directory as the first
-    advanced config file (guaranteed to exist when this function is called from
-    ``build_gnpy_network``).  Falls back to a fresh temp dir if no EDFA entries are
-    present.
+    gnpy 2.14+ expects ``extra_configs`` passed explicitly to ``load_equipment``;
+    the keys must match the ``advanced_config_from_json`` field values verbatim
+    (full absolute path strings).  Build that dict by reading each config file
+    and keying it by its absolute path string before calling load_equipment.
     """
     from gnpy.tools.json_io import load_equipment
 
-    # Determine a stable parent directory — use the dir of the first advanced
-    # config path already written into the dict, so relative-path resolution works.
+    # Build extra_configs: full-path-string → parsed JSON dict for every
+    # advanced_model NF config referenced in the equipment dict.
+    extra_configs: Dict[str, Any] = {}
     parent: "Path | None" = None
     for entry in eqpt_dict.get("Edfa", []):
         cfg_path = entry.get("advanced_config_from_json")
         if isinstance(cfg_path, str):
-            parent = Path(cfg_path).parent
-            break
+            p = Path(cfg_path)
+            if parent is None:
+                parent = p.parent
+            extra_configs[cfg_path] = json.loads(p.read_text())
     if parent is None:
         parent = Path(tempfile.mkdtemp())
 
     eqpt_file = parent / "eqpt.json"
     eqpt_file.write_text(json.dumps(eqpt_dict))
-    return load_equipment(eqpt_file)
+    return load_equipment(eqpt_file, extra_configs)
