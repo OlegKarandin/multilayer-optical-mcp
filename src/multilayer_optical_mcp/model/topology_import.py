@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import List
+from typing import Any, Dict, List
 
 
 def split_link_into_spans(
@@ -37,8 +37,6 @@ def split_link_into_spans(
     spans[-1] = round(length_km - base_len * (best_n - 1), 2)
     return spans
 
-
-from typing import Any, Dict, Optional
 
 from .assets import (
     Amplifier, Fiber, FiberType, OMS, OpticalNode, ROADM, Router, Transceiver,
