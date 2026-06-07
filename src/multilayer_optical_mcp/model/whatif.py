@@ -7,10 +7,12 @@ mutate ground truth — callers pass a branch model.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Tuple
 
 from ..gnpy_adapter.loading import Channel, LoadingState
 from .network import NetworkModel
+from .qot import QoTState
+from .exposure import oms_seq_asset_set
 
 
 @dataclass(frozen=True)
@@ -55,3 +57,43 @@ def margin_threshold_sweep(model: NetworkModel, threshold_db: float) -> List[Mar
             ))
     rows.sort(key=lambda r: r.margin_db)
     return rows
+
+
+_FAILED_SENTINEL = QoTState(
+    gsnr_db=float("-inf"),
+    osnr_db=float("-inf"),
+    margin_db=float("-inf"),
+    limiting_element_id=None,
+)
+
+
+@dataclass(frozen=True)
+class FailureReport:
+    failed_assets: Tuple[str, ...]
+    downed_lightpaths: Tuple[str, ...]
+
+
+def inject_failure(model: NetworkModel, asset_ids: Tuple[str, ...]) -> FailureReport:
+    """Mark assets failed on the (branch) model and down every lightpath crossing them.
+
+    Physics-free: a cut fiber / dead amp carries no signal, so crossing lightpaths
+    get a failed QoT sentinel (margin = -inf). Capacity falls to 0 via the existing
+    margin gate; simulate_ip_routing reports the drop.
+    """
+    model.mark_failed(tuple(asset_ids))
+    failed = set(asset_ids)
+    downed: List[str] = []
+    for lp in model.list_lightpaths():
+        crossing = oms_seq_asset_set(model, lp.oms_sequence) & failed
+        if crossing:
+            model.set_qot_state(lp.id, QoTState(
+                gsnr_db=float("-inf"),
+                osnr_db=float("-inf"),
+                margin_db=float("-inf"),
+                limiting_element_id=sorted(crossing)[0],
+            ))
+            downed.append(lp.id)
+    return FailureReport(
+        failed_assets=tuple(asset_ids),
+        downed_lightpaths=tuple(downed),
+    )

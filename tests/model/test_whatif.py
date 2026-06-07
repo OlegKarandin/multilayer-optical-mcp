@@ -110,3 +110,28 @@ def test_sweep_excludes_well_margined():
     m = _model_with_two_lightpaths()
     rows = margin_threshold_sweep(m, threshold_db=1.0)
     assert [r.lightpath_id for r in rows] == ["lp1"]  # lp0 margin 1.9 > 1.0
+
+
+# ---------------------------------------------------------------------------
+# Task 4: inject_failure + FailureReport
+# ---------------------------------------------------------------------------
+
+import math as _math
+from multilayer_optical_mcp.model.whatif import inject_failure, FailureReport
+
+
+def test_inject_failure_downs_crossing_lightpath():
+    m = _model_with_two_lightpaths()  # lp0 rides oms_0_1, lp1 rides oms_1_0
+    report = inject_failure(m, ("fiber_0_1_0",))  # a fiber on oms_0_1 only
+    # lp0 crosses the failed fiber -> sentinel; lp1 does not -> untouched
+    assert _math.isinf(m.get_qot_state("lp0").margin_db)
+    assert m.get_qot_state("lp0").margin_db < 0
+    assert m.get_qot_state("lp1").margin_db == 0.9
+    assert "lp0" in report.downed_lightpaths
+    assert "lp1" not in report.downed_lightpaths
+
+
+def test_inject_failure_records_failed_assets():
+    m = _model_with_two_lightpaths()
+    inject_failure(m, ("fiber_0_1_0",))
+    assert m.is_failed("fiber_0_1_0")
