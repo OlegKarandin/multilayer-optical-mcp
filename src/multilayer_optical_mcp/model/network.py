@@ -26,6 +26,7 @@ class NetworkModel:
         self._srlgs: Dict[str, SRLG] = {}
         self._risk_groups: Dict[str, RiskGroup] = {}
         self._qot_state: Dict[str, QoTState] = {}
+        self._failed_assets: set[str] = set()
 
     # ------------------------------------------------------------------ types
 
@@ -228,3 +229,32 @@ class NetworkModel:
         if state.margin_db < 0:
             return 0.0
         return self.modes.get(lp.mode_id).bitrate_gbps
+
+    # ---------------------------------------------------------------- injection mutators
+
+    def apply_nf_delta(self, amp_id: str, delta_db: float) -> None:
+        """Add delta_db to an amplifier's NF (branch what-if). Raises KeyError if unknown."""
+        amp = self._amplifiers[amp_id]
+        self._amplifiers[amp_id] = replace(amp, nf_db=amp.nf_db + delta_db)
+
+    def apply_loss_delta(self, fiber_id: str, delta_db: float) -> None:
+        """Add delta_db of lumped loss to a fiber (branch what-if). Raises KeyError if unknown."""
+        f = self._fibers[fiber_id]
+        self._fibers[fiber_id] = replace(f, extra_loss_db=f.extra_loss_db + delta_db)
+
+    def mark_failed(self, asset_ids: Tuple[str, ...]) -> None:
+        """Mark assets failed on this (branch) model."""
+        self._failed_assets.update(asset_ids)
+
+    def clear_failed(self, asset_ids: Tuple[str, ...] = ()) -> None:
+        """Clear specific failed assets, or all when asset_ids is empty."""
+        if asset_ids:
+            self._failed_assets.difference_update(asset_ids)
+        else:
+            self._failed_assets.clear()
+
+    def failed_assets(self) -> frozenset:
+        return frozenset(self._failed_assets)
+
+    def is_failed(self, asset_id: str) -> bool:
+        return asset_id in self._failed_assets

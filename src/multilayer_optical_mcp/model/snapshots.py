@@ -73,6 +73,7 @@ class SnapshotStore:
             "srlgs": _delta(a._srlgs, b._srlgs),
             "risk_groups": _delta(a._risk_groups, b._risk_groups),
             "qot_state": _delta(a._qot_state, b._qot_state),
+            "failed_assets": _delta_set(a._failed_assets, b._failed_assets),
         }
 
     @staticmethod
@@ -92,6 +93,7 @@ class SnapshotStore:
         clone._srlgs = dict(m._srlgs)
         clone._risk_groups = dict(m._risk_groups)
         clone._qot_state = dict(m._qot_state)
+        clone._failed_assets = set(m._failed_assets)
         return clone
 
 
@@ -101,4 +103,12 @@ def _delta(a: dict, b: dict) -> dict:
         "added": tuple(sorted(b_keys - a_keys)),
         "removed": tuple(sorted(a_keys - b_keys)),
         "modified": tuple(sorted(k for k in a_keys & b_keys if a[k] != b[k])),
+    }
+
+
+def _delta_set(a: set, b: set) -> dict:
+    return {
+        "added": tuple(sorted(b - a)),
+        "removed": tuple(sorted(a - b)),
+        "modified": (),
     }
