@@ -89,7 +89,7 @@ def model_to_gnpy_topology(model: NetworkModel) -> Dict[str, Any]:
         loss = model.get_fiber_type(f.type_variety).loss_coef_db_per_km
         elements.append({"uid": f.id, "type": "Fiber", "type_variety": f.type_variety,
                          "params": {"length": f.length_km, "length_units": "km",
-                                    "loss_coef": loss, "att_in": 0,
+                                    "loss_coef": loss, "att_in": f.extra_loss_db,
                                     "con_in": 0, "con_out": 0}})
 
     connections: List[Dict[str, str]] = []

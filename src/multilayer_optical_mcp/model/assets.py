@@ -31,6 +31,7 @@ class Fiber:
     z_end: str
     length_km: float
     type_variety: str
+    extra_loss_db: float = 0.0
 
 
 @dataclass(frozen=True)
