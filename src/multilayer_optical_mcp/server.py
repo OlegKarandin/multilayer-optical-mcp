@@ -156,6 +156,13 @@ def build_app() -> FastMCP:
         feasibility_result_dict, placement_result_dict,
         ip_topology_dict, grooming_map_dict, ip_routing_result_dict,
         affected_services_dict,
+        margin_sweep_dict, degradation_report_dict, failure_report_dict,
+    )
+    from .model.whatif import (
+        margin_threshold_sweep as _margin_sweep,
+        inject_degradation as _inject_degradation,
+        inject_failure as _inject_failure,
+        loading_from_model,
     )
     from .model.exposure import compute_exposure
     from .model.solvers import (
@@ -348,6 +355,36 @@ def build_app() -> FastMCP:
         return placement_result_dict(
             _solve_allocation(model, qot, demands, spare_inventory,
                               objective=objective, weights=weights))
+
+    @app.tool()
+    def whatif_margin_threshold_sweep(threshold_db: float) -> dict:
+        """Physics-free screening: lightpaths whose current margin is within
+        threshold_db of zero (margin_db <= threshold_db), sorted ascending.
+        Models no degradation; makes no causal claim. Read-only."""
+        rows = _margin_sweep(snapshots.current(), threshold_db)
+        return margin_sweep_dict(rows)
+
+    @app.tool()
+    def inject_degradation(
+        asset_id: str,
+        nf_delta: float = 0.0,
+        loss_delta: float = 0.0,
+        threshold_db: float = 0.0,
+    ) -> dict:
+        """Branch what-if: add nf_delta dB NF to an amplifier and/or loss_delta dB
+        loss to a fiber, recompute QoT under current loading, and return typed
+        threshold crossings. Operate on a branch (snapshot_branch) — mutates state."""
+        report = _inject_degradation(
+            snapshots.current(), store=results, asset_id=asset_id,
+            nf_delta=nf_delta, loss_delta=loss_delta, threshold_db=threshold_db)
+        return degradation_report_dict(report)
+
+    @app.tool()
+    def inject_failure(asset_ids: list[str]) -> dict:
+        """Branch what-if: mark assets failed; every lightpath crossing a failed
+        asset goes down (capacity 0). Operate on a branch — mutates state."""
+        report = _inject_failure(snapshots.current(), tuple(asset_ids))
+        return failure_report_dict(report)
 
     return app
 
