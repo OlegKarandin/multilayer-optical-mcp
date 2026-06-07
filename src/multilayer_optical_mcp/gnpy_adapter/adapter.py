@@ -103,6 +103,22 @@ def _path_elements(network, uids: Tuple[str, ...]) -> list:
     return [by_uid[u] for u in uids]
 
 
+def _find_launch_transceiver(network, path_uids, by_uid):
+    """Return the GNPy Transceiver feeding the first path element, or None.
+
+    Generic replacement for the hard-coded 'trx A': the launch transceiver is a
+    Transceiver predecessor of path_uids[0] in the GNPy graph.
+    """
+    from gnpy.core.elements import Transceiver as _GnpyTrx
+    first = by_uid.get(path_uids[0])
+    if first is None:
+        return None
+    for pred in network.predecessors(first):
+        if isinstance(pred, _GnpyTrx):
+            return pred
+    return None
+
+
 def compute_qot(
     *,
     model: NetworkModel,
@@ -149,16 +165,17 @@ def compute_qot(
         If any OMS id or element uid cannot be resolved.
     """
     # ------------------------------------------------------------------ setup
-    eqpt, network = load_toy(
-        eqpt_path=eqpt_path or DEFAULT_EQPT,
-        topo_path=topo_path or DEFAULT_TOPO,
-    )
-
-    # Set amplifier gain targets from the equipment spec.
-    # pref_ch_db=0.0 dBm = target fiber launch power after the booster; build_network
-    # computes booster gain = 0 - (-20 dBm ROADM output) = 20 dB, ILA/preamp ≈ 16 dB.
-    from gnpy.core.network import build_network as _build_network
-    _build_network(network, eqpt, pref_ch_db=0.0, pref_total_db=0.0)
+    from .synthesize import build_gnpy_network
+    if topo_path is not None or eqpt_path is not None:
+        eqpt, network = load_toy(eqpt_path=eqpt_path or DEFAULT_EQPT,
+                                 topo_path=topo_path or DEFAULT_TOPO)
+        # Set amplifier gain targets from the equipment spec.
+        # pref_ch_db=0.0 dBm = target fiber launch power after the booster; build_network
+        # computes booster gain = 0 - (-20 dBm ROADM output) = 20 dB, ILA/preamp ≈ 16 dB.
+        from gnpy.core.network import build_network as _build_network
+        _build_network(network, eqpt, pref_ch_db=0.0, pref_total_db=0.0)
+    else:
+        eqpt, network = build_gnpy_network(model)
 
     # Resolve the OMS sequence to gnpy element uids.
     uids = resolve_oms_path_to_uids(model, oms_sequence)
@@ -190,11 +207,13 @@ def compute_qot(
     # ------------------------------------------------------------------ propagation
     # Feed SI through the transmitter first (initialises tx_power on SI).
     by_uid = {n.uid: n for n in network.nodes}
+    uids_list = list(uids)
 
-    # gnpy Transceiver at the A-end initialises tx_power; use 'trx A' from the
-    # toy topology if available, otherwise skip (forward-only assumption for now).
-    if "trx A" in by_uid:
-        si = by_uid["trx A"](si)
+    # gnpy Transceiver at the A-end initialises tx_power; find it generically
+    # as a Transceiver predecessor of the first path element.
+    launch_trx = _find_launch_transceiver(network, uids_list, by_uid)
+    if launch_trx is not None:
+        si = launch_trx(si)
 
     # Pre-compute adjacency for ROADM degree resolution (degree and from_degree are
     # required positional args on gnpy Roadm.__call__ with no defaults).
@@ -206,8 +225,6 @@ def compute_qot(
     prev_gsnr_db = math.inf
     snapshots: list[ElementSnapshot] = []
     _roadm_propagated: set[str] = set()
-
-    uids_list = list(uids)
     for i, (uid, el) in enumerate(zip(uids_list, elements)):
         if isinstance(el, _GnpyRoadm):
             # Derive degree (output port uid) and from_degree (input port uid).

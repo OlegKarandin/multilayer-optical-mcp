@@ -94,11 +94,33 @@ def model_to_gnpy_topology(model: NetworkModel) -> Dict[str, Any]:
 
     connections: List[Dict[str, str]] = []
     seen: set = set()
+    # Collect synthetic transceiver UIDs we need to add (for legacy test models
+    # whose OMS src_node_id / dst_node_id is a bare transceiver UID, not a ROADM
+    # key and not an explicitly registered transceiver).
+    _synthetic_trx: set = set()
 
     def connect(a: str, b: str) -> None:
         if (a, b) not in seen:
             seen.add((a, b))
             connections.append({"from_node": a, "to_node": b})
+
+    def _resolve_endpoint(node_id: str) -> str:
+        """Return the GNPy UID for an OMS endpoint (src or dst).
+
+        Priority:
+        1. ``roadm_<node_id>`` exists as a real ROADM → use the ROADM uid.
+        2. ``node_id`` is an explicitly registered transceiver → use it directly.
+        3. Legacy / test model with bare UID → register as synthetic transceiver
+           and return the raw uid.
+        """
+        roadm_uid = f"roadm_{node_id}"
+        if roadm_uid in model._roadms:
+            return roadm_uid
+        if node_id in model._transceivers:
+            return node_id
+        # Legacy bare uid — synthesize a Transceiver element on first encounter.
+        _synthetic_trx.add(node_id)
+        return node_id
 
     for t in model._transceivers.values():
         connect(t.id, f"roadm_{t.site}")
@@ -108,7 +130,21 @@ def model_to_gnpy_topology(model: NetworkModel) -> Dict[str, Any]:
         chain = list(oms.elements)
         for a, b in zip(chain, chain[1:]):
             connect(a, b)
-        connect(chain[-1], f"roadm_{oms.dst_node_id}")
+
+        # Wire src → first element (so the first ROADM/element has a predecessor).
+        # Skip when src resolves to the same UID as chain[0] (importer models embed
+        # the ROADM as the first OMS element, so the src IS chain[0]).
+        src_uid = _resolve_endpoint(oms.src_node_id)
+        if src_uid != chain[0]:
+            connect(src_uid, chain[0])
+
+        # Wire last element → dst.
+        dst_uid = _resolve_endpoint(oms.dst_node_id)
+        connect(chain[-1], dst_uid)
+
+    # Append synthetic transceiver elements (deduped, stable order).
+    for uid in sorted(_synthetic_trx):
+        elements.append({"uid": uid, "type": "Transceiver"})
 
     return {"elements": elements, "connections": connections}
 
