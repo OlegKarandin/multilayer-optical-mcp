@@ -1,4 +1,6 @@
 """Gate: a model synthesized to match toy_2span must reproduce load_toy GSNR."""
+import json
+import math
 from pathlib import Path
 
 from multilayer_optical_mcp.gnpy_adapter.adapter import compute_qot
@@ -9,9 +11,11 @@ from multilayer_optical_mcp.model.assets import (
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot_results import QoTResultStore
+from multilayer_optical_mcp.model.topology_import import model_from_abstract_graph
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOY = REPO_ROOT / "topologies" / "toy_2span.json"
+GERMAN_17 = REPO_ROOT / "topologies" / "german_17.json"
 MODE = "400G@7.1dB"
 TOL_DB = 0.25
 
@@ -103,4 +107,27 @@ def test_synthesized_toy_matches_file_loaded_toy():
     assert abs(g_syn - g_leg) < TOL_DB, (
         f"synthesized GSNR {g_syn:.3f} dB diverges from file-loaded {g_leg:.3f} dB"
         f" (delta={g_syn - g_leg:+.3f} dB, tolerance={TOL_DB} dB)"
+    )
+
+
+def test_german_17_routed_path_finite_and_monotone():
+    graph = json.loads(GERMAN_17.read_text())
+    model = model_from_abstract_graph(graph, modes=ModeRegistry([_mode()]))
+    store = QoTResultStore()
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, 0.0, MODE),))
+
+    def gsnr(oms_id: str) -> float:
+        st, _ = compute_qot(model=model, store=store, oms_sequence=(oms_id,),
+                            direction=Direction.FORWARD, mode_id=MODE, loading=loading)
+        return st.gsnr_db
+
+    # edge 2-3 is 37 km (1 span); edge 9-10 is 353 km (4+ spans). Longer -> lower GSNR.
+    g_short = gsnr("oms_2_3")
+    g_long = gsnr("oms_9_10")
+    assert math.isfinite(g_short) and math.isfinite(g_long), (
+        f"GSNR not finite: short={g_short}, long={g_long}"
+    )
+    assert g_long < g_short, (
+        f"Expected longer path to have lower GSNR: oms_2_3={g_short:.3f} dB, "
+        f"oms_9_10={g_long:.3f} dB"
     )
