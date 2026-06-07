@@ -36,8 +36,21 @@ def test_distinct_nf_gets_distinct_type_variety():
 
 
 def test_nf_type_variety_carries_flat_nf_polynomial():
+    import json
     eqpt = model_to_gnpy_equipment(_tiny_model())
     by_name = {e["type_variety"]: e for e in eqpt["Edfa"]}
     adv = by_name[nf_type_variety(7.5)]
     assert adv["type_def"] == "advanced_model"
-    assert adv["advanced_config_from_json"]["nf_fit_coeff"][-1] == 7.5
+    # advanced_config_from_json is a file-path string (gnpy 2.11.1 reads it as a
+    # path); load the JSON from that file to inspect the NF polynomial.
+    adv_cfg = json.loads(open(adv["advanced_config_from_json"]).read())
+    assert adv_cfg["nf_fit_coeff"][-1] == 7.5
+
+
+def test_build_gnpy_network_returns_network_with_named_nodes():
+    from multilayer_optical_mcp.gnpy_adapter.synthesize import build_gnpy_network
+    eqpt, network = build_gnpy_network(_tiny_model())
+    uids = {n.uid for n in network.nodes}
+    assert "roadm_0" in uids and "roadm_1" in uids
+    assert "trx_0" in uids and "trx_1" in uids
+    assert "fiber_0_1_0" in uids

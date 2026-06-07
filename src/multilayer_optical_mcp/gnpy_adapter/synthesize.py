@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import tempfile
+from pathlib import Path
 from typing import Any, Dict, List
 
 from ..model.network import NetworkModel
@@ -13,8 +16,31 @@ def nf_type_variety(nf_db: float) -> str:
     return f"adv_nf_{nf_db:g}"
 
 
-def model_to_gnpy_equipment(model: NetworkModel) -> Dict[str, Any]:
-    """Build the GNPy equipment dict with one advanced_model Edfa per distinct NF."""
+def _adv_config_path(nf: float, tmpdir: Path) -> str:
+    """Write an advanced_model NF config file and return its path string."""
+    cfg = {
+        "nf_fit_coeff": [0.0, 0.0, 0.0, float(nf)],
+        "f_min": 191.275e12,
+        "f_max": 196.125e12,
+        "nf_ripple": [0.0],
+        "dgt": [1.0],
+        "gain_ripple": [0.0],
+    }
+    p = tmpdir / f"adv_nf_{nf:g}.json"
+    p.write_text(json.dumps(cfg))
+    return str(p)
+
+
+def model_to_gnpy_equipment(model: NetworkModel,
+                             _tmpdir: "Path | None" = None) -> Dict[str, Any]:
+    """Build the GNPy equipment dict with one advanced_model Edfa per distinct NF.
+
+    ``advanced_config_from_json`` is set to a file-path string (gnpy 2.11.1 reads
+    it as a path, not an inline dict).  A temporary directory is created once per
+    call; pass ``_tmpdir`` to control the location (tests may do this).
+    """
+    if _tmpdir is None:
+        _tmpdir = Path(tempfile.mkdtemp())
     nfs = sorted({amp.nf_db for amp in model._amplifiers.values()})
     edfa = [
         {
@@ -23,14 +49,7 @@ def model_to_gnpy_equipment(model: NetworkModel) -> Dict[str, Any]:
             "gain_flatmax": 25,
             "gain_min": 0,
             "p_max": 23,
-            "advanced_config_from_json": {
-                "nf_fit_coeff": [0.0, 0.0, 0.0, float(nf)],
-                "f_min": 191.275e12,
-                "f_max": 196.125e12,
-                "nf_ripple": [0.0],
-                "dgt": [1.0],
-                "gain_ripple": [0.0],
-            },
+            "advanced_config_from_json": _adv_config_path(nf, _tmpdir),
             "out_voa_auto": False,
             "allowed_for_design": True,
         }
@@ -92,3 +111,46 @@ def model_to_gnpy_topology(model: NetworkModel) -> Dict[str, Any]:
         connect(chain[-1], f"roadm_{oms.dst_node_id}")
 
     return {"elements": elements, "connections": connections}
+
+
+def build_gnpy_network(model: NetworkModel):
+    """Return (equipment, network) built from the model, ready to propagate.
+
+    Reuses gnpy's network_from_json + build_network — the same code path load_toy
+    uses — so synthesized results match a hand-written topology of the same shape.
+    """
+    from gnpy.tools.json_io import network_from_json
+    from gnpy.core.network import build_network
+
+    equipment = _equipment_from_dict(model_to_gnpy_equipment(model))
+    network = network_from_json(model_to_gnpy_topology(model), equipment)
+    build_network(network, equipment, pref_ch_db=0.0, pref_total_db=0.0)
+    return equipment, network
+
+
+def _equipment_from_dict(eqpt_dict: Dict[str, Any]):
+    """Turn the equipment dict into gnpy Equipment objects.
+
+    gnpy 2.11.1's ``Amp.from_json`` resolves ``advanced_config_from_json`` relative
+    to the equipment file, so the dict must be written to a real file next to the
+    already-written NF config files.  We use the same parent directory as the first
+    advanced config file (guaranteed to exist when this function is called from
+    ``build_gnpy_network``).  Falls back to a fresh temp dir if no EDFA entries are
+    present.
+    """
+    from gnpy.tools.json_io import load_equipment
+
+    # Determine a stable parent directory — use the dir of the first advanced
+    # config path already written into the dict, so relative-path resolution works.
+    parent: "Path | None" = None
+    for entry in eqpt_dict.get("Edfa", []):
+        cfg_path = entry.get("advanced_config_from_json")
+        if isinstance(cfg_path, str):
+            parent = Path(cfg_path).parent
+            break
+    if parent is None:
+        parent = Path(tempfile.mkdtemp())
+
+    eqpt_file = parent / "eqpt.json"
+    eqpt_file.write_text(json.dumps(eqpt_dict))
+    return load_equipment(eqpt_file)
