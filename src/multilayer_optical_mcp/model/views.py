@@ -220,3 +220,28 @@ def ip_routing_result_dict(res) -> Dict[str, Any]:
 def affected_services_dict(model: NetworkModel, asset_id: str) -> Dict[str, Any]:
     return {"asset_id": asset_id,
             "services": list(_ipr.affected_services(model, asset_id))}
+
+
+def margin_sweep_dict(rows) -> dict:
+    return {"fragile": [
+        {"lightpath_id": r.lightpath_id, "margin_db": r.margin_db,
+         "gsnr_db": r.gsnr_db, "mode_feasible": r.mode_feasible} for r in rows]}
+
+
+def degradation_report_dict(report) -> dict:
+    return {
+        "asset_id": report.asset_id,
+        "nf_delta": report.nf_delta,
+        "loss_delta": report.loss_delta,
+        "crossings": list(report.crossings),
+        "rows": [
+            {"lightpath_id": r.lightpath_id, "margin_before": r.margin_before,
+             "margin_after": r.margin_after, "feasible_before": r.feasible_before,
+             "feasible_after": r.feasible_after, "crossed": r.crossed,
+             "within_threshold": r.within_threshold} for r in report.rows],
+    }
+
+
+def failure_report_dict(report) -> dict:
+    return {"failed_assets": list(report.failed_assets),
+            "downed_lightpaths": list(report.downed_lightpaths)}
