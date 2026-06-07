@@ -10,8 +10,10 @@ from dataclasses import dataclass
 from typing import List, Tuple
 
 from ..gnpy_adapter.loading import Channel, LoadingState
+from ..gnpy_adapter.adapter import recompute_qot_under_loading
 from .network import NetworkModel
 from .qot import QoTState
+from .qot_results import QoTResultStore
 from .exposure import oms_seq_asset_set
 
 
@@ -97,3 +99,82 @@ def inject_failure(model: NetworkModel, asset_ids: Tuple[str, ...]) -> FailureRe
         failed_assets=tuple(asset_ids),
         downed_lightpaths=tuple(downed),
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 5: inject_degradation + DegradationReport
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DegradationRow:
+    lightpath_id: str
+    margin_before: float
+    margin_after: float
+    feasible_before: bool
+    feasible_after: bool
+    crossed: bool            # feasible_before and not feasible_after
+    within_threshold: bool   # margin_after <= threshold_db (when threshold given)
+
+
+@dataclass(frozen=True)
+class DegradationReport:
+    asset_id: str
+    nf_delta: float
+    loss_delta: float
+    rows: Tuple[DegradationRow, ...]
+    crossings: Tuple[str, ...]  # lightpath ids that flipped feasible -> infeasible
+
+
+def _has_qot(model: NetworkModel, lp_id: str) -> bool:
+    try:
+        model.get_qot_state(lp_id)
+        return True
+    except LookupError:
+        return False
+
+
+def inject_degradation(
+    model: NetworkModel,
+    *,
+    store: QoTResultStore,
+    asset_id: str,
+    nf_delta: float = 0.0,
+    loss_delta: float = 0.0,
+    threshold_db: float = 0.0,
+) -> DegradationReport:
+    """Perturb impairment on a branch, recompute, report threshold crossings.
+
+    asset_id must be a known amplifier (for nf_delta) or fiber (for loss_delta).
+    Raises KeyError on an unknown asset. Margin moves as a consequence — never set.
+    """
+    if not nf_delta and not loss_delta:
+        raise ValueError("inject_degradation needs a non-zero nf_delta or loss_delta")
+
+    before = {lp.id: model.get_qot_state(lp.id).margin_db
+              for lp in model.list_lightpaths()
+              if _has_qot(model, lp.id)}
+
+    if nf_delta:
+        model.apply_nf_delta(asset_id, nf_delta)   # KeyError if not an amp
+    if loss_delta:
+        model.apply_loss_delta(asset_id, loss_delta)  # KeyError if not a fiber
+
+    recompute_qot_under_loading(model=model, store=store, loading=loading_from_model(model))
+
+    rows: List[DegradationRow] = []
+    crossings: List[str] = []
+    for lp in model.list_lightpaths():
+        st = model.get_qot_state(lp.id)
+        mb = before.get(lp.id, float("inf"))
+        fb = mb >= 0
+        fa = st.mode_feasible
+        crossed = fb and not fa
+        if crossed:
+            crossings.append(lp.id)
+        rows.append(DegradationRow(
+            lightpath_id=lp.id, margin_before=mb, margin_after=st.margin_db,
+            feasible_before=fb, feasible_after=fa, crossed=crossed,
+            within_threshold=st.margin_db <= threshold_db))
+    return DegradationReport(asset_id=asset_id, nf_delta=nf_delta, loss_delta=loss_delta,
+                             rows=tuple(rows), crossings=tuple(crossings))

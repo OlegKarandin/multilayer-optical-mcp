@@ -135,3 +135,42 @@ def test_inject_failure_records_failed_assets():
     m = _model_with_two_lightpaths()
     inject_failure(m, ("fiber_0_1_0",))
     assert m.is_failed("fiber_0_1_0")
+
+
+# ---------------------------------------------------------------------------
+# Task 5: inject_degradation + DegradationReport
+# ---------------------------------------------------------------------------
+
+import pytest
+from multilayer_optical_mcp.model.whatif import inject_degradation, DegradationReport
+
+
+def _live_model_one_lightpath():
+    """A model whose lp0 has real (synthesized) QoT, near threshold."""
+    m = _one_edge_model()
+    m.add_lightpath(Lightpath(id="lp0", oms_sequence=("oms_0_1",),
+                              mode_id=MODE, center_freq_hz=193.4e12))
+    # seed real QoT
+    from multilayer_optical_mcp.gnpy_adapter.adapter import recompute_qot_under_loading
+    recompute_qot_under_loading(model=m, store=QoTResultStore(),
+                                loading=loading_from_model(m))
+    return m
+
+
+def test_inject_degradation_lowers_margin_and_reports():
+    m = _live_model_one_lightpath()
+    before = m.get_qot_state("lp0").margin_db
+    report = inject_degradation(m, store=QoTResultStore(), asset_id="amp_0_1_0",
+                                nf_delta=6.0, loss_delta=0.0)
+    after = m.get_qot_state("lp0").margin_db
+    assert after < before  # +6 dB NF degrades GSNR -> lower margin
+    row = next(r for r in report.rows if r.lightpath_id == "lp0")
+    assert row.margin_before == before
+    assert row.margin_after == after
+    assert isinstance(report, DegradationReport)
+
+
+def test_inject_degradation_unknown_asset_raises():
+    m = _live_model_one_lightpath()
+    with pytest.raises(KeyError):
+        inject_degradation(m, store=QoTResultStore(), asset_id="nope", nf_delta=1.0)
