@@ -24,7 +24,8 @@ a new lightpath on that wavelength. No CvtE: wavelength continuity is structural
 """
 from __future__ import annotations
 
-from typing import Dict, FrozenSet, List, Tuple
+from dataclasses import dataclass
+from typing import Dict, FrozenSet, List, Optional, Tuple
 
 import networkx as nx
 
@@ -151,3 +152,136 @@ def wle_count_on_layer(g: nx.DiGraph, oms_id: str, lam: int) -> int:
     one per direction)."""
     return sum(1 for _, _, d in g.edges(data=True)
                if d.get("kind") == "WLE" and d.get("oms_id") == oms_id and d.get("lam") == lam)
+
+
+# ---------------------------------------------------------------------------
+# place_demands — IGABAG k-best placement
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class NewLightpathRun:
+    oms_sequence: Tuple[str, ...]
+    lam: int
+    mode_id: str
+    gsnr_db: float
+    bitrate_gbps: float
+
+
+@dataclass(frozen=True)
+class Placement:
+    reused_lightpaths: Tuple[str, ...]
+    new_lightpaths: Tuple[NewLightpathRun, ...]
+    restored_gbps: float
+    shortfall_gbps: float
+
+
+# Enumeration budget: walk up to _PATH_BUDGET simple paths per policy, keeping
+# up to _DEFAULT_K distinct feasible placements (the cost-ordered frontier).
+_PATH_BUDGET = 64
+_DEFAULT_K = 8
+
+
+def _policy_graph(g: nx.DiGraph, policy: str) -> nx.DiGraph:
+    """Restrict the graph to a lever:
+      groom_only   - drop TxE edges: reuse existing lightpaths only (no new).
+      new_only     - drop LPE edges: force fresh lightpaths (no reuse).
+      groom_or_new - full graph (grooming wins on weight when feasible)."""
+    if policy == "groom_or_new":
+        return g
+    if policy not in ("groom_only", "new_only"):
+        raise ValueError(f"unknown policy {policy!r}")
+    drop_kind = "TxE" if policy == "groom_only" else "LPE"
+    h = g.copy()
+    h.remove_edges_from([(u, v) for u, v, d in h.edges(data=True)
+                         if d.get("kind") == drop_kind])
+    return h
+
+
+def _parse_path(g: nx.DiGraph, path: List) -> Tuple[List[str], List[Tuple[Tuple[str, ...], int]]]:
+    """Split an access->access vertex path into (reused_lightpath_ids,
+    new_runs) where each new_run is (oms_sequence, lam)."""
+    reused: List[str] = []
+    new_runs: List[Tuple[Tuple[str, ...], int]] = []
+    cur_oms: List[str] = []
+    cur_lam: Optional[int] = None
+    for a, b in zip(path, path[1:]):
+        d = g.get_edge_data(a, b)
+        kind = d.get("kind")
+        if kind == "LPE":
+            reused.append(d["lightpath_id"])
+        elif kind == "WLE":
+            cur_oms.append(d["oms_id"])
+            cur_lam = d["lam"]
+        elif kind == "RxE":
+            if cur_oms:
+                new_runs.append((tuple(cur_oms), cur_lam))
+                cur_oms, cur_lam = [], None
+        # TxE: entry into a wl layer; nothing to record
+    return reused, new_runs
+
+
+def _bottleneck_residual(g: nx.DiGraph, reused: List[str]) -> float:
+    """Min residual_gbps across the reused LPE edges (inf if none reused)."""
+    if not reused:
+        return float("inf")
+    by_lp = {d["lightpath_id"]: d["residual_gbps"]
+             for _, _, d in g.edges(data=True) if d.get("kind") == "LPE"}
+    return min(by_lp[lp] for lp in reused)
+
+
+def place_demands(
+    model: NetworkModel, g: nx.DiGraph, qot, *,
+    src: str, dst: str, demand_gbps: float, policy: str,
+    k: int = _DEFAULT_K, grid: Optional[SpectrumGrid] = None,
+) -> List[Placement]:
+    """IGABAG for one demand, returning up to `k` DISTINCT feasible placements
+    (the cost-ordered frontier under the policy), each possibly degraded. A
+    placement may reuse existing lightpaths (LPE), light new ones (TxE->WLEs->
+    RxE), or BOTH (a hybrid). Empty list when no feasible path exists."""
+    from .allocation import _build_loading, _best_feasible_mode
+    grid = grid or SpectrumGrid.default()
+    h = _policy_graph(g, policy)
+    s, t = (ACCESS, src), (ACCESS, dst)
+    if s not in h or t not in h or not nx.has_path(h, s, t):
+        return []
+    spectrum = build_spectrum_state(model, grid)
+    ref_mode = model.modes.list()[0].id
+    out: List[Placement] = []
+    seen: set = set()
+    for i, path in enumerate(nx.shortest_simple_paths(h, s, t, weight="weight")):
+        if i >= _PATH_BUDGET or len(out) >= k:
+            break
+        reused, new_runs = _parse_path(g, path)
+        # Deduplicate by structural route (reused LP ids + new OMS sequences),
+        # ignoring wavelength slot: same OMS sequence on lam=0 and lam=1 is the
+        # same route option, just a different channel assignment. Collapsing them
+        # keeps the k-best frontier meaningful (diverse routes/groom combos)
+        # instead of filling it with the same plan on every available slot.
+        key = (tuple(reused), tuple(oms_seq for oms_seq, _ in new_runs))
+        if key in seen:
+            continue
+        seen.add(key)
+        realized: List[NewLightpathRun] = []
+        feasible = True
+        new_cap = float("inf")
+        for oms_seq, lam in new_runs:
+            loading = _build_loading(grid, spectrum, oms_seq, lam, ref_mode)
+            mode, gsnr = _best_feasible_mode(model, qot, oms_seq, loading, ref_mode)
+            if mode is None:
+                feasible = False
+                break
+            realized.append(NewLightpathRun(oms_seq, lam, mode.id, gsnr, mode.bitrate_gbps))
+            new_cap = min(new_cap, mode.bitrate_gbps)
+        if not feasible:
+            continue
+        groom_cap = _bottleneck_residual(g, reused)
+        restored = min(demand_gbps, groom_cap, new_cap)
+        if restored <= 0.0:
+            continue
+        out.append(Placement(
+            reused_lightpaths=tuple(reused),
+            new_lightpaths=tuple(realized),
+            restored_gbps=restored,
+            shortfall_gbps=max(0.0, demand_gbps - restored),
+        ))
+    return out
