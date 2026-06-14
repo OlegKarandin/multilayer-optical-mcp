@@ -245,3 +245,24 @@ def degradation_report_dict(report) -> dict:
 def failure_report_dict(report) -> dict:
     return {"failed_assets": list(report.failed_assets),
             "downed_lightpaths": list(report.downed_lightpaths)}
+
+
+def restoration_result_dict(res) -> Dict[str, Any]:
+    """Serialize a RestorationResult to a JSON-safe dict."""
+    def _new_lp(r) -> dict:
+        return {"oms_sequence": list(r.oms_sequence), "lam": r.lam,
+                "mode_id": r.mode_id, "gsnr_db": r.gsnr_db,
+                "bitrate_gbps": r.bitrate_gbps}
+
+    def _cand(c) -> dict:
+        return {"lever": c.lever,
+                "reused_lightpaths": list(c.reused_lightpaths),
+                "new_lightpaths": [_new_lp(r) for r in c.new_lightpaths],
+                "restored_gbps": c.restored_gbps,
+                "shortfall_gbps": c.shortfall_gbps,
+                "cost_facets": dict(c.cost_facets)}
+
+    return {"status": res.status.value,
+            "service_id": res.service_id,
+            "demand_gbps": res.demand_gbps,
+            "candidates": [_cand(c) for c in res.candidates]}

@@ -157,7 +157,9 @@ def build_app() -> FastMCP:
         ip_topology_dict, grooming_map_dict, ip_routing_result_dict,
         affected_services_dict,
         margin_sweep_dict, degradation_report_dict, failure_report_dict,
+        restoration_result_dict,
     )
+    from .model.restoration import compute_restoration as _compute_restoration
     from .model.whatif import (
         margin_threshold_sweep as _margin_sweep,
         inject_degradation as _inject_degradation,
@@ -385,6 +387,17 @@ def build_app() -> FastMCP:
         asset goes down (capacity 0). Operate on a branch — mutates state."""
         report = _inject_failure(snapshots.current(), tuple(asset_ids))
         return failure_report_dict(report)
+
+    @app.tool()
+    def compute_restoration(service_id: str, avoid: dict | None = None) -> dict:
+        """Enumerate recovery candidates for a service over survivors. `avoid` is
+        {assets?: [...], risk_groups?: [...]} (typically a failure's asset set).
+        Read-only: returns typed candidates (full + degraded) with status
+        solution/partial/no_solution. Does not mutate or commit anything."""
+        model = snapshots.current()
+        qot = make_adapter_evaluator(model, results)
+        res = _compute_restoration(model, qot, service_id, avoid=avoid)
+        return restoration_result_dict(res)
 
     return app
 
