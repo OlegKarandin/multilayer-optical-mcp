@@ -23,8 +23,9 @@ Heterogeneous WDM Mesh Networks"* (IEEE/ACM ToN 2003): build a layered auxiliary
 where every constraint is an **edge type**, and solve routing + wavelength assignment +
 grooming jointly with **one shortest-path**, where the **grooming policy is the edge-weight
 function**. The two restoration "levers" (reuse existing lightpaths vs. light a new one)
-collapse into **two weight policies over one graph**, and hybrids (groom across survivors +
-light one new lightpath) fall out for free.
+collapse into **two policies over one graph** — `groom_only` (drop TxE) and `new_only` (drop
+LPE). (A single grooming-or-new search won't surface both: grooming wins on weight and would
+mask an available full new-lightpath recovery behind a degraded groom.)
 
 The paper is physics-free (static, independent edge capacities). This server is not — mode
 feasibility is gated by loading-coupled QoT, capacity = f(mode) only when margin ≥ 0. So we
@@ -117,8 +118,11 @@ branches.
 (read-only; mutates nothing):
 1. Build the layered graph for the current loading; **prune** by `avoid` (graph surgery).
 2. Run `place_demand` for the service's `(src_router, dst_router, demand_gbps)` under
-   **grooming-only** (WLE forbidden/very-high weight → reuse-existing candidate) and
-   **grooming-or-new** (WLE allowed → new-lightpath candidate) policies.
+   **groom-only** (drop TxE → reuse-existing candidate) and **new-only** (drop LPE → fresh
+   new-lightpath candidate) policies. Note: a single "grooming-or-new" shortest path would
+   *mask* the optical lever — grooming always wins on weight, so a degraded groom would hide
+   an available full new-lightpath recovery. Forcing each lever isolates both ends of the
+   frontier.
 3. Emit each as `RestorationCandidate { lever, ip_path | new_lightpath_spec, restored_gbps,
    shortfall_gbps, cost_facets }`. `cost_facets` computed inline (transponders, added
    hops/latency, spectrum slot) until `evaluate_objective` lands.
