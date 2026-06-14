@@ -4,7 +4,7 @@
 
 **Goal:** Add per-service optical/IP restoration over survivors, built on a new layered IP+optical auxiliary graph, plus an avoidance constraint on the OMS router.
 
-**Architecture:** A read-only `compute_restoration` enumerates recovery candidates for a failed service by routing its demand over a *pruned* layered graph (failed assets removed). The graph (Zhu/Mukherjee auxiliary-graph model, per-wavelength layers, no conversion) reuses existing-lightpath edges (LPE, residual capacity) cheaply and penalizes new-lightpath edges (WLE) via weight; QoT realizes new lightpaths after routing. The two recovery "levers" are two weight policies over the one graph.
+**Architecture:** A read-only `compute_restoration` enumerates recovery candidates for a failed service by routing its demand over a *pruned* layered graph (failed assets removed). The graph (Zhu/Mukherjee auxiliary-graph model, per-wavelength layers, no conversion) reuses existing-lightpath edges (LPE, residual capacity) cheaply and gives new-lightpath edges a moderate weight; QoT realizes new lightpaths after routing. Restoration is k-best placement over the one graph, yielding three lever types — `ip_reroute` (reuse), `optical_reroute` (new), and `hybrid` (both in one path).
 
 **Tech Stack:** Python 3.11, NetworkX, pytest. Conda env `multilayer-optical-mcp` (run all commands via `conda run -n multilayer-optical-mcp ...`, or the env python at `C:/Users/olegk/miniconda3/envs/multilayer-optical-mcp/python.exe`).
 
@@ -22,7 +22,7 @@
 ## File Structure
 
 - **Modify** `src/multilayer_optical_mcp/model/solvers.py` — avoidance: resolve a forbidden-OMS/node set from `constraints={"avoid": {...}}` and prune the OMS graph before enumeration (threaded through `_oms_between`).
-- **Create** `src/multilayer_optical_mcp/model/multilayer_graph.py` — the layered auxiliary graph builder + `place_demand` (IGABAG single-demand placement with QoT realization).
+- **Create** `src/multilayer_optical_mcp/model/multilayer_graph.py` — the layered auxiliary graph builder + `place_demands` (IGABAG k-best placement with QoT realization).
 - **Create** `src/multilayer_optical_mcp/model/restoration.py` — `compute_restoration` and its result types.
 - **Modify** `src/multilayer_optical_mcp/model/views.py` — `restoration_result_dict` serializer.
 - **Modify** `src/multilayer_optical_mcp/server.py` — `compute_restoration` MCP tool.
@@ -352,8 +352,10 @@ Edges (directed; every edge carries a 'weight'):
         or the lightpath crosses a forbidden asset. Low weight (reuse).
   WLE  (WL,u,lam) -> (WL,v,lam)  one per free slot `lam` on an OMS u->v (both
         directions); carries oms_id + lam. Low weight.
-  TxE  access(u) -> (WL,u,lam)   originate a new lightpath on slot lam. HIGH
-        weight (new-lightpath penalty).
+  TxE  access(u) -> (WL,u,lam)   originate a new lightpath on slot lam. MODERATE
+        weight (a few groom-hops' worth) so new segments are discouraged but still
+        reachable by k-shortest within budget — letting hybrids interleave into
+        the frontier instead of ranking behind every pure-groom path.
   RxE  (WL,v,lam) -> access(v)   terminate a new lightpath. Zero weight.
 
 A path access(src) -> access(dst) that stays on existing lightpaths uses only
@@ -373,10 +375,13 @@ from .exposure import oms_seq_asset_set
 ACCESS = "access"
 WL = "wl"
 
-# Edge weights. New lightpaths cost far more than reusing existing ones.
-_W_LPE = 1.0
-_W_WLE = 1.0
-_W_TXE = 1000.0
+# Edge weights shape k-shortest DISCOVERY only (final ranking uses cost_facets).
+# New lightpaths are discouraged but reachable, so hybrids/new candidates
+# interleave into the frontier rather than ranking behind every pure-groom path
+# (which a 1000x penalty would cause). Tunable.
+_W_LPE = 1.0       # reuse an existing lightpath (one virtual hop)
+_W_WLE = 0.1       # traverse one OMS on a new lightpath's wavelength
+_W_NEW_LP = 5.0    # originate a new lightpath (TxE): a few groom-hops' worth
 _W_RXE = 0.0
 
 
@@ -471,7 +476,7 @@ def build_layered_graph(
                 g.add_edge((WL, a, lam), (WL, b, lam),
                            kind="WLE", oms_id=oms.id, lam=lam, weight=_W_WLE)
                 # TxE / RxE tie the wavelength layer to access at each endpoint
-                g.add_edge((ACCESS, a), (WL, a, lam), kind="TxE", lam=lam, weight=_W_TXE)
+                g.add_edge((ACCESS, a), (WL, a, lam), kind="TxE", lam=lam, weight=_W_NEW_LP)
                 g.add_edge((WL, b, lam), (ACCESS, b), kind="RxE", lam=lam, weight=_W_RXE)
     return g
 
@@ -502,19 +507,23 @@ git commit -m "feat(graph): layered IP+optical auxiliary graph (LPE/WLE/TxE/RxE)
 
 ---
 
-## Task 3: `place_demand` (IGABAG single-demand placement)
+## Task 3: `place_demands` (IGABAG k-best placement)
 
 **Files:**
 - Modify: `src/multilayer_optical_mcp/model/multilayer_graph.py`
 - Test: `tests/model/test_multilayer_graph.py`
 
-Route `access(src) → access(dst)` by weighted shortest path under a policy (`"groom_only"` forbids TxE; `"groom_or_new"` allows it). Parse the path into reused-lightpath ids (LPE) and new-lightpath runs (TxE→WLEs(one λ)→RxE). Realize each new run with one QoT call (reuse `allocation._build_loading` / `allocation._best_feasible_mode`); `restored_gbps` = min(grooming bottleneck residual, new-lightpath mode rate), capped at demand.
+Walk `shortest_simple_paths` `access(src) → access(dst)` on a policy graph (`"groom_only"` drops TxE; `"new_only"` drops LPE; `"groom_or_new"` keeps both), collecting up to `k` distinct placements. Parse each path into reused-lightpath ids (LPE) and new-lightpath runs (TxE→WLEs(one λ)→RxE) — a path may have both (a hybrid). Realize each new run with one QoT call (reuse `allocation._build_loading` / `allocation._best_feasible_mode`); `restored_gbps` = min(demand, grooming bottleneck residual, new-lightpath mode rate).
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
 # append to tests/model/test_multilayer_graph.py
-from multilayer_optical_mcp.model.multilayer_graph import place_demand
+from multilayer_optical_mcp.model.assets import (
+    FiberType as _FT, Fiber as _F, Amplifier as _A, OMS as _O, Lightpath as _L,
+    Router as _R, IPLink as _I, Service,
+)
+from multilayer_optical_mcp.model.multilayer_graph import place_demands
 from multilayer_optical_mcp.model.qot import QoTState
 
 
@@ -527,60 +536,97 @@ class FakeQot:
 def test_groom_only_reuses_existing_lightpath():
     n = _one_lightpath_model()
     g = build_layered_graph(n)
-    res = place_demand(n, g, FakeQot(15.0), src="A", dst="B",
-                       demand_gbps=40.0, policy="groom_only")
-    assert res is not None
-    assert res.reused_lightpaths == ("lp-AB",)
-    assert res.new_lightpaths == ()
-    assert res.restored_gbps == 40.0          # fits in 100G residual
-    assert res.shortfall_gbps == 0.0
+    res = place_demands(n, g, FakeQot(15.0), src="A", dst="B",
+                        demand_gbps=40.0, policy="groom_only")
+    assert res, "expected at least one placement"
+    assert res[0].reused_lightpaths == ("lp-AB",)
+    assert res[0].new_lightpaths == ()
+    assert res[0].restored_gbps == 40.0          # fits in 100G residual
+    assert res[0].shortfall_gbps == 0.0
 
 
 def test_groom_only_degrades_to_bottleneck_residual():
     n = _one_lightpath_model()
-    # load 70G onto the IP link so residual is 30G < demand
-    n.add_service_load = None  # (no-op marker; load comes from a service)
-    from multilayer_optical_mcp.model.assets import Service
+    # load 70G onto the IP link via a background service so residual is 30G < demand
     n.add_service(Service("s-load", "R1", "R2", 70.0, working_path=("ip-AB",)))
     g = build_layered_graph(n)
-    res = place_demand(n, g, FakeQot(15.0), src="A", dst="B",
-                       demand_gbps=40.0, policy="groom_only")
-    assert res.restored_gbps == 30.0
-    assert res.shortfall_gbps == 10.0
+    res = place_demands(n, g, FakeQot(15.0), src="A", dst="B",
+                        demand_gbps=40.0, policy="groom_only")
+    assert res[0].restored_gbps == 30.0
+    assert res[0].shortfall_gbps == 10.0
 
 
-def test_groom_or_new_lights_new_lightpath_when_no_existing_path():
+def test_new_only_lights_new_lightpath_when_no_existing_path():
     n = _one_lightpath_model()
     # Demand B->A: no existing lightpath that direction, must light a new one.
     g = build_layered_graph(n)
-    res = place_demand(n, g, FakeQot(15.0), src="B", dst="A",
-                       demand_gbps=100.0, policy="groom_or_new")
-    assert res is not None
-    assert res.reused_lightpaths == ()
-    assert len(res.new_lightpaths) == 1
-    assert res.new_lightpaths[0].oms_sequence == ("oms-AB",)
-    assert res.restored_gbps == 100.0
+    res = place_demands(n, g, FakeQot(15.0), src="B", dst="A",
+                        demand_gbps=100.0, policy="new_only")
+    assert res
+    assert res[0].reused_lightpaths == ()
+    assert len(res[0].new_lightpaths) == 1
+    assert res[0].new_lightpaths[0].oms_sequence == ("oms-AB",)
+    assert res[0].restored_gbps == 100.0
 
 
-def test_groom_only_returns_none_when_no_existing_path():
+def test_groom_only_empty_when_no_existing_path():
     n = _one_lightpath_model()
     g = build_layered_graph(n)
-    assert place_demand(n, g, FakeQot(15.0), src="B", dst="A",
-                        demand_gbps=10.0, policy="groom_only") is None
+    assert place_demands(n, g, FakeQot(15.0), src="B", dst="A",
+                         demand_gbps=10.0, policy="groom_only") == []
+
+
+def _groom_plus_gap_model() -> NetworkModel:
+    """A->M has an existing lightpath (lp-AM); M->B has free spectrum but NO
+    existing lightpath. Demand A->B must groom A->M then light a new M->B
+    lightpath -> a hybrid placement."""
+    n = NetworkModel(modes=ModeRegistry([
+        _TM_helper()]))
+    n.register_fiber_type(_FT("SSMF", 0.2))
+    for a in ("m1", "m2", "n1", "n2"):
+        n.add_amplifier(_A(a, "advanced_toy", 20.0, 5.5))
+    n.add_fiber(_F("fAM", "m1", "m2", 60.0, "SSMF"))
+    n.add_fiber(_F("fMB", "n1", "n2", 60.0, "SSMF"))
+    n.add_oms(_O("oms-AM", "A", "M", ("m1", "fAM", "m2")))
+    n.add_oms(_O("oms-MB", "M", "B", ("n1", "fMB", "n2")))
+    n.add_lightpath(_L("lp-AM", ("oms-AM",), "100G", 193.4e12))
+    n.set_qot_state("lp-AM", QoTState(gsnr_db=15.0, osnr_db=30.0, margin_db=3.0))
+    n.add_router(_R("RA", "A"))
+    n.add_router(_R("RM", "M"))
+    n.add_ip_link(_I("ip-AM", "RA", "RM", "lp-AM"))
+    return n
+
+
+def _TM_helper():
+    from multilayer_optical_mcp.model.assets import TransceiverMode
+    return TransceiverMode(id="100G", bitrate_gbps=100.0, required_gsnr_db=12.0,
+                           symbol_rate_baud=32e9, channel_spacing_hz=100e9)
+
+
+def test_groom_or_new_finds_hybrid_groom_plus_new():
+    n = _groom_plus_gap_model()
+    g = build_layered_graph(n)
+    res = place_demands(n, g, FakeQot(15.0), src="A", dst="B",
+                        demand_gbps=100.0, policy="groom_or_new")
+    hybrids = [p for p in res if p.reused_lightpaths and p.new_lightpaths]
+    assert hybrids, "expected a hybrid (groom A->M + new M->B)"
+    h = hybrids[0]
+    assert h.reused_lightpaths == ("lp-AM",)
+    assert h.new_lightpaths[0].oms_sequence == ("oms-MB",)
+    assert h.restored_gbps == 100.0
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `conda run -n multilayer-optical-mcp pytest tests/model/test_multilayer_graph.py -k place_demand -v`
-Expected: FAIL with `ImportError: cannot import name 'place_demand'`.
+Run: `conda run -n multilayer-optical-mcp pytest tests/model/test_multilayer_graph.py -v`
+Expected: FAIL with `ImportError: cannot import name 'place_demands'`.
 
-- [ ] **Step 3: Implement `place_demand`**
+- [ ] **Step 3: Implement `place_demands`**
 
 Append to `src/multilayer_optical_mcp/model/multilayer_graph.py`:
 
 ```python
 from dataclasses import dataclass
-from .assets import Direction
 from .spectrum import build_spectrum_state as _bss
 
 
@@ -601,8 +647,10 @@ class Placement:
     shortfall_gbps: float
 
 
-# how many candidate layered paths to try before giving up
-_PLACE_CANDIDATE_CAP = 16
+# Enumeration budget: walk up to _PATH_BUDGET simple paths per policy, keeping
+# up to _DEFAULT_K distinct feasible placements (the cost-ordered frontier).
+_PATH_BUDGET = 64
+_DEFAULT_K = 8
 
 
 def _policy_graph(g: nx.DiGraph, policy: str) -> nx.DiGraph:
@@ -653,35 +701,40 @@ def _bottleneck_residual(g: nx.DiGraph, reused: List[str]) -> float:
     return min(by_lp[lp] for lp in reused)
 
 
-def place_demand(
+def place_demands(
     model: NetworkModel, g: nx.DiGraph, qot, *,
     src: str, dst: str, demand_gbps: float, policy: str,
-    grid: SpectrumGrid | None = None,
-) -> "Placement | None":
-    """IGABAG for one demand. Returns a Placement (possibly degraded) or None
-    when no access->access path exists under the policy / new runs infeasible."""
+    k: int = _DEFAULT_K, grid: SpectrumGrid | None = None,
+) -> List["Placement"]:
+    """IGABAG for one demand, returning up to `k` DISTINCT feasible placements
+    (the cost-ordered frontier under the policy), each possibly degraded. A
+    placement may reuse existing lightpaths (LPE), light new ones (TxE->WLEs->
+    RxE), or BOTH (a hybrid). Empty list when no feasible path exists."""
     from .allocation import _build_loading, _best_feasible_mode  # reuse QoT seam
     grid = grid or SpectrumGrid.default()
     h = _policy_graph(g, policy)
     s, t = (ACCESS, src), (ACCESS, dst)
-    if s not in h or t not in h:
-        return None
-    if not nx.has_path(h, s, t):
-        return None
+    if s not in h or t not in h or not nx.has_path(h, s, t):
+        return []
     spectrum = _bss(model, grid)
     ref_mode = model.modes.list()[0].id
-    candidates = nx.shortest_simple_paths(h, s, t, weight="weight")
-    for i, path in enumerate(candidates):
-        if i >= _PLACE_CANDIDATE_CAP:
+    out: List[Placement] = []
+    seen: set = set()
+    for i, path in enumerate(nx.shortest_simple_paths(h, s, t, weight="weight")):
+        if i >= _PATH_BUDGET or len(out) >= k:
             break
         reused, new_runs = _parse_path(g, path)
+        key = (tuple(reused), tuple(new_runs))   # new_runs carry (oms_seq, lam)
+        if key in seen:
+            continue
+        seen.add(key)                            # evaluate each candidate once
         realized: List[NewLightpathRun] = []
         feasible = True
         new_cap = float("inf")
         for oms_seq, lam in new_runs:
             loading = _build_loading(grid, spectrum, oms_seq, lam, ref_mode)
             mode, gsnr = _best_feasible_mode(model, qot, oms_seq, loading, ref_mode)
-            if mode is None:                       # margin < 0 -> infeasible run
+            if mode is None:                     # margin < 0 -> infeasible run
                 feasible = False
                 break
             realized.append(NewLightpathRun(oms_seq, lam, mode.id, gsnr, mode.bitrate_gbps))
@@ -692,25 +745,25 @@ def place_demand(
         restored = min(demand_gbps, groom_cap, new_cap)
         if restored <= 0.0:
             continue
-        return Placement(
+        out.append(Placement(
             reused_lightpaths=tuple(reused),
             new_lightpaths=tuple(realized),
             restored_gbps=restored,
             shortfall_gbps=max(0.0, demand_gbps - restored),
-        )
-    return None
+        ))
+    return out
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `conda run -n multilayer-optical-mcp pytest tests/model/test_multilayer_graph.py -v`
-Expected: PASS (all graph + place_demand tests).
+Expected: PASS (all graph + place_demands tests, including the hybrid).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/multilayer_optical_mcp/model/multilayer_graph.py tests/model/test_multilayer_graph.py
-git commit -m "feat(graph): place_demand IGABAG placement with QoT-realized new lightpaths"
+git commit -m "feat(graph): place_demands IGABAG k-best placement (groom/new/hybrid)"
 ```
 
 ---
@@ -721,7 +774,7 @@ git commit -m "feat(graph): place_demand IGABAG placement with QoT-realized new 
 - Create: `src/multilayer_optical_mcp/model/restoration.py`
 - Test: `tests/model/test_restoration.py`
 
-Per-service, read-only. Prune by `avoid`, run `place_demand` under both policies, emit typed candidates, set status.
+Per-service, read-only. Prune by `avoid`, harvest k candidates via `place_demands` over `groom_or_new` + `new_only`, classify by lever (incl. `hybrid`), emit typed candidates, set status.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -810,6 +863,46 @@ def test_restoration_degraded_when_survivor_partially_loaded():
     groom = res.candidates[0]
     assert groom.restored_gbps == 20.0
     assert groom.shortfall_gbps == 30.0
+
+
+def _diamond_gap() -> NetworkModel:
+    """Like _diamond but with NO existing lightpath on the M->B leg: recovery
+    after fAB fails must groom A->M (lp-AM) AND light a new M->B lightpath."""
+    m = NetworkModel(modes=ModeRegistry([
+        TransceiverMode(id="100G", bitrate_gbps=100.0, required_gsnr_db=12.0,
+                        symbol_rate_baud=32e9, channel_spacing_hz=100e9)]))
+    m.register_fiber_type(FiberType("SSMF", 0.2))
+    for a in ("d1", "d2", "m1", "m2", "n1", "n2"):
+        m.add_amplifier(Amplifier(a, "advanced_toy", 20.0, 5.5))
+    m.add_fiber(Fiber("fAB", "d1", "d2", 80.0, "SSMF"))
+    m.add_fiber(Fiber("fAM", "m1", "m2", 60.0, "SSMF"))
+    m.add_fiber(Fiber("fMB", "n1", "n2", 60.0, "SSMF"))
+    m.add_oms(OMS("oms-AB", "A", "B", ("d1", "fAB", "d2")))
+    m.add_oms(OMS("oms-AM", "A", "M", ("m1", "fAM", "m2")))
+    m.add_oms(OMS("oms-MB", "M", "B", ("n1", "fMB", "n2")))
+    m.add_lightpath(Lightpath("lp-direct", ("oms-AB",), "100G", 193.4e12))
+    m.add_lightpath(Lightpath("lp-AM", ("oms-AM",), "100G", 193.4e12))
+    for lp in ("lp-direct", "lp-AM"):
+        m.set_qot_state(lp, QoTState(gsnr_db=15.0, osnr_db=30.0, margin_db=3.0))
+    m.add_router(Router("RA", "A"))
+    m.add_router(Router("RM", "M"))
+    m.add_router(Router("RB", "B"))
+    m.add_ip_link(IPLink("ip-direct", "RA", "RB", "lp-direct"))
+    m.add_ip_link(IPLink("ip-AM", "RA", "RM", "lp-AM"))
+    m.add_service(Service("svc", "RA", "RB", 50.0,
+                          working_path=("ip-direct",), protection_path=()))
+    return m
+
+
+def test_restoration_hybrid_groom_plus_new_lightpath():
+    n = _diamond_gap()
+    res = compute_restoration(n, FakeQot(15.0), "svc", avoid={"assets": ["fAB"]})
+    assert res.status is SolverStatus.SOLUTION
+    hyb = [c for c in res.candidates if c.lever == "hybrid"]
+    assert hyb, "expected a hybrid groom+new candidate"
+    assert hyb[0].reused_lightpaths == ("lp-AM",)
+    assert hyb[0].new_lightpaths[0].oms_sequence == ("oms-MB",)
+    assert hyb[0].restored_gbps == 50.0
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -824,10 +917,10 @@ Expected: FAIL with `ModuleNotFoundError: restoration`.
 """Per-service restoration: enumerate recovery candidates over survivors.
 
 Read-only. Prunes the layered graph by an avoid-set (failed assets / risk
-groups), routes the service's demand under two weight policies (reuse-existing
-vs allow-new), and returns typed candidates with restored/shortfall capacity.
-Execution (validate_plan/commit_plan/provision_lightpath) is Phase 7; this tool
-only enumerates.
+groups), harvests k-best placements over the groom_or_new frontier plus a
+new_only fallback, and returns typed candidates (lever ip_reroute / optical_reroute
+/ hybrid) with restored/shortfall capacity. Execution (validate_plan/commit_plan/
+provision_lightpath) is Phase 7; this tool only enumerates.
 """
 from __future__ import annotations
 
@@ -836,12 +929,12 @@ from typing import Dict, FrozenSet, List, Optional, Tuple
 
 from .network import NetworkModel
 from .solvers import SolverStatus
-from .multilayer_graph import build_layered_graph, place_demand, NewLightpathRun, Placement
+from .multilayer_graph import build_layered_graph, place_demands, NewLightpathRun, Placement
 
 
 @dataclass(frozen=True)
 class RestorationCandidate:
-    lever: str                              # "ip_reroute" | "optical_reroute"
+    lever: str                              # "ip_reroute" | "optical_reroute" | "hybrid"
     reused_lightpaths: Tuple[str, ...]
     new_lightpaths: Tuple[NewLightpathRun, ...]
     restored_gbps: float
@@ -872,8 +965,16 @@ def _forbidden_assets(model: NetworkModel, avoid: Optional[dict]) -> FrozenSet[s
     return frozenset(bad)
 
 
+def _lever(p: Placement) -> str:
+    if p.new_lightpaths and p.reused_lightpaths:
+        return "hybrid"
+    if p.new_lightpaths:
+        return "optical_reroute"
+    return "ip_reroute"
+
+
 def _candidate(model: NetworkModel, p: Placement) -> RestorationCandidate:
-    lever = "ip_reroute" if not p.new_lightpaths else "optical_reroute"
+    lever = _lever(p)
     cost = {
         "transponders": 2.0 * len(p.new_lightpaths),
         "new_lightpaths": float(len(p.new_lightpaths)),
@@ -900,18 +1001,20 @@ def compute_restoration(
     forbidden = _forbidden_assets(model, avoid)
     g = build_layered_graph(model, forbidden_assets=forbidden)
 
+    # groom_or_new harvests the cost-ordered frontier (groom + hybrid + cheap new);
+    # new_only guarantees the pure-optical fallback even when many groom variants
+    # would otherwise starve the budget. Dedup across both buckets.
     candidates: List[RestorationCandidate] = []
     seen: set = set()
-    for policy in ("groom_only", "new_only"):
-        p = place_demand(model, g, qot, src=src, dst=dst,
-                         demand_gbps=svc.demand_gbps, policy=policy)
-        if p is None:
-            continue
-        key = (p.reused_lightpaths, tuple(r.oms_sequence for r in p.new_lightpaths))
-        if key in seen:
-            continue
-        seen.add(key)
-        candidates.append(_candidate(model, p))
+    for policy in ("groom_or_new", "new_only"):
+        for p in place_demands(model, g, qot, src=src, dst=dst,
+                               demand_gbps=svc.demand_gbps, policy=policy):
+            key = (p.reused_lightpaths,
+                   tuple((r.oms_sequence, r.lam) for r in p.new_lightpaths))
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(_candidate(model, p))
 
     candidates.sort(key=lambda c: (c.shortfall_gbps, c.cost_facets["transponders"],
                                    c.cost_facets["hops"]))
@@ -1063,7 +1166,9 @@ git commit -m "feat(server): expose compute_restoration tool + result serializer
 
 ## Self-Review notes (resolved)
 
-- **Spec coverage:** avoidance (Task 1) ✓; layered graph per-wavelength/no-conversion with WLE-from-bitmask and margin-gated LPE (Task 2) ✓; weights-not-capacity + QoT-realized new lightpaths + degraded restored_gbps (Task 3) ✓; per-service two-policy enumeration with typed status (Task 4) ✓; read-only tool + serializer (Task 5) ✓. Deferred items (multi-segment regen, solve_allocation refactor, evaluate_objective, execution) are intentionally absent.
-- **Type consistency:** `Placement`/`NewLightpathRun` (Task 3) are consumed unchanged by `compute_restoration` (Task 4) and `restoration_result_dict` (Task 5). `forbidden_oms` / `_avoid_sets` (Task 1) are reused by `restoration._forbidden_assets` (Task 4). `build_layered_graph` signature (`forbidden_assets=`) is identical across Tasks 2–4.
+- **Spec coverage:** avoidance (Task 1) ✓; layered graph per-wavelength/no-conversion with WLE-from-bitmask and margin-gated LPE (Task 2) ✓; weights-not-capacity (moderate new-LP weight) + QoT-realized new lightpaths + degraded restored_gbps + k-best `place_demands` (Task 3) ✓; per-service enumeration over `groom_or_new` (groom/hybrid/cheap-new) + `new_only` guarantee, three-lever classification, typed status (Task 4) ✓; read-only tool + serializer (Task 5) ✓. Deferred items (multi-segment 3R regen, solve_allocation refactor, evaluate_objective, execution) are intentionally absent.
+- **Hybrids:** classified by `_lever` when a placement has both `reused_lightpaths` and `new_lightpaths`; covered by `test_groom_or_new_finds_hybrid_groom_plus_new` (Task 3) and `test_restoration_hybrid_groom_plus_new_lightpath` (Task 4).
+- **Type consistency:** `Placement`/`NewLightpathRun` (Task 3) are consumed unchanged by `compute_restoration` (Task 4) and `restoration_result_dict` (Task 5). `place_demands` (plural, returns `List[Placement]`) is the name used in Tasks 3–4. `build_layered_graph` signature (`forbidden_assets=`) is identical across Tasks 2–4. `restoration._forbidden_assets` depends only on `model.list_srlgs()/list_risk_groups()` (no solver imports).
+- **Budget bound (documented, accepted):** k-shortest within a policy is a heuristic; in a pathologically dense survivor graph some mid-frontier candidates beyond rank K aren't enumerated. `new_only` guarantees the pure-optical fallback; per CLAUDE.md, a heuristic returning a feasible (not exhaustive) frontier is the contract.
 - **Known modeling choice:** `Router.site` == optical-node id (documented in the header) is the `src_router → optical node` resolution flagged in the design.
 ```
