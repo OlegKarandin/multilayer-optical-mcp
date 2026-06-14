@@ -19,7 +19,7 @@ from typing import Iterator, List, Optional, Sequence, Tuple
 import networkx as nx
 
 from .network import NetworkModel
-from .exposure import path_basis_keys, split_shared_keys
+from .exposure import path_basis_keys, split_shared_keys, oms_seq_asset_set
 
 
 class SolverStatus(str, Enum):
@@ -59,11 +59,13 @@ class DisjointnessResult:
 _DISJOINT_CANDIDATE_CAP = 32
 
 
-def build_oms_graph(model: NetworkModel) -> nx.MultiGraph:
+def build_oms_graph(model: NetworkModel, forbidden: frozenset = frozenset()) -> nx.MultiGraph:
     """Optical nodes as vertices, one edge per OMS (carrying its id). MultiGraph
     so parallel OMS between the same node pair are preserved as distinct edges."""
     g: nx.MultiGraph = nx.MultiGraph()
     for oms in model.list_oms():
+        if oms.id in forbidden:
+            continue
         g.add_node(oms.src_node_id)
         g.add_node(oms.dst_node_id)
         g.add_edge(oms.src_node_id, oms.dst_node_id, key=oms.id, oms_id=oms.id)
@@ -82,13 +84,44 @@ def oms_length_km(model: NetworkModel, oms_id: str) -> float:
     return total
 
 
+def _avoid_sets(constraints: Optional[dict]) -> Tuple[frozenset, frozenset]:
+    """Extract (avoid_assets, avoid_risk_groups) from a constraints dict.
+    Missing/empty -> empty sets (no pruning)."""
+    avoid = (constraints or {}).get("avoid") or {}
+    return frozenset(avoid.get("assets", ())), frozenset(avoid.get("risk_groups", ()))
+
+
+def forbidden_oms(
+    model: NetworkModel, avoid_assets: frozenset, avoid_risk_groups: frozenset,
+) -> frozenset:
+    """OMS ids to prune: an OMS is forbidden if any of its assets (own id,
+    fiber/amp/roadm elements, or either endpoint node) is in avoid_assets, or if
+    a risk group / SRLG named in avoid_risk_groups has a member intersecting the
+    OMS's physical asset set."""
+    if not avoid_assets and not avoid_risk_groups:
+        return frozenset()
+    group_members: set = set()
+    for g in list(model.list_srlgs()) + list(model.list_risk_groups()):
+        if g.id in avoid_risk_groups:
+            group_members.update(g.asset_ids)
+    bad: set = set()
+    for oms in model.list_oms():
+        phys = set(oms_seq_asset_set(model, (oms.id,)))
+        phys.add(oms.src_node_id)
+        phys.add(oms.dst_node_id)
+        if (phys & avoid_assets) or (phys & group_members):
+            bad.add(oms.id)
+    return frozenset(bad)
+
+
 def _oms_between(
     model: NetworkModel, u: str, v: str, *, by_length: bool = False,
+    forbidden: frozenset = frozenset(),
 ) -> List[str]:
     """OMS ids whose endpoints are {u, v}, ordered deterministically — by
     (length, id) when *by_length*, else by id."""
     out = [oms.id for oms in model.list_oms()
-           if {oms.src_node_id, oms.dst_node_id} == {u, v}]
+           if {oms.src_node_id, oms.dst_node_id} == {u, v} and oms.id not in forbidden]
     if by_length:
         return sorted(out, key=lambda o: (oms_length_km(model, o), o))
     return sorted(out)
@@ -96,12 +129,13 @@ def _oms_between(
 
 def _enumerate_oms_paths(
     model: NetworkModel, src: str, dst: str, k: int, weight: str = "hops",
+    forbidden: frozenset = frozenset(),
 ) -> Iterator[OmsPath]:
     """Yield up to `k` OMS-sequence routes src->dst, shortest first, expanding
     parallel OMS per hop. `weight="hops"` (default) orders by segment count;
     `weight="length"` orders by total fiber km (the routing objective for RSA,
     since reachable SNR tracks length)."""
-    g = build_oms_graph(model)
+    g = build_oms_graph(model, forbidden)
     if src not in g or dst not in g or src == dst:
         return
     by_length = weight == "length"
@@ -112,7 +146,7 @@ def _enumerate_oms_paths(
     simple.add_nodes_from(g.nodes)
     for u, v in g.edges():
         if by_length:
-            w = min(oms_length_km(model, o) for o in _oms_between(model, u, v))
+            w = min(oms_length_km(model, o) for o in _oms_between(model, u, v, forbidden=forbidden))
             if simple.has_edge(u, v):
                 simple[u][v]["weight"] = min(simple[u][v]["weight"], w)
             else:
@@ -126,7 +160,7 @@ def _enumerate_oms_paths(
     except nx.NetworkXNoPath:
         return
     for node_path in node_paths:
-        hop_options = [_oms_between(model, u, v, by_length=by_length)
+        hop_options = [_oms_between(model, u, v, by_length=by_length, forbidden=forbidden)
                        for u, v in zip(node_path, node_path[1:])]
         for combo in itertools.product(*hop_options):
             yield OmsPath(node_sequence=tuple(node_path), oms_sequence=tuple(combo))
@@ -141,7 +175,9 @@ def compute_paths(
 ) -> RoutingResult:
     """k-shortest OMS routes src->dst (`weight` ∈ {"hops", "length"}). No route
     -> typed NO_SOLUTION."""
-    paths = tuple(_enumerate_oms_paths(model, src, dst, k, weight=weight))
+    avoid_assets, avoid_rgs = _avoid_sets(constraints)
+    forbidden = forbidden_oms(model, avoid_assets, avoid_rgs)
+    paths = tuple(_enumerate_oms_paths(model, src, dst, k, weight=weight, forbidden=forbidden))
     if not paths:
         return RoutingResult(status=SolverStatus.NO_SOLUTION, paths=())
     return RoutingResult(status=SolverStatus.SOLUTION, paths=paths)
@@ -192,14 +228,17 @@ def check_disjointness(
 def compute_disjoint_paths(
     model: NetworkModel, src: str, dst: str,
     basis: str, level: str, best_effort: bool = False, weight: str = "hops",
+    constraints: Optional[dict] = None,
 ) -> DisjointnessResult:
     """Find a disjoint pair src->dst under a basis/level. Returns the first
     fully-disjoint pair as SOLUTION; with best_effort=True returns the
     minimum-overlap pair as PARTIAL when no fully-disjoint pair exists; with
     best_effort=False and none disjoint, NO_SOLUTION. `weight` ∈ {"hops",
     "length"} orders candidate routes."""
+    avoid_assets, avoid_rgs = _avoid_sets(constraints)
+    forbidden = forbidden_oms(model, avoid_assets, avoid_rgs)
     cands = list(_enumerate_oms_paths(model, src, dst, _DISJOINT_CANDIDATE_CAP,
-                                      weight=weight))
+                                      weight=weight, forbidden=forbidden))
     keyed = [(p, path_basis_keys(model, p.oms_sequence, basis=basis, level=level))
              for p in cands]
 
