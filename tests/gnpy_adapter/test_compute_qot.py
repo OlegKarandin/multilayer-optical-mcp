@@ -1,4 +1,4 @@
-# GROUND TRUTH (gnpy==2.11.1, toy_2span.json, 400G@7.1dB @ 193.4 THz):
+# GROUND TRUTH (gnpy==2.14.0, toy_2span.json, 400G@7.1dB @ 193.4 THz):
 # Topology: trx A → ROADM A → booster A → fiber(80km) → ILA → fiber(80km) → preamp → trx Z
 # Cascade GSNR (no penalties): fwd ~21.36 dB, bwd ~19.22 dB.
 # After add_drop_osnr=33 dB + tx_osnr=35 dB (OpenROADM v4/v5): fwd ~18.85 dB, bwd ~17.53 dB.
@@ -92,6 +92,34 @@ def _toy_model():
             "east edfa in ILA",
             "east fiber ILA to Z",
             "east edfa at Z",
+        ),
+    ))
+    # Physically separate reverse OMS (Z -> A) so backward QoT walks its own amp
+    # chain and add-side ROADM, not a reversed copy of the forward element list.
+    # Symmetric to the forward span: backward QoT ~ forward QoT until an
+    # asymmetric per-direction impairment is injected.
+    n.add_roadm(ROADM(id="ROADM Z", target_pch_out_db=-20.0))
+    n.add_amplifier(Amplifier(id="booster Z", type_variety="advanced_toy",
+                              gain_db=20.0, nf_db=5.5))
+    n.add_fiber(Fiber(id="west fiber Z to ILA", a_end="ROADM Z",
+                      z_end="west edfa in ILA", length_km=80.0, type_variety="SSMF"))
+    n.add_amplifier(Amplifier(id="west edfa in ILA", type_variety="advanced_toy",
+                              gain_db=20.0, nf_db=5.5))
+    n.add_fiber(Fiber(id="west fiber ILA to A", a_end="west edfa in ILA",
+                      z_end="west edfa at A", length_km=80.0, type_variety="SSMF"))
+    n.add_amplifier(Amplifier(id="west edfa at A", type_variety="advanced_toy",
+                              gain_db=20.0, nf_db=5.5))
+    n.add_oms(OMS(
+        id="oms-ZA",
+        src_node_id="trx Z",
+        dst_node_id="trx A",
+        elements=(
+            "ROADM Z",
+            "booster Z",
+            "west fiber Z to ILA",
+            "west edfa in ILA",
+            "west fiber ILA to A",
+            "west edfa at A",
         ),
     ))
     return n

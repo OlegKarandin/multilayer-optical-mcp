@@ -24,19 +24,28 @@ def _call(app, name: str, **kwargs):
 
 
 def _seed_app():
-    """Seed the current model with the single-route toy that matches the default
-    gnpy topology (toy_2span.json), so the real adapter resolves the OMS path."""
+    """Seed the current model with a bidirectional single-route toy synthesized
+    by the adapter. Both directions are modeled as physically separate OMS
+    (oms-AZ / oms-ZA) so the real adapter resolves forward AND backward QoT."""
     app = build_app()
     m = app._snapshots.current()
     m.register_fiber_type(FiberType("SSMF", 0.2))
     m.add_roadm(ROADM(id="ROADM A", target_pch_out_db=-20.0))
-    for amp in ("booster A", "east edfa in ILA", "east edfa at Z"):
+    m.add_roadm(ROADM(id="ROADM Z", target_pch_out_db=-20.0))
+    for amp in ("booster A", "east edfa in ILA", "east edfa at Z",
+                "booster Z", "west edfa in ILA", "west edfa at A"):
         m.add_amplifier(Amplifier(id=amp, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
     m.add_fiber(Fiber("east fiber A to ILA", "ROADM A", "east edfa in ILA", 80.0, "SSMF"))
     m.add_fiber(Fiber("east fiber ILA to Z", "east edfa in ILA", "east edfa at Z", 80.0, "SSMF"))
+    m.add_fiber(Fiber("west fiber Z to ILA", "ROADM Z", "west edfa in ILA", 80.0, "SSMF"))
+    m.add_fiber(Fiber("west fiber ILA to A", "west edfa in ILA", "west edfa at A", 80.0, "SSMF"))
     m.add_oms(OMS("oms-AZ", "trx A", "trx Z", (
         "ROADM A", "booster A", "east fiber A to ILA",
         "east edfa in ILA", "east fiber ILA to Z", "east edfa at Z",
+    )))
+    m.add_oms(OMS("oms-ZA", "trx Z", "trx A", (
+        "ROADM Z", "booster Z", "west fiber Z to ILA",
+        "west edfa in ILA", "west fiber ILA to A", "west edfa at A",
     )))
     return app, m
 

@@ -9,6 +9,9 @@ from ..model.network import NetworkModel
 
 ROADM_TARGET_PCH_OUT_DB = -20.0
 ROADM_ADD_DROP_OSNR = 33.0
+# Transponder launch power (dBm) — the TX-OSNR noise-floor reference. Distinct
+# from the design reference channel power (pch) and the ROADM target_pch_out.
+TX_LAUNCH_POWER_DBM = 0.0
 
 
 def nf_type_variety(nf_db: float) -> str:
@@ -35,7 +38,7 @@ def model_to_gnpy_equipment(model: NetworkModel,
                              _tmpdir: "Path | None" = None) -> Dict[str, Any]:
     """Build the GNPy equipment dict with one advanced_model Edfa per distinct NF.
 
-    ``advanced_config_from_json`` is set to a file-path string (gnpy 2.11.1 reads
+    ``advanced_config_from_json`` is set to a file-path string (gnpy 2.14.0 reads
     it as a path, not an inline dict).  A temporary directory is created once per
     call; pass ``_tmpdir`` to control the location (tests may do this).
     """
@@ -176,9 +179,12 @@ def gnpy_design_network(network, equipment) -> None:
 
     si = equipment['SI']['default']
     nb_ch = automatic_nch(si.f_min, si.f_max, si.spacing)
-    pwr = dbm2watt(si.power_dbm)
+    # power = design reference channel power (pch); tx_power = transponder launch
+    # power that feeds the TX-OSNR noise floor. Kept distinct (S3-9) even though
+    # both default to 0 dBm, so the design ref and per-direction propagation agree.
     ref_ch = PathRequest(
-        request_id='reference', power=pwr, tx_power=pwr,
+        request_id='reference', power=dbm2watt(si.power_dbm),
+        tx_power=dbm2watt(TX_LAUNCH_POWER_DBM),
         nb_channel=nb_ch, spacing=si.spacing,
         f_min=si.f_min, f_max=si.f_max,
     )

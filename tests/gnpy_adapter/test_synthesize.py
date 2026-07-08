@@ -41,7 +41,7 @@ def test_nf_type_variety_carries_flat_nf_polynomial():
     by_name = {e["type_variety"]: e for e in eqpt["Edfa"]}
     adv = by_name[nf_type_variety(7.5)]
     assert adv["type_def"] == "advanced_model"
-    # advanced_config_from_json is a file-path string (gnpy 2.11.1 reads it as a
+    # advanced_config_from_json is a file-path string (gnpy 2.14.0 reads it as a
     # path); load the JSON from that file to inspect the NF polynomial.
     adv_cfg = json.loads(open(adv["advanced_config_from_json"]).read())
     assert adv_cfg["nf_fit_coeff"][-1] == 7.5

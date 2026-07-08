@@ -14,7 +14,7 @@ from ..gnpy_adapter.adapter import recompute_qot_under_loading
 from .network import NetworkModel
 from .qot import QoTState
 from .qot_results import QoTResultStore
-from .exposure import oms_seq_asset_set
+from .exposure import oms_seq_asset_set, terminal_roadm_id
 
 
 @dataclass(frozen=True)
@@ -86,7 +86,12 @@ def inject_failure(model: NetworkModel, asset_ids: Tuple[str, ...]) -> FailureRe
     failed = set(asset_ids)
     downed: List[str] = []
     for lp in model.list_lightpaths():
-        crossing = oms_seq_asset_set(model, lp.oms_sequence) & failed
+        assets = set(oms_seq_asset_set(model, lp.oms_sequence))
+        # Include the terminal drop ROADM, which OMS.elements omit (S8-3).
+        term = terminal_roadm_id(model, lp.oms_sequence)
+        if term is not None:
+            assets.add(term)
+        crossing = assets & failed
         if crossing:
             model.set_qot_state(lp.id, QoTState(
                 gsnr_db=float("-inf"),

@@ -33,6 +33,22 @@ def oms_seq_asset_set(model: NetworkModel, oms_sequence: Tuple[str, ...]) -> Fro
     return frozenset(assets)
 
 
+def terminal_roadm_id(model: NetworkModel, oms_sequence: Tuple[str, ...]) -> "str | None":
+    """The drop ROADM at the end of *oms_sequence*, or None.
+
+    Each importer OMS's ``elements`` start at ``roadm_<src>`` but omit the drop
+    ROADM (``roadm_<dst>``), so ``oms_seq_asset_set`` never includes it. Callers
+    that must reason about the whole physical footprint — e.g. failing the
+    destination ROADM (S8-3) — add this. Returns None when the path drops into a
+    bare transceiver (no ``roadm_<dst>`` registered), as in legacy toy models.
+    """
+    if not oms_sequence:
+        return None
+    last = model.get_oms(oms_sequence[-1])
+    candidate = f"roadm_{last.dst_node_id}"
+    return candidate if model.has_roadm(candidate) else None
+
+
 def oms_seq_node_set(model: NetworkModel, oms_sequence: Tuple[str, ...]) -> FrozenSet[str]:
     """The optical node ids an OMS-sequence touches (each OMS endpoint). Used
     for node-level disjointness."""

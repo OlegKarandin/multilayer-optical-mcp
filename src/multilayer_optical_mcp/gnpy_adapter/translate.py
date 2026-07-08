@@ -47,6 +47,34 @@ def resolve_oms_path_to_uids(
     return tuple(uids)
 
 
+def reverse_oms_sequence(
+    model: NetworkModel,
+    oms_sequence: Tuple[str, ...],
+) -> "Tuple[str, ...] | None":
+    """Resolve the physically separate reverse path for *oms_sequence*.
+
+    For each OMS the importer builds a paired reverse OMS with swapped endpoints
+    (``oms_<src>_<dst>`` ↔ ``oms_<dst>_<src>``), each with its own amplifier
+    chain. The reverse of a forward path is the reversed list of those paired
+    OMS, so the returned sequence traverses the destination-to-source amp chains
+    in natural (travel) order.
+
+    Returns ``None`` when any leg has no paired reverse OMS, so the caller can
+    raise a clear error rather than silently reversing the forward element list
+    (which would walk the forward fiber's amps and discard the reverse chain's
+    per-direction impairments — S4-2/S4-3).
+    """
+    by_pair = {(o.src_node_id, o.dst_node_id): o.id for o in model.list_oms()}
+    reverse: list[str] = []
+    for oms_id in reversed(oms_sequence):
+        oms = model.get_oms(oms_id)
+        paired = by_pair.get((oms.dst_node_id, oms.src_node_id))
+        if paired is None:
+            return None
+        reverse.append(paired)
+    return tuple(reverse)
+
+
 def build_si_for_loading(
     loading: LoadingState,
     *,
@@ -54,6 +82,7 @@ def build_si_for_loading(
     roll_off: float,
     tx_osnr: float = 35.0,
     tx_power_dbm: float = -20.0,
+    tx_launch_power_dbm: float = 0.0,
 ) -> Any:
     """Build a gnpy SpectralInformation with one carrier per channel in *loading*.
 
@@ -71,8 +100,15 @@ def build_si_for_loading(
     tx_osnr:
         Transmitter OSNR in dB.
     tx_power_dbm:
-        Default per-channel launch power in dBm when the channel's own
-        power_dbm field is 0.0.  Defaults to -20 dBm (1e-5 W).
+        Default per-channel *fiber-input* power (pch) in dBm when the channel's
+        own power_dbm field is 0.0. This is the ROADM ``target_pch_out`` the
+        channel enters the line at. Defaults to -20 dBm (1e-5 W).
+    tx_launch_power_dbm:
+        The *transponder launch* power in dBm, distinct from pch. It sets gnpy's
+        ``tx_power`` and hence the TX-OSNR noise floor
+        (``noise_tx = tx_power / tx_osnr_linear``). Defaults to 0 dBm (1e-3 W),
+        the standard coherent-pluggable reference. Building this from the -20 dBm
+        pch default would make the TX-OSNR budget 20 dB too optimistic (S2-3).
     """
     from gnpy.core.info import create_arbitrary_spectral_information
 
@@ -107,7 +143,9 @@ def build_si_for_loading(
         ],
         dtype=float,
     )
-    tx_power_w = np.full(len(loading.channels), _dbm_to_watt(tx_power_dbm), dtype=float)
+    # TX launch power (transponder), distinct from pch — sets the TX-OSNR floor.
+    tx_power_w = np.full(len(loading.channels), _dbm_to_watt(tx_launch_power_dbm),
+                         dtype=float)
     baud_rates = np.full(len(loading.channels), baud_rate, dtype=float)
     roll_offs = np.full(len(loading.channels), roll_off, dtype=float)
     tx_osnrs = np.full(len(loading.channels), tx_osnr, dtype=float)

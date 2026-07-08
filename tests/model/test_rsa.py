@@ -144,22 +144,34 @@ def test_protected_demand_srlg_basis_blocks_when_srlg_spans_both():
 # ------------------------------------------------------------------- real GNPy
 
 def test_real_gnpy_integration_places_with_adapter_mode():
-    """One real-GNPy case on toy_2route.json: the chosen mode is the
-    highest-bitrate one the adapter's GSNR supports."""
+    """One real-GNPy case on a synthesized bidirectional diamond: the length
+    objective picks the shorter of two node-disjoint routes, and the delivered
+    mode falls out of the adapter's real (forward+backward) GSNR, not a pre-pick.
+
+    Routes go through distinct intermediate nodes (A-M-Z / A-N-Z) so every OMS
+    has a unique (src,dst) and its paired reverse OMS resolves unambiguously."""
     import math
-    import sys
-    sys.path.insert(0, str(REPO_ROOT / "gnpy_adapter"))
-    from test_toy_2route import _two_route_model, TOPO_2ROUTE
+    from multilayer_optical_mcp.model.topology_import import model_from_abstract_graph
     from multilayer_optical_mcp.model.allocation import make_adapter_evaluator
     from multilayer_optical_mcp.model.qot_results import QoTResultStore
 
-    n = _two_route_model()  # modes: only 400G@7.1dB
-    qot = make_adapter_evaluator(n, QoTResultStore(), topo_path=TOPO_2ROUTE)
+    graph = {
+        "nodes": [{"id": "A"}, {"id": "M"}, {"id": "N"}, {"id": "Z"}],
+        "edges": [
+            {"src": "A", "dst": "M", "length_km": 80.0},
+            {"src": "M", "dst": "Z", "length_km": 80.0},
+            {"src": "A", "dst": "N", "length_km": 120.0},
+            {"src": "N", "dst": "Z", "length_km": 120.0},
+        ],
+    }
+    n = model_from_abstract_graph(graph, modes=_modes())
+    # No topo_path: the adapter synthesizes the bidirectional GNPy network.
+    qot = make_adapter_evaluator(n, QoTResultStore())
     res = solve_rsa(n, qot, [{"id": "d1", "src": "A", "dst": "Z"}], objective="shortest")
     assert res.status is SolverStatus.SOLUTION
     p = res.placements[0]
-    # north (shorter) is chosen by the length objective; its real GSNR clears
-    # 400G@7.1dB so the mode falls out of the adapter's SNR, not a pre-pick.
-    assert p.working.oms_path.oms_sequence == ("oms-north",)
-    assert p.working.mode_id == "400G@7.1dB"
-    assert math.isfinite(p.working.gsnr_db) and p.working.gsnr_db >= 7.1
+    # North (A-M-Z, 160 km) is shorter than south (A-N-Z, 240 km) -> chosen.
+    assert p.working.oms_path.oms_sequence == ("oms_A_M", "oms_M_Z")
+    # Mode is whatever the real GSNR supports (>= the lowest mode's requirement).
+    assert math.isfinite(p.working.gsnr_db) and p.working.gsnr_db >= 5.0
+    assert p.working.mode_id in {"100G", "200G", "400G"}

@@ -70,6 +70,9 @@ class NetworkModel:
     def add_transceiver(self, t: Transceiver) -> None:
         self._transceivers[t.id] = t
 
+    def has_roadm(self, rid: str) -> bool:
+        return rid in self._roadms
+
     # ---------------------------------------------------------------- OMS
 
     def add_oms(self, oms: OMS) -> None:

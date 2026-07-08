@@ -35,6 +35,7 @@ from .translate import (
     build_si_for_loading,
     load_toy,
     resolve_oms_path_to_uids,
+    reverse_oms_sequence,
 )
 
 # Spacing (Hz) used for the synthetic dummy channel injected when the loading
@@ -119,6 +120,30 @@ def _find_launch_transceiver(network, path_uids, by_uid):
     return None
 
 
+def _trx_neighbor_uid(network, node, *, predecessor: bool):
+    """UID of node's Transceiver predecessor (add port) or successor (drop port)."""
+    from gnpy.core.elements import Transceiver as _GnpyTrx
+    it = network.predecessors(node) if predecessor else network.successors(node)
+    for x in it:
+        if isinstance(x, _GnpyTrx):
+            return x.uid
+    return None
+
+
+def _roadm_successor(network, node):
+    """The Roadm successor of *node* in the GNPy graph, or None.
+
+    A path's terminal OMS ends at its last amplifier; the physically adjacent
+    drop ROADM is that amplifier's Roadm successor. It is nobody's OMS chain[0],
+    so callers must append it explicitly to apply its drop-side penalty (S4-4).
+    """
+    from gnpy.core.elements import Roadm as _GnpyRoadm
+    for x in network.successors(node):
+        if isinstance(x, _GnpyRoadm):
+            return x
+    return None
+
+
 def compute_qot(
     *,
     model: NetworkModel,
@@ -127,6 +152,7 @@ def compute_qot(
     direction: Direction,
     mode_id: str,
     loading: LoadingState,
+    center_freq_hz: Optional[float] = None,
     topo_path: Optional[Path] = None,
     eqpt_path: Optional[Path] = None,
 ) -> Tuple[QoTState, str]:
@@ -174,18 +200,52 @@ def compute_qot(
         eqpt, network = build_gnpy_network(model)
 
     # Resolve the OMS sequence to gnpy element uids.
-    uids = resolve_oms_path_to_uids(model, oms_sequence)
+    # BACKWARD walks the physically separate reverse OMS chain (its own amps and
+    # ROADM add-side penalty) in natural travel order — never a reversed forward
+    # element list, which would walk the *forward* fiber's amps in reverse and
+    # silently discard asymmetric per-direction degradation (S4-2/S4-3).
     if direction == Direction.BACKWARD:
-        uids = tuple(reversed(uids))
+        rev_seq = reverse_oms_sequence(model, oms_sequence)
+        if rev_seq is None:
+            raise ValueError(
+                f"backward QoT requires a paired reverse OMS for every leg of "
+                f"{oms_sequence!r}, but none was found. Build the model via the "
+                f"importer (model_from_abstract_graph) or register reverse-"
+                f"direction OMS so each (src,dst) has a (dst,src) counterpart."
+            )
+        uids = resolve_oms_path_to_uids(model, rev_seq)
+    else:
+        uids = resolve_oms_path_to_uids(model, oms_sequence)
 
     elements = _path_elements(network, uids)
 
+    # S4-4: the terminal drop ROADM is nobody's OMS chain[0], so it is never in
+    # the resolved element list. Append it (the last element's Roadm successor)
+    # so its drop-side add_drop_osnr penalty is applied — forward and backward.
+    drop_roadm = _roadm_successor(network, elements[-1]) if elements else None
+    if drop_roadm is not None and drop_roadm.uid not in uids:
+        uids = uids + (drop_roadm.uid,)
+        elements = elements + [drop_roadm]
+
     # ------------------------------------------------------------------ probe channel
-    probe = next((c for c in loading.channels if c.mode_id == mode_id), None)
-    if probe is None:
-        raise ValueError(
-            f"loading does not include a channel for mode {mode_id!r}"
+    # Prefer selecting the probe by frequency: in a WDM load with several
+    # same-mode channels, mode_id alone is ambiguous and every same-mode
+    # lightpath would be evaluated at the first match's frequency (S4-5). Fall
+    # back to mode_id only when no frequency is given (single-channel/legacy).
+    if center_freq_hz is not None:
+        probe = next(
+            (c for c in loading.channels if c.center_freq_hz == center_freq_hz), None
         )
+        if probe is None:
+            raise ValueError(
+                f"loading has no channel at center_freq {center_freq_hz:.6e} Hz"
+            )
+    else:
+        probe = next((c for c in loading.channels if c.mode_id == mode_id), None)
+        if probe is None:
+            raise ValueError(
+                f"loading does not include a channel for mode {mode_id!r}"
+            )
 
     mode = model.modes.get(mode_id)  # raises KeyError if unknown
 
@@ -211,36 +271,32 @@ def compute_qot(
     if launch_trx is not None:
         si = launch_trx(si)
 
-    # Pre-compute adjacency for ROADM degree resolution (degree and from_degree are
-    # required positional args on gnpy Roadm.__call__ with no defaults).
+    # ROADM.__call__ needs degree and from_degree as positional args (resolved
+    # per element inside the loop from the walk order + transceiver neighbors).
     from gnpy.core.elements import Roadm as _GnpyRoadm
-    _gnpy_predecessors = {
-        n.uid: [p.uid for p in network.predecessors(n)] for n in network.nodes
-    }
 
     prev_gsnr_db = math.inf
     snapshots: list[ElementSnapshot] = []
     _roadm_propagated: set[str] = set()
     for i, (uid, el) in enumerate(zip(uids_list, elements)):
         if isinstance(el, _GnpyRoadm):
-            # Derive degree (output port uid) and from_degree (input port uid).
-            # For a ROADM at position 0 (forward add): from_degree = network predecessor.
-            # For a ROADM at the last position (backward drop): degree = network predecessor
-            # (the add/drop peer on the "upstream" side in the original graph).
+            # A ROADM's from/to degree is its previous/next element on the walk,
+            # except at the ends where the peer is the add/drop transceiver:
+            #   - source (add) ROADM:   from_degree = add transceiver
+            #   - express ROADM:        from/to = adjacent path elements
+            #   - terminal (drop) ROADM: to_degree = drop transceiver
             from_uid = (
                 uids_list[i - 1] if i > 0
-                else (_gnpy_predecessors.get(uid) or [uid])[0]
+                else _trx_neighbor_uid(network, el, predecessor=True)
             )
             to_uid = (
                 uids_list[i + 1] if i < len(uids_list) - 1
-                else (_gnpy_predecessors.get(uid) or [uid])[0]
+                else _trx_neighbor_uid(network, el, predecessor=False)
             )
-            # Only propagate if this from→to path is registered in the gnpy network.
-            # In backward direction the ROADM is a drop port whose path is not in
-            # the unidirectional gnpy topology; skip and do not collect add_drop_osnr
-            # penalty for that direction.
-            if any(rp.from_degree == from_uid and rp.to_degree == to_uid
-                   for rp in el.roadm_paths):
+            # Only propagate if this from→to path is registered in the gnpy graph.
+            if (from_uid is not None and to_uid is not None
+                    and any(rp.from_degree == from_uid and rp.to_degree == to_uid
+                            for rp in el.roadm_paths)):
                 si = el(si, degree=to_uid, from_degree=from_uid)
                 _roadm_propagated.add(uid)
         else:
@@ -338,34 +394,77 @@ def gated_qot(
     oms_sequence: Tuple[str, ...],
     mode_id: str,
     loading: LoadingState,
+    center_freq_hz: Optional[float] = None,
 ) -> Tuple[QoTState, str]:
     """Return the worse of forward/backward QoT, along with its breakdown id."""
     fwd_state, fwd_rid = compute_qot(model=model, store=store,
                                      oms_sequence=oms_sequence,
                                      direction=Direction.FORWARD,
-                                     mode_id=mode_id, loading=loading)
+                                     mode_id=mode_id, loading=loading,
+                                     center_freq_hz=center_freq_hz)
     bwd_state, bwd_rid = compute_qot(model=model, store=store,
                                      oms_sequence=oms_sequence,
                                      direction=Direction.BACKWARD,
-                                     mode_id=mode_id, loading=loading)
+                                     mode_id=mode_id, loading=loading,
+                                     center_freq_hz=center_freq_hz)
     if fwd_state.gsnr_db <= bwd_state.gsnr_db:
         return fwd_state, fwd_rid
     return bwd_state, bwd_rid
 
 
+def _per_path_loading(grid, occ_mask: int, probe_slot: int, mode_id: str) -> LoadingState:
+    """Probe channel at *probe_slot* plus the channels lit on this path's own OMS
+    (``occ_mask`` = the path's per-OMS occupancy already restricted to lit slots).
+
+    Mirrors ``allocation._build_loading``: interferers come from the path's OMS
+    occupancy, not a global concat, so channels on disjoint fibers never appear
+    and a reused wavelength collapses to one grid slot (no duplicate carrier)."""
+    # Channels must be frequency-sorted: gnpy orders SpectralInformation carriers
+    # by frequency, so the probe index (resolved by frequency) only aligns with
+    # the SI arrays when the loading is already ascending.
+    slots = sorted({probe_slot} | {s for s in range(grid.num_slots)
+                                   if (occ_mask >> s) & 1})
+    channels = tuple(
+        Channel(grid.freq(s), grid.spacing_hz, 0.0, mode_id) for s in slots
+    )
+    return LoadingState(channels)
+
+
 def recompute_qot_under_loading(
     *, model: NetworkModel, store: QoTResultStore, loading: LoadingState,
 ) -> dict[str, Tuple[QoTState, str]]:
-    """Compute gated QoT for every lightpath in model under loading.
+    """Compute gated QoT for every lightpath in model under *loading*.
 
-    Writes QoTState on the model and returns {lp_id: (QoTState, result_id)}
-    so callers can pull per-lightpath breakdowns on demand.
+    Each lightpath's interferer comb is built from *its own* OMS occupancy (the
+    per-OMS spectrum bitmask), intersected with the slots lit by *loading*. This
+    replaces the old global concat that propagated every committed channel
+    through every path (NLI over-count on disjoint fibers) and emitted duplicate
+    same-frequency carriers for wavelength reuse (malformed NLI) — S4-6/S8-5.
+
+    Writes QoTState on the model and returns {lp_id: (QoTState, result_id)}.
     """
+    from ..model.spectrum import SpectrumGrid, build_spectrum_state, occupied_along
+
+    grid = SpectrumGrid.default()
+    model_state = build_spectrum_state(model, grid)
+    # Slots lit by the passed loading (a make-before-break drop removes a channel
+    # as an interferer; duplicate frequencies collapse to one slot bit).
+    lit = 0
+    for ch in loading.channels:
+        try:
+            lit |= 1 << grid.slot_of(ch.center_freq_hz)
+        except ValueError:
+            continue  # off-grid channel contributes no grid interferer
+
     results: dict[str, Tuple[QoTState, str]] = {}
     for lp in model.list_lightpaths():
+        probe_slot = grid.slot_of(lp.center_freq_hz)
+        occ = occupied_along(model_state, lp.oms_sequence) & lit
+        per_path = _per_path_loading(grid, occ, probe_slot, lp.mode_id)
         state, rid = gated_qot(model=model, store=store,
                                oms_sequence=lp.oms_sequence,
-                               mode_id=lp.mode_id, loading=loading)
+                               mode_id=lp.mode_id, loading=per_path,
+                               center_freq_hz=grid.freq(probe_slot))
         model.set_qot_state(lp.id, state)
         results[lp.id] = (state, rid)
     return results
