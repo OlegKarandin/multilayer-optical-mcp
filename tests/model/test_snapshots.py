@@ -37,7 +37,8 @@ def test_branch_is_isolated_from_parent():
     store = SnapshotStore(initial=_seed())
     parent = store.create()
     branch = store.branch(parent)
-    store.get(branch).add_amplifier(Amplifier(id="amp-new",
+    # A branch's working copy is mutated through current(); get() is read-only.
+    store.current().add_amplifier(Amplifier(id="amp-new",
         type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
     with pytest.raises(KeyError):
         store.get(parent).get_amplifier("amp-new")

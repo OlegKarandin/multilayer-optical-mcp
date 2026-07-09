@@ -31,22 +31,25 @@ class SnapshotStore:
 
     def create(self) -> str:
         sid = uuid.uuid4().hex
-        self._store(sid, self._clone(self._current))
+        self._store(sid, self._current.clone())
         return sid
 
     def branch(self, parent_id: str) -> str:
         parent = self._snapshots[parent_id]
         bid = uuid.uuid4().hex
-        new = self._clone(parent)
+        new = parent.clone()  # always unfrozen working copy
         self._store(bid, new)
         self._current = new
         return bid
 
     def get(self, sid: str) -> NetworkModel:
-        return self._snapshots[sid]
+        """Return a FROZEN clone of the stored snapshot. Callers can read it but
+        cannot mutate it — a stored snapshot can never be corrupted through
+        get(). Mutate via branch()/current() or the returned model's clone()."""
+        return self._snapshots[sid].clone().freeze()
 
     def restore(self, sid: str) -> None:
-        self._current = self._clone(self._snapshots[sid])
+        self._current = self._snapshots[sid].clone()
 
     def reap(self) -> Tuple[str, ...]:
         if self._ttl is None:
@@ -75,26 +78,6 @@ class SnapshotStore:
             "qot_state": _delta(a._qot_state, b._qot_state),
             "failed_assets": _delta_set(a._failed_assets, b._failed_assets),
         }
-
-    @staticmethod
-    def _clone(m: NetworkModel) -> NetworkModel:
-        clone = NetworkModel(modes=m.modes)
-        clone._fiber_types = dict(m._fiber_types)
-        clone._optical_nodes = dict(m._optical_nodes)
-        clone._fibers = dict(m._fibers)
-        clone._amplifiers = dict(m._amplifiers)
-        clone._roadms = dict(m._roadms)
-        clone._transceivers = dict(m._transceivers)
-        clone._oms = dict(m._oms)
-        clone._lightpaths = dict(m._lightpaths)
-        clone._routers = dict(m._routers)
-        clone._ip_links = dict(m._ip_links)
-        clone._services = dict(m._services)
-        clone._srlgs = dict(m._srlgs)
-        clone._risk_groups = dict(m._risk_groups)
-        clone._qot_state = dict(m._qot_state)
-        clone._failed_assets = set(m._failed_assets)
-        return clone
 
 
 def _delta(a: dict, b: dict) -> dict:

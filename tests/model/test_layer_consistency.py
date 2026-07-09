@@ -29,7 +29,7 @@ def test_downshift_on_branch_creates_congestion_and_leaves_truth_intact():
 
     # Branch and downshift 16QAM -> QPSK on the branch only.
     branch = store.branch(base)
-    bm = store.get(branch)
+    bm = store.current()  # branch() makes this the unfrozen working copy
     bm.set_lightpath_mode("lpAB", "100G-QPSK")
     # Single-transponder-type network => GSNR unchanged; only the mode's
     # required threshold changes. QPSK threshold (12 dB) < achieved 22 dB, so
@@ -53,7 +53,7 @@ def test_margin_negative_on_branch_drops_the_service():
     store = _seeded_store()
     base = store.create()
     branch = store.branch(base)
-    bm = store.get(branch)
+    bm = store.current()  # branch() makes this the unfrozen working copy
     # Degradation pushes lpAB margin negative -> ipAB down -> svc-AB dropped.
     bm.set_qot_state("lpAB", QoTState(gsnr_db=17.0, osnr_db=19.0, margin_db=-1.0))
     res = ip_routing.simulate_ip_routing(bm)

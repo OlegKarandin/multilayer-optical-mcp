@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import replace
-from typing import Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Optional, Tuple
 from .assets import (
     OpticalNode, FiberType, Fiber, Amplifier, ROADM, Transceiver, OMS,
     Lightpath, Router, IPLink, Service, SRLG, RiskGroup,
@@ -8,10 +8,26 @@ from .assets import (
 from .modes import ModeRegistry
 from .qot import QoTState
 
+if TYPE_CHECKING:
+    from .spectrum import SpectrumGrid
+
+
+class FrozenModelError(RuntimeError):
+    """Raised when a mutating method is called on a frozen (snapshot) model.
+
+    Snapshots handed out by ``SnapshotStore.get()`` are frozen clones: they can
+    be read but never mutated, so a caller cannot silently corrupt a stored
+    snapshot for every future ``branch()``/``restore()``. Mutate a working copy
+    obtained via ``branch()`` (``SnapshotStore.current()``) or ``clone()``."""
+
 
 class NetworkModel:
-    def __init__(self, modes: ModeRegistry) -> None:
+    def __init__(
+        self, modes: ModeRegistry, grid: Optional["SpectrumGrid"] = None,
+    ) -> None:
         self.modes = modes
+        self._grid = grid
+        self._frozen = False
         self._fiber_types: Dict[str, FiberType] = {}
         self._optical_nodes: Dict[str, OpticalNode] = {}
         self._fibers: Dict[str, Fiber] = {}
@@ -28,9 +44,48 @@ class NetworkModel:
         self._qot_state: Dict[str, QoTState] = {}
         self._failed_assets: set[str] = set()
 
+    # ------------------------------------------------------------------ freeze / clone
+
+    def _check_mutable(self) -> None:
+        if self._frozen:
+            raise FrozenModelError(
+                "cannot mutate a frozen snapshot model; branch() or clone() first"
+            )
+
+    def freeze(self) -> "NetworkModel":
+        """Mark this model immutable and return it (for chaining). Every mutator
+        then raises FrozenModelError."""
+        self._frozen = True
+        return self
+
+    def clone(self) -> "NetworkModel":
+        """Deep-ish copy of the model with independent collections. The single
+        home for model duplication (SnapshotStore and Phase 7 both use it). The
+        clone is always UNFROZEN regardless of this model's frozen state, so a
+        frozen snapshot can be thawed into a working copy by cloning it."""
+        c = NetworkModel(modes=self.modes, grid=self._grid)
+        c._fiber_types = dict(self._fiber_types)
+        c._optical_nodes = dict(self._optical_nodes)
+        c._fibers = dict(self._fibers)
+        c._amplifiers = dict(self._amplifiers)
+        c._roadms = dict(self._roadms)
+        c._transceivers = dict(self._transceivers)
+        c._oms = dict(self._oms)
+        c._lightpaths = dict(self._lightpaths)
+        c._routers = dict(self._routers)
+        c._ip_links = dict(self._ip_links)
+        c._services = dict(self._services)
+        c._srlgs = dict(self._srlgs)
+        c._risk_groups = dict(self._risk_groups)
+        c._qot_state = dict(self._qot_state)
+        c._failed_assets = set(self._failed_assets)
+        c._frozen = False
+        return c
+
     # ------------------------------------------------------------------ types
 
     def register_fiber_type(self, ft: FiberType) -> None:
+        self._check_mutable()
         self._fiber_types[ft.type_variety] = ft
 
     def get_fiber_type(self, type_variety: str) -> FiberType:
@@ -42,11 +97,13 @@ class NetworkModel:
     # ---------------------------------------------------------------- optical nodes
 
     def add_optical_node(self, n: OpticalNode) -> None:
+        self._check_mutable()
         self._optical_nodes[n.id] = n
 
     # ---------------------------------------------------------------- fibers
 
     def add_fiber(self, f: Fiber) -> None:
+        self._check_mutable()
         if f.type_variety not in self._fiber_types:
             raise ValueError(f"unknown fiber type {f.type_variety!r}")
         self._fibers[f.id] = f
@@ -57,6 +114,7 @@ class NetworkModel:
     # ---------------------------------------------------------------- amplifiers
 
     def add_amplifier(self, a: Amplifier) -> None:
+        self._check_mutable()
         self._amplifiers[a.id] = a
 
     def get_amplifier(self, aid: str) -> Amplifier:
@@ -65,9 +123,11 @@ class NetworkModel:
     # ---------------------------------------------------------------- ROADMs / transceivers
 
     def add_roadm(self, r: ROADM) -> None:
+        self._check_mutable()
         self._roadms[r.id] = r
 
     def add_transceiver(self, t: Transceiver) -> None:
+        self._check_mutable()
         self._transceivers[t.id] = t
 
     def has_roadm(self, rid: str) -> bool:
@@ -76,6 +136,7 @@ class NetworkModel:
     # ---------------------------------------------------------------- OMS
 
     def add_oms(self, oms: OMS) -> None:
+        self._check_mutable()
         for el in oms.elements:
             if (el not in self._fibers
                     and el not in self._amplifiers
@@ -94,6 +155,7 @@ class NetworkModel:
     # ---------------------------------------------------------------- lightpaths
 
     def add_lightpath(self, lp: Lightpath) -> None:
+        self._check_mutable()
         self.modes.get(lp.mode_id)  # raises KeyError if unknown mode
         for oms_id in lp.oms_sequence:
             if oms_id not in self._oms:
@@ -109,12 +171,14 @@ class NetworkModel:
     # ---------------------------------------------------------------- IP layer
 
     def add_router(self, r: Router) -> None:
+        self._check_mutable()
         self._routers[r.id] = r
 
     def get_router(self, rid: str) -> Router:
         return self._routers[rid]
 
     def add_ip_link(self, link: IPLink) -> None:
+        self._check_mutable()
         if link.lightpath_id not in self._lightpaths:
             raise ValueError(f"unknown lightpath {link.lightpath_id!r}")
         self._ip_links[link.id] = link
@@ -136,6 +200,7 @@ class NetworkModel:
     # ---------------------------------------------------------------- services / risk
 
     def add_service(self, s: Service) -> None:
+        self._check_mutable()
         for ip in s.working_path:
             if ip not in self._ip_links:
                 raise ValueError(f"Service {s.id!r}: unknown IP link {ip!r} in working_path")
@@ -151,6 +216,7 @@ class NetworkModel:
         self, service_id: str, ip_path: Tuple[str, ...],
     ) -> None:
         from .ip_routing import is_contiguous_path
+        self._check_mutable()
         svc = self._services[service_id]
         for ip_id in ip_path:
             if ip_id not in self._ip_links:
@@ -162,6 +228,7 @@ class NetworkModel:
         self._services[service_id] = replace(svc, working_path=tuple(ip_path))
 
     def add_srlg(self, g: SRLG) -> None:
+        self._check_mutable()
         self._srlgs[g.id] = g
 
     def get_srlg(self, gid: str) -> SRLG:
@@ -171,6 +238,7 @@ class NetworkModel:
         return self._srlgs[gid].asset_ids
 
     def add_risk_group(self, g: RiskGroup) -> None:
+        self._check_mutable()
         self._risk_groups[g.id] = g
 
     def get_risk_group(self, gid: str) -> RiskGroup:
@@ -186,6 +254,7 @@ class NetworkModel:
         validated against the model — risk groups are abstract partitions
         and a downstream app may reference assets this server does not own.
         Reject only on duplicate id."""
+        self._check_mutable()
         if rg_id in self._risk_groups:
             raise ValueError(f"risk group {rg_id!r} already exists")
         rg = RiskGroup(id=rg_id, asset_ids=tuple(asset_ids),
@@ -205,6 +274,7 @@ class NetworkModel:
     # ---------------------------------------------------------------- QoT state
 
     def set_qot_state(self, lp_id: str, state: QoTState) -> None:
+        self._check_mutable()
         if lp_id not in self._lightpaths:
             raise KeyError(lp_id)
         self._qot_state[lp_id] = state
@@ -217,6 +287,7 @@ class NetworkModel:
     # ---------------------------------------------------------------- mode mutation
 
     def set_lightpath_mode(self, lp_id: str, mode_id: str) -> None:
+        self._check_mutable()
         self.modes.get(mode_id)  # raises KeyError if unknown mode
         lp = self._lightpaths[lp_id]
         self._lightpaths[lp_id] = replace(lp, mode_id=mode_id)
@@ -237,20 +308,24 @@ class NetworkModel:
 
     def apply_nf_delta(self, amp_id: str, delta_db: float) -> None:
         """Add delta_db to an amplifier's NF (branch what-if). Raises KeyError if unknown."""
+        self._check_mutable()
         amp = self._amplifiers[amp_id]
         self._amplifiers[amp_id] = replace(amp, nf_db=amp.nf_db + delta_db)
 
     def apply_loss_delta(self, fiber_id: str, delta_db: float) -> None:
         """Add delta_db of lumped loss to a fiber (branch what-if). Raises KeyError if unknown."""
+        self._check_mutable()
         f = self._fibers[fiber_id]
         self._fibers[fiber_id] = replace(f, extra_loss_db=f.extra_loss_db + delta_db)
 
     def mark_failed(self, asset_ids: Tuple[str, ...]) -> None:
         """Mark assets failed on this (branch) model."""
+        self._check_mutable()
         self._failed_assets.update(asset_ids)
 
     def clear_failed(self, asset_ids: Tuple[str, ...] = ()) -> None:
         """Clear specific failed assets, or all when asset_ids is empty."""
+        self._check_mutable()
         if asset_ids:
             self._failed_assets.difference_update(asset_ids)
         else:
