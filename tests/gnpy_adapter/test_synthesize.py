@@ -3,7 +3,10 @@ from multilayer_optical_mcp.gnpy_adapter.synthesize import (
 )
 from multilayer_optical_mcp.model.topology_import import model_from_abstract_graph
 from multilayer_optical_mcp.model.modes import ModeRegistry
-from multilayer_optical_mcp.model.assets import TransceiverMode
+from multilayer_optical_mcp.model.assets import (
+    Amplifier, Fiber, FiberType, OMS, ROADM, TransceiverMode,
+)
+from multilayer_optical_mcp.model.network import NetworkModel
 
 
 def _reg():
@@ -54,3 +57,42 @@ def test_build_gnpy_network_returns_network_with_named_nodes():
     assert "roadm_0" in uids and "roadm_1" in uids
     assert "trx_0" in uids and "trx_1" in uids
     assert "fiber_0_1_0" in uids
+
+
+# --- Batch C7 ---------------------------------------------------------------
+
+
+def _model_with(*, roadm: ROADM, amp: Amplifier,
+                fiber_types=(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2),),
+                fiber=Fiber(id="f0", a_end="roadm_A", z_end="amp_x",
+                            length_km=80.0, type_variety="SSMF")) -> NetworkModel:
+    """A minimal single-element-of-each model built directly (bypasses the importer)
+    so per-instance ROADM/amp/fiber attributes survive to synthesis."""
+    n = NetworkModel(modes=_reg())
+    for ft in fiber_types:
+        n.register_fiber_type(ft)
+    n.add_roadm(roadm)
+    n.add_amplifier(amp)
+    n.add_fiber(fiber)
+    return n
+
+
+def test_amp_tilt_reaches_operational_tilt_target():
+    """S3-6: Amplifier.tilt_db must be emitted as operational.tilt_target."""
+    model = _model_with(roadm=ROADM(id="roadm_A"),
+                        amp=Amplifier(id="amp_x", type_variety="advanced_toy",
+                                      gain_db=20.0, nf_db=5.5, tilt_db=-1.5))
+    topo = model_to_gnpy_topology(model)
+    edfa = next(e for e in topo["elements"] if e["uid"] == "amp_x")
+    assert edfa["operational"]["tilt_target"] == -1.5
+
+
+def test_roadm_target_pch_out_db_is_per_instance():
+    """S3-5: ROADM.target_pch_out_db must reach the topology element, not the
+    hardcoded global -20."""
+    model = _model_with(roadm=ROADM(id="roadm_A", target_pch_out_db=-17.0),
+                        amp=Amplifier(id="amp_x", type_variety="advanced_toy",
+                                      gain_db=20.0, nf_db=5.5))
+    topo = model_to_gnpy_topology(model)
+    roadm = next(e for e in topo["elements"] if e["uid"] == "roadm_A")
+    assert roadm["params"]["target_pch_out_db"] == -17.0

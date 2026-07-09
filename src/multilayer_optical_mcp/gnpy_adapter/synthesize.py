@@ -81,13 +81,19 @@ def model_to_gnpy_topology(model: NetworkModel) -> Dict[str, Any]:
     """Build the GNPy {elements, connections} dict from the model."""
     elements: List[Dict[str, Any]] = []
     for r in model._roadms.values():
-        elements.append({"uid": r.id, "type": "Roadm"})
+        # S3-5: emit the per-instance target_pch_out_db so a ROADM configured with
+        # a non-default per-channel output power is honoured instead of silently
+        # overridden by the global equipment Roadm entry.
+        elements.append({"uid": r.id, "type": "Roadm",
+                         "params": {"target_pch_out_db": r.target_pch_out_db}})
     for t in model._transceivers.values():
         elements.append({"uid": t.id, "type": "Transceiver"})
     for a in model._amplifiers.values():
+        # S3-6: pass the per-amp tilt through instead of hardcoding 0.
         elements.append({"uid": a.id, "type": "Edfa",
                          "type_variety": nf_type_variety(a.nf_db),
-                         "operational": {"gain_target": a.gain_db, "tilt_target": 0}})
+                         "operational": {"gain_target": a.gain_db,
+                                         "tilt_target": a.tilt_db}})
     for f in model._fibers.values():
         loss = model.get_fiber_type(f.type_variety).loss_coef_db_per_km
         elements.append({"uid": f.id, "type": "Fiber", "type_variety": f.type_variety,
