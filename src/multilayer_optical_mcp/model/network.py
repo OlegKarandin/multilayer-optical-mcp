@@ -172,6 +172,11 @@ class NetworkModel:
                     f"(->{oa.dst_node_id!r}) does not meet {b!r} "
                     f"({ob.src_node_id!r}->)"
                 )
+        # S1-5: if the model carries a spectrum grid, validate the carrier is
+        # on-grid now (grid.slot_of raises ValueError) rather than deferring the
+        # error to build_spectrum_state at routing time.
+        if self._grid is not None:
+            self._grid.slot_of(lp.center_freq_hz)
         self._lightpaths[lp.id] = lp
 
     def get_lightpath(self, lpid: str) -> Lightpath:
