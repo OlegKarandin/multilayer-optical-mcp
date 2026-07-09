@@ -291,6 +291,10 @@ class NetworkModel:
         self.modes.get(mode_id)  # raises KeyError if unknown mode
         lp = self._lightpaths[lp_id]
         self._lightpaths[lp_id] = replace(lp, mode_id=mode_id)
+        # S1-7: the mode's required-GSNR threshold changed, so this lightpath's
+        # margin (hence derived capacity) is stale until recompute. Clear it so
+        # ip_link_capacity_gbps reports "unknown" rather than a stale value.
+        self._qot_state.pop(lp_id, None)
 
     # ---------------------------------------------------------------- derived capacity
 
@@ -311,12 +315,17 @@ class NetworkModel:
         self._check_mutable()
         amp = self._amplifiers[amp_id]
         self._amplifiers[amp_id] = replace(amp, nf_db=amp.nf_db + delta_db)
+        # S1-7: any lightpath crossing this amp is now stale. Rather than resolve
+        # crossing membership here, clear all QoT — recompute repopulates it.
+        self._qot_state.clear()
 
     def apply_loss_delta(self, fiber_id: str, delta_db: float) -> None:
         """Add delta_db of lumped loss to a fiber (branch what-if). Raises KeyError if unknown."""
         self._check_mutable()
         f = self._fibers[fiber_id]
         self._fibers[fiber_id] = replace(f, extra_loss_db=f.extra_loss_db + delta_db)
+        # S1-7: any lightpath crossing this fiber is now stale (see apply_nf_delta).
+        self._qot_state.clear()
 
     def mark_failed(self, asset_ids: Tuple[str, ...]) -> None:
         """Mark assets failed on this (branch) model."""
