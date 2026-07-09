@@ -119,6 +119,20 @@ def test_new_only_lights_new_lightpath_when_no_existing_path():
     assert res[0].restored_gbps == 100.0
 
 
+def test_new_run_records_travel_direction_not_physical_oms_order():
+    """A B->A run realized over the physically-A->B oms-AB must record the actual
+    travel endpoints (B->A), so provisioning does not derive a reversed lightpath
+    from oms_sequence's physical-OMS order."""
+    n = _one_lightpath_model()
+    g = build_layered_graph(n)
+    res = place_demands(n, g, FakeQot(15.0), src="B", dst="A",
+                        demand_gbps=100.0, policy="new_only")
+    run = res[0].new_lightpaths[0]
+    assert run.oms_sequence == ("oms-AB",)     # physical-OMS order (unchanged)
+    assert run.src_node == "B"                 # travel direction
+    assert run.dst_node == "A"
+
+
 def test_groom_only_empty_when_no_existing_path():
     n = _one_lightpath_model()
     g = build_layered_graph(n)

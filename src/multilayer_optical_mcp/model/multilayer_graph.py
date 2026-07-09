@@ -165,6 +165,12 @@ class NewLightpathRun:
     mode_id: str
     gsnr_db: float
     bitrate_gbps: float
+    # Travel direction of the run (the demand's direction). `oms_sequence` is in
+    # physical-OMS order, which may be traversed in reverse for a return-direction
+    # demand; (src_node, dst_node) records the actual endpoints so provisioning
+    # does not derive a reversed lightpath from oms_sequence.
+    src_node: str = ""
+    dst_node: str = ""
 
 
 @dataclass(frozen=True)
@@ -197,13 +203,20 @@ def _policy_graph(g: nx.DiGraph, policy: str) -> nx.DiGraph:
     return h
 
 
-def _parse_path(g: nx.DiGraph, path: List) -> Tuple[List[str], List[Tuple[Tuple[str, ...], int]]]:
-    """Split an access->access vertex path into (reused_lightpath_ids,
-    new_runs) where each new_run is (oms_sequence, lam)."""
+def _parse_path(
+    g: nx.DiGraph, path: List,
+) -> Tuple[List[str], List[Tuple[Tuple[str, ...], int, str, str]]]:
+    """Split an access->access vertex path into (reused_lightpath_ids, new_runs)
+    where each new_run is (oms_sequence, lam, src_node, dst_node). The travel
+    endpoints come from the WL-vertex node components ((WL, node, lam)), so a
+    return-direction run over a physically-forward OMS records its true direction
+    rather than the OMS's physical orientation."""
     reused: List[str] = []
-    new_runs: List[Tuple[Tuple[str, ...], int]] = []
+    new_runs: List[Tuple[Tuple[str, ...], int, str, str]] = []
     cur_oms: List[str] = []
     cur_lam: Optional[int] = None
+    cur_src: Optional[str] = None
+    cur_dst: Optional[str] = None
     for a, b in zip(path, path[1:]):
         d = g.get_edge_data(a, b)
         kind = d.get("kind")
@@ -212,10 +225,13 @@ def _parse_path(g: nx.DiGraph, path: List) -> Tuple[List[str], List[Tuple[Tuple[
         elif kind == "WLE":
             cur_oms.append(d["oms_id"])
             cur_lam = d["lam"]
+            if cur_src is None:
+                cur_src = a[1]      # from-node of the first hop in this run
+            cur_dst = b[1]          # to-node, advanced each hop
         elif kind == "RxE":
             if cur_oms:
-                new_runs.append((tuple(cur_oms), cur_lam))
-                cur_oms, cur_lam = [], None
+                new_runs.append((tuple(cur_oms), cur_lam, cur_src, cur_dst))
+                cur_oms, cur_lam, cur_src, cur_dst = [], None, None, None
         # TxE: entry into a wl layer; nothing to record
     return reused, new_runs
 
@@ -257,20 +273,22 @@ def place_demands(
         # same route option, just a different channel assignment. Collapsing them
         # keeps the k-best frontier meaningful (diverse routes/groom combos)
         # instead of filling it with the same plan on every available slot.
-        key = (tuple(reused), tuple(oms_seq for oms_seq, _ in new_runs))
+        key = (tuple(reused), tuple(oms_seq for oms_seq, _, _, _ in new_runs))
         if key in seen:
             continue
         seen.add(key)
         realized: List[NewLightpathRun] = []
         feasible = True
         new_cap = float("inf")
-        for oms_seq, lam in new_runs:
+        for oms_seq, lam, run_src, run_dst in new_runs:
             loading = _build_loading(grid, spectrum, oms_seq, lam, ref_mode)
             mode, gsnr = _best_feasible_mode(model, qot, oms_seq, loading, ref_mode)
             if mode is None:
                 feasible = False
                 break
-            realized.append(NewLightpathRun(oms_seq, lam, mode.id, gsnr, mode.bitrate_gbps))
+            realized.append(NewLightpathRun(oms_seq, lam, mode.id, gsnr,
+                                             mode.bitrate_gbps,
+                                             src_node=run_src, dst_node=run_dst))
             new_cap = min(new_cap, mode.bitrate_gbps)
         if not feasible:
             continue
