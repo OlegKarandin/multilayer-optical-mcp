@@ -444,9 +444,15 @@ def recompute_qot_under_loading(
     Writes QoTState on the model and returns {lp_id: (QoTState, result_id)}.
     """
     from ..model.spectrum import SpectrumGrid, build_spectrum_state, occupied_along
+    from ..model.exposure import lightpath_footprint
 
     grid = SpectrumGrid.default()
     model_state = build_spectrum_state(model, grid)
+    # S8-1: a lightpath crossing a failed asset stays down. Recompute must NOT
+    # overwrite inject_failure's -inf sentinel with a feasible GSNR (synthesis
+    # ignores _failed_assets, so the cut fiber still propagates a signal). Re-apply
+    # the sentinel using the same footprint predicate inject_failure uses.
+    failed = model.failed_assets()
     # Slots lit by the passed loading (a make-before-break drop removes a channel
     # as an interferer; duplicate frequencies collapse to one slot bit).
     lit = 0
@@ -458,6 +464,16 @@ def recompute_qot_under_loading(
 
     results: dict[str, Tuple[QoTState, str]] = {}
     for lp in model.list_lightpaths():
+        if failed:
+            crossing = lightpath_footprint(model, lp.oms_sequence) & failed
+            if crossing:
+                marker = sorted(crossing)[0]
+                sentinel = QoTState(gsnr_db=float("-inf"), osnr_db=float("-inf"),
+                                    margin_db=float("-inf"), limiting_element_id=marker)
+                rid = store.put(QoTBreakdown(snapshots=(), limiting_element_id=marker))
+                model.set_qot_state(lp.id, sentinel)
+                results[lp.id] = (sentinel, rid)
+                continue
         probe_slot = grid.slot_of(lp.center_freq_hz)
         occ = occupied_along(model_state, lp.oms_sequence) & lit
         per_path = _per_path_loading(grid, occ, probe_slot, lp.mode_id)

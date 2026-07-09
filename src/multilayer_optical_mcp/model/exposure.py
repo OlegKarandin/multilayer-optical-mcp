@@ -33,6 +33,22 @@ def oms_seq_asset_set(model: NetworkModel, oms_sequence: Tuple[str, ...]) -> Fro
     return frozenset(assets)
 
 
+def lightpath_footprint(model: NetworkModel, oms_sequence: Tuple[str, ...]) -> FrozenSet[str]:
+    """The full physical footprint of an OMS-sequence: ``oms_seq_asset_set`` plus
+    the terminal drop ROADM the OMS elements omit (S8-3).
+
+    This is the single crossing predicate shared by every failure-aware path —
+    ``inject_failure`` (down a lightpath), ``recompute_qot_under_loading``
+    (don't resurrect a downed lightpath, S8-1), and ``clear_failed`` (drop the
+    sentinel only when nothing failed still crosses it, S8-6) — so the failed-set
+    and the QoT sentinels can never disagree about what a lightpath crosses."""
+    assets = set(oms_seq_asset_set(model, oms_sequence))
+    term = terminal_roadm_id(model, oms_sequence)
+    if term is not None:
+        assets.add(term)
+    return frozenset(assets)
+
+
 def terminal_roadm_id(model: NetworkModel, oms_sequence: Tuple[str, ...]) -> "str | None":
     """The drop ROADM at the end of *oms_sequence*, or None.
 

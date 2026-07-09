@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 from dataclasses import replace
 from typing import TYPE_CHECKING, Dict, Optional, Tuple
 from .assets import (
@@ -350,12 +351,26 @@ class NetworkModel:
         self._failed_assets.update(asset_ids)
 
     def clear_failed(self, asset_ids: Tuple[str, ...] = ()) -> None:
-        """Clear specific failed assets, or all when asset_ids is empty."""
+        """Clear specific failed assets, or all when asset_ids is empty.
+
+        S8-6: also drop the -inf QoT sentinels that inject_failure wrote for any
+        lightpath that no longer crosses a *remaining* failed asset, so
+        _failed_assets and _qot_state can't disagree. The dropped entries read as
+        "unknown" (LookupError) until the next recompute — the honest state, since
+        a cleared asset's real QoT is not known without recomputing."""
         self._check_mutable()
         if asset_ids:
             self._failed_assets.difference_update(asset_ids)
         else:
             self._failed_assets.clear()
+        from .exposure import lightpath_footprint  # lazy: exposure imports NetworkModel
+        remaining = frozenset(self._failed_assets)
+        for lp in self._lightpaths.values():
+            st = self._qot_state.get(lp.id)
+            if st is None or not (math.isinf(st.margin_db) and st.margin_db < 0):
+                continue  # not a failure sentinel — leave real QoT untouched
+            if not (lightpath_footprint(self, lp.oms_sequence) & remaining):
+                self._qot_state.pop(lp.id, None)
 
     def failed_assets(self) -> frozenset:
         return frozenset(self._failed_assets)

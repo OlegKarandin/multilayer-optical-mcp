@@ -14,7 +14,7 @@ from ..gnpy_adapter.adapter import recompute_qot_under_loading
 from .network import NetworkModel
 from .qot import QoTState
 from .qot_results import QoTResultStore
-from .exposure import oms_seq_asset_set, terminal_roadm_id
+from .exposure import lightpath_footprint
 
 
 @dataclass(frozen=True)
@@ -86,12 +86,7 @@ def inject_failure(model: NetworkModel, asset_ids: Tuple[str, ...]) -> FailureRe
     failed = set(asset_ids)
     downed: List[str] = []
     for lp in model.list_lightpaths():
-        assets = set(oms_seq_asset_set(model, lp.oms_sequence))
-        # Include the terminal drop ROADM, which OMS.elements omit (S8-3).
-        term = terminal_roadm_id(model, lp.oms_sequence)
-        if term is not None:
-            assets.add(term)
-        crossing = assets & failed
+        crossing = lightpath_footprint(model, lp.oms_sequence) & failed
         if crossing:
             model.set_qot_state(lp.id, QoTState(
                 gsnr_db=float("-inf"),
@@ -139,6 +134,15 @@ def _has_qot(model: NetworkModel, lp_id: str) -> bool:
         return False
 
 
+def _feasible(margin_db: float) -> bool:
+    """The single feasibility predicate (S8-4): mode_feasible ⇔ margin ≥ 0.
+
+    Both feasible_before and feasible_after derive from this, so a future change
+    to the feasibility rule can't silently split the two sides of a crossing.
+    NaN (no baseline margin) is not feasible."""
+    return margin_db >= 0
+
+
 def inject_degradation(
     model: NetworkModel,
     *,
@@ -171,9 +175,13 @@ def inject_degradation(
     crossings: List[str] = []
     for lp in model.list_lightpaths():
         st = model.get_qot_state(lp.id)
-        mb = before.get(lp.id, float("inf"))
-        fb = mb >= 0
-        fa = st.mode_feasible
+        # S8-2: a lightpath with no feasible baseline cannot "cross" from feasible
+        # to infeasible. Absent-from-before => margin_before is NaN, feasible_before
+        # is False, so it is excluded from the crossing set.
+        had_baseline = lp.id in before
+        mb = before.get(lp.id, float("nan"))
+        fb = had_baseline and _feasible(mb)
+        fa = _feasible(st.margin_db)
         crossed = fb and not fa
         if crossed:
             crossings.append(lp.id)
