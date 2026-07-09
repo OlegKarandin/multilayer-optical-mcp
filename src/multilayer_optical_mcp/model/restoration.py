@@ -94,8 +94,12 @@ def compute_restoration(
     for policy in ("groom_or_new", "new_only"):
         for p in place_demands(model, g, qot, src=src, dst=dst,
                                demand_gbps=svc.demand_gbps, policy=policy):
+            # Dedup on the LAMBDA-FREE route identity, matching place_demands'
+            # intra-bucket key: a candidate does not commit to a wavelength, so
+            # the same physical route picked with a different representative lambda
+            # in the two policy passes must not escape as two candidates.
             key = (p.reused_lightpaths,
-                   tuple((r.oms_sequence, r.lam) for r in p.new_lightpaths))
+                   tuple(r.oms_sequence for r in p.new_lightpaths))
             if key in seen:
                 continue
             seen.add(key)

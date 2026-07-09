@@ -122,3 +122,25 @@ def test_restoration_hybrid_groom_plus_new_lightpath():
     assert hyb[0].reused_lightpaths == ("lp-AM",)
     assert hyb[0].new_lightpaths[0].oms_sequence == ("oms-MB",)
     assert hyb[0].restored_gbps == 50.0
+
+
+def test_cross_bucket_dedup_ignores_wavelength(monkeypatch):
+    """A candidate never commits to a wavelength, so the same physical route must
+    not survive as two candidates merely because the groom_or_new and new_only
+    passes picked different representative lambdas. The cross-bucket dedup key must
+    match place_demands' lambda-free intra-bucket key."""
+    from multilayer_optical_mcp.model import restoration as R
+    from multilayer_optical_mcp.model.multilayer_graph import Placement, NewLightpathRun
+
+    def _fake_place(model, g, qot, *, src, dst, demand_gbps, policy):
+        # same physical route (oms-AB), different representative lambda per pass
+        lam = 0 if policy == "groom_or_new" else 3
+        run = NewLightpathRun(("oms-AB",), lam, "100G", 15.0, 100.0,
+                              src_node="A", dst_node="B")
+        return [Placement(reused_lightpaths=(), new_lightpaths=(run,),
+                          restored_gbps=demand_gbps, shortfall_gbps=0.0)]
+
+    monkeypatch.setattr(R, "place_demands", _fake_place)
+    n = _diamond()
+    res = compute_restoration(n, FakeQot(15.0), "svc")
+    assert len(res.candidates) == 1, [c.new_lightpaths for c in res.candidates]
