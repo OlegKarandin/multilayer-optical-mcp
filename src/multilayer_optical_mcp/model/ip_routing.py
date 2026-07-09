@@ -68,9 +68,9 @@ def offered_load_per_link(model: NetworkModel) -> Dict[str, float]:
 class LinkUtilization:
     ip_link_id: str
     offered_gbps: float
-    capacity_gbps: float
-    utilization: Optional[float]   # offered/capacity; None when the link is down
-    down: bool                     # capacity == 0 (margin-negative or torn down)
+    capacity_gbps: Optional[float]  # None when the bound lightpath has no recorded QoT
+    utilization: Optional[float]    # offered/capacity; None when down or capacity unknown
+    down: bool                      # capacity == 0 (margin-negative or torn down)
 
 
 @dataclass(frozen=True)
@@ -84,7 +84,7 @@ class DroppedService:
 class IPRoutingResult:
     utilizations: Tuple[LinkUtilization, ...]
     congested_links: Tuple[str, ...]      # utilization > 1, not down
-    down_links: Tuple[str, ...]           # capacity 0 with load > 0
+    down_links: Tuple[str, ...]           # every down link (capacity 0), loaded or idle
     dropped_services: Tuple[DroppedService, ...]
     overflow_gbps: float                  # Σ max(0, offered-cap) over congested links
 
@@ -99,13 +99,18 @@ def simulate_ip_routing(model: NetworkModel) -> IPRoutingResult:
     overflow = 0.0
     for link in model.list_ip_links():
         offered = load[link.id]
-        cap = model.ip_link_capacity_gbps(link.id)
+        try:
+            cap = model.ip_link_capacity_gbps(link.id)
+        except LookupError:
+            # S5-4: no QoT recorded yet (provisioned pre-recompute). Distinct
+            # "unknown" state, not a crash and not down — a read tool never raises.
+            utils.append(LinkUtilization(link.id, offered, None, None, False))
+            continue
         is_down = cap == 0.0
         util = None if is_down else offered / cap
         utils.append(LinkUtilization(link.id, offered, cap, util, is_down))
         if is_down:
-            if offered > 0.0:
-                down.append(link.id)
+            down.append(link.id)  # S5-5: enumerate every down link, loaded or idle
         elif util is not None and util > 1.0:
             congested.append(link.id)
             overflow += offered - cap

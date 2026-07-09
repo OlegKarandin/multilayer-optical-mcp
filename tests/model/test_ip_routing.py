@@ -137,6 +137,42 @@ def test_simulate_down_link_drops_its_services():
     )
 
 
+def test_simulate_link_without_qot_is_total_not_raise():
+    # S5-4: a lightpath provisioned before recompute has no recorded QoT.
+    # simulate_ip_routing is a read tool and must not raise LookupError out of it;
+    # the link reports a distinct "unknown" state (capacity None), never down.
+    from multilayer_optical_mcp.model import ip_routing
+    n = _two_link_model()
+    n.add_lightpath(Lightpath(id="lpX", oms_sequence=("omsAB",),
+                              mode_id="200G-16QAM", center_freq_hz=193.6e12))
+    n.add_ip_link(IPLink(id="ipX", a_router="R-A", z_router="R-B",
+                         lightpath_id="lpX"))  # no set_qot_state -> unknown
+    # A service riding the unknown link must not be dropped (unknown != down).
+    n.add_service(Service(id="svc-X", src_router="R-A", dst_router="R-B",
+                          demand_gbps=50.0, working_path=("ipX",)))
+    res = ip_routing.simulate_ip_routing(n)  # must not raise
+    util = {u.ip_link_id: u for u in res.utilizations}
+    assert util["ipX"].capacity_gbps is None
+    assert util["ipX"].utilization is None
+    assert util["ipX"].down is False
+    assert "ipX" not in res.down_links
+    assert res.dropped_services == ()
+
+
+def test_down_links_includes_idle_down_link():
+    # S5-5: a down link carrying no traffic is still an outage. down_links must
+    # enumerate every down link, not only the loaded ones.
+    from multilayer_optical_mcp.model import ip_routing
+    n = _two_link_model()  # no services -> both links idle
+    n.set_qot_state("lpBC", QoTState(gsnr_db=18.0, osnr_db=20.0, margin_db=-0.5))
+    res = ip_routing.simulate_ip_routing(n)
+    util = {u.ip_link_id: u for u in res.utilizations}
+    assert util["ipBC"].down is True
+    assert util["ipBC"].offered_gbps == 0.0
+    assert "ipBC" in res.down_links      # idle-but-down now enumerated
+    assert "ipAB" not in res.down_links  # healthy link stays out
+
+
 def test_reroute_repins_working_path():
     from multilayer_optical_mcp.model import ip_routing
     n = _two_link_model()
