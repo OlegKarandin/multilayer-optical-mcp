@@ -54,9 +54,14 @@ class DisjointnessResult:
     shared_groups: Tuple[str, ...] = ()
 
 
-# Cap on candidate routes enumerated for disjoint-pair search. Bounds the
-# pairwise search on dense graphs while covering the toy/demo topologies.
+# Cap on *distinct node paths* enumerated for disjoint-pair search — NOT raw
+# emissions. Counting emissions let a single node path with many parallel OMS
+# flood the window and starve topologically-distinct disjoint routes (false
+# NO_SOLUTION). _DISJOINT_EMISSION_CAP is a generous safety bound on total
+# candidates (parallels within the capped node paths) to keep the O(n²) pairwise
+# scan tractable on pathologically parallel topologies.
 _DISJOINT_CANDIDATE_CAP = 32
+_DISJOINT_EMISSION_CAP = 1024
 
 
 def build_oms_graph(model: NetworkModel, forbidden: frozenset = frozenset()) -> nx.MultiDiGraph:
@@ -136,12 +141,15 @@ def _oms_between(
 
 def _enumerate_oms_paths(
     model: NetworkModel, src: str, dst: str, k: int, weight: str = "hops",
-    forbidden: frozenset = frozenset(),
+    forbidden: frozenset = frozenset(), max_node_paths: Optional[int] = None,
 ) -> Iterator[OmsPath]:
     """Yield up to `k` OMS-sequence routes src->dst, shortest first, expanding
     parallel OMS per hop. `weight="hops"` (default) orders by segment count;
     `weight="length"` orders by total fiber km (the routing objective for RSA,
-    since reachable SNR tracks length)."""
+    since reachable SNR tracks length). When *max_node_paths* is set, stop after
+    that many distinct node paths have been expanded (parallels within them do
+    not count toward the limit) — so a highly-parallel earlier node path cannot
+    starve topological diversity in the disjoint-pair search."""
     g = build_oms_graph(model, forbidden)
     if src not in g or dst not in g or src == dst:
         return
@@ -167,7 +175,11 @@ def _enumerate_oms_paths(
             simple, src, dst, weight="weight" if by_length else None)
     except nx.NetworkXNoPath:
         return
+    node_paths_seen = 0
     for node_path in node_paths:
+        if max_node_paths is not None and node_paths_seen >= max_node_paths:
+            return
+        node_paths_seen += 1
         hop_options = [_oms_between(model, u, v, by_length=by_length, forbidden=forbidden)
                        for u, v in zip(node_path, node_path[1:])]
         for combo in itertools.product(*hop_options):
@@ -245,8 +257,9 @@ def compute_disjoint_paths(
     "length"} orders candidate routes."""
     avoid_assets, avoid_rgs = _avoid_sets(constraints)
     forbidden = forbidden_oms(model, avoid_assets, avoid_rgs)
-    cands = list(_enumerate_oms_paths(model, src, dst, _DISJOINT_CANDIDATE_CAP,
-                                      weight=weight, forbidden=forbidden))
+    cands = list(_enumerate_oms_paths(model, src, dst, _DISJOINT_EMISSION_CAP,
+                                      weight=weight, forbidden=forbidden,
+                                      max_node_paths=_DISJOINT_CANDIDATE_CAP))
     keyed = [(p, path_basis_keys(model, p.oms_sequence, basis=basis, level=level))
              for p in cands]
 

@@ -93,6 +93,49 @@ def test_compute_disjoint_paths_rejects_two_directions_of_one_span():
     assert res.path_a is None and res.path_b is None
 
 
+def _model_parallels_plus_distinct_route(n_parallels: int) -> NetworkModel:
+    """`n_parallels` parallel A->B OMS all sharing SRLG 'srlg-trunk', plus a
+    topologically distinct A->C->B route that is SRLG-disjoint from them. The
+    only disjoint pair is (any trunk parallel) + (A->C->B)."""
+    n = NetworkModel(modes=ModeRegistry([
+        TransceiverMode(id="100G-QPSK", bitrate_gbps=100.0,
+                        required_gsnr_db=12.0, symbol_rate_baud=32e9,
+                        channel_spacing_hz=50e9),
+    ]))
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    trunk_fibers = []
+    for i in range(n_parallels):
+        a1, a2 = f"pa{i}1", f"pa{i}2"
+        fib = f"pfib{i}"
+        n.add_amplifier(Amplifier(id=a1, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+        n.add_amplifier(Amplifier(id=a2, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+        n.add_fiber(Fiber(id=fib, a_end=a1, z_end=a2, length_km=80.0, type_variety="SSMF"))
+        n.add_oms(OMS(id=f"oms-p{i}", src_node_id="A", dst_node_id="B",
+                      elements=(a1, fib, a2)))
+        trunk_fibers.append(fib)
+    n.add_srlg(SRLG(id="srlg-trunk", asset_ids=tuple(trunk_fibers)))
+    # distinct route A->C->B (two hops), SRLG-free
+    for a in ("acA", "acZ", "cbA", "cbZ"):
+        n.add_amplifier(Amplifier(id=a, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+    n.add_fiber(Fiber(id="fib-AC", a_end="acA", z_end="acZ", length_km=80.0, type_variety="SSMF"))
+    n.add_fiber(Fiber(id="fib-CB", a_end="cbA", z_end="cbZ", length_km=80.0, type_variety="SSMF"))
+    n.add_oms(OMS(id="oms-AC", src_node_id="A", dst_node_id="C", elements=("acA", "fib-AC", "acZ")))
+    n.add_oms(OMS(id="oms-CB", src_node_id="C", dst_node_id="B", elements=("cbA", "fib-CB", "cbZ")))
+    return n
+
+
+def test_compute_disjoint_paths_not_starved_by_parallels():
+    """A distinct disjoint route must be found even when >cap parallels on an
+    earlier node path would otherwise consume the whole candidate window."""
+    n = _model_parallels_plus_distinct_route(n_parallels=33)   # > _DISJOINT_CANDIDATE_CAP
+    res = compute_disjoint_paths(n, "A", "B", basis="srlg", level="srlg",
+                                 best_effort=False)
+    assert res.status is SolverStatus.SOLUTION
+    assert res.disjoint is True
+    pair = {res.path_a.oms_sequence, res.path_b.oms_sequence}
+    assert ("oms-AC", "oms-CB") in pair       # the distinct route entered the scan
+
+
 # --------------------------------------------------------------- compute_paths
 
 def test_compute_paths_returns_both_routes():
