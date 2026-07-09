@@ -59,10 +59,15 @@ class DisjointnessResult:
 _DISJOINT_CANDIDATE_CAP = 32
 
 
-def build_oms_graph(model: NetworkModel, forbidden: frozenset = frozenset()) -> nx.MultiGraph:
-    """Optical nodes as vertices, one edge per OMS (carrying its id). MultiGraph
-    so parallel OMS between the same node pair are preserved as distinct edges."""
-    g: nx.MultiGraph = nx.MultiGraph()
+def build_oms_graph(model: NetworkModel, forbidden: frozenset = frozenset()) -> nx.MultiDiGraph:
+    """Optical nodes as vertices, one *directed* edge per OMS src->dst (carrying
+    its id). MultiDiGraph so parallel OMS between the same ordered node pair stay
+    distinct AND the two directions of one bidirectional span are separate edges.
+    Directed because an OMS carries traffic src->dst only: routing an A->B demand
+    must not offer the B->A OMS of the same span (which would both misroute a
+    lightpath and let the two directions of one physical span masquerade as a
+    disjoint working/protection pair)."""
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
     for oms in model.list_oms():
         if oms.id in forbidden:
             continue
@@ -118,10 +123,12 @@ def _oms_between(
     model: NetworkModel, u: str, v: str, *, by_length: bool = False,
     forbidden: frozenset = frozenset(),
 ) -> List[str]:
-    """OMS ids whose endpoints are {u, v}, ordered deterministically — by
-    (length, id) when *by_length*, else by id."""
+    """OMS ids carrying traffic u->v (directed: src_node_id==u, dst_node_id==v),
+    ordered deterministically — by (length, id) when *by_length*, else by id.
+    Direction-strict so an A->B hop never resolves to the reverse-direction OMS
+    of the same span."""
     out = [oms.id for oms in model.list_oms()
-           if {oms.src_node_id, oms.dst_node_id} == {u, v} and oms.id not in forbidden]
+           if oms.src_node_id == u and oms.dst_node_id == v and oms.id not in forbidden]
     if by_length:
         return sorted(out, key=lambda o: (oms_length_km(model, o), o))
     return sorted(out)
@@ -139,10 +146,11 @@ def _enumerate_oms_paths(
     if src not in g or dst not in g or src == dst:
         return
     by_length = weight == "length"
-    # Collapse parallels to a simple graph for node-simple-path enumeration,
-    # then re-expand the OMS choices per hop. For length weighting, each simple
-    # edge carries the *shortest* parallel OMS length between the node pair.
-    simple = nx.Graph()
+    # Collapse parallels to a simple *directed* graph for node-simple-path
+    # enumeration, then re-expand the OMS choices per hop. Directed so node paths
+    # respect OMS travel direction. For length weighting, each simple edge carries
+    # the *shortest* parallel OMS length between the ordered node pair.
+    simple = nx.DiGraph()
     simple.add_nodes_from(g.nodes)
     for u, v in g.edges():
         if by_length:

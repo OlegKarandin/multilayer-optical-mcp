@@ -17,6 +17,7 @@ from multilayer_optical_mcp.model.solvers import (
     SolverStatus, RoutingResult, DisjointnessResult,
     compute_paths, check_disjointness, compute_disjoint_paths,
 )
+from multilayer_optical_mcp.model.topology_import import model_from_abstract_graph
 
 
 def _model_two_paths() -> NetworkModel:
@@ -52,6 +53,44 @@ def _model_two_paths() -> NetworkModel:
                           demand_gbps=10.0,
                           working_path=("ip1",), protection_path=("ip2",)))
     return n
+
+
+# ------------------------------------------- directed OMS (importer both-directions)
+
+def _model_importer_single_span() -> NetworkModel:
+    """Importer-built model of ONE bidirectional span 1<->2. The importer emits
+    two directed OMS (oms_1_2, oms_2_1) with physically separate fibers/amps."""
+    modes = ModeRegistry([
+        TransceiverMode(id="100G-QPSK", bitrate_gbps=100.0,
+                        required_gsnr_db=12.0, symbol_rate_baud=32e9,
+                        channel_spacing_hz=50e9),
+    ])
+    graph = {
+        "nodes": [{"id": "1"}, {"id": "2"}],
+        "edges": [{"src": "1", "dst": "2", "length_km": 80.0}],
+    }
+    return model_from_abstract_graph(graph, modes=modes)
+
+
+def test_compute_paths_directed_returns_only_travel_direction_oms():
+    """A->B enumeration must yield the forward OMS only, never the reverse-
+    direction OMS of the same span (which belongs to B->A traffic)."""
+    n = _model_importer_single_span()
+    res = compute_paths(n, "1", "2", k=4)
+    assert res.status is SolverStatus.SOLUTION
+    found = {p.oms_sequence for p in res.paths}
+    assert found == {("oms_1_2",)}, found        # not oms_2_1
+
+
+def test_compute_disjoint_paths_rejects_two_directions_of_one_span():
+    """The two directions of a single span are NOT a valid disjoint pair: they
+    share the same physical duct. With only one span there is no disjoint
+    pair -> typed NO_SOLUTION (never (oms_1_2,) + (oms_2_1,))."""
+    n = _model_importer_single_span()
+    res = compute_disjoint_paths(n, "1", "2", basis="physical", level="link",
+                                 best_effort=False)
+    assert res.status is SolverStatus.NO_SOLUTION
+    assert res.path_a is None and res.path_b is None
 
 
 # --------------------------------------------------------------- compute_paths
