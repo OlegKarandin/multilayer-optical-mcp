@@ -160,6 +160,18 @@ class NetworkModel:
         for oms_id in lp.oms_sequence:
             if oms_id not in self._oms:
                 raise ValueError(f"unknown OMS {oms_id!r}")
+        # S1-4: the OMS sequence must physically chain (each OMS's dst_node must
+        # equal the next OMS's src_node). A gap or inversion otherwise passes
+        # silently and mislocates endpoints in _lightpath_endpoints (S7-1).
+        seq = lp.oms_sequence
+        for a, b in zip(seq, seq[1:]):
+            oa, ob = self._oms[a], self._oms[b]
+            if oa.dst_node_id != ob.src_node_id:
+                raise ValueError(
+                    f"lightpath {lp.id!r}: OMS chain break {a!r} "
+                    f"(->{oa.dst_node_id!r}) does not meet {b!r} "
+                    f"({ob.src_node_id!r}->)"
+                )
         self._lightpaths[lp.id] = lp
 
     def get_lightpath(self, lpid: str) -> Lightpath:
