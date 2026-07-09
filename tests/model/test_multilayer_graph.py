@@ -167,6 +167,38 @@ def _TM_helper():
                            symbol_rate_baud=32e9, channel_spacing_hz=100e9)
 
 
+def _cheap_route_plus_distinct_route() -> NetworkModel:
+    """A cheap 1-hop A->B route and a distinct 2-hop A->C->B route. Driven with a
+    wide grid, the cheap route's lambda-variants exceed the raw-path budget, so a
+    naive (per-emission) budget never reaches the strictly-more-expensive 2-hop
+    route."""
+    n = NetworkModel(modes=ModeRegistry([_TM_helper()]))
+    n.register_fiber_type(_FT("SSMF", 0.2))
+    for a in ("aba", "abz", "aca", "acz", "cba", "cbz"):
+        n.add_amplifier(_A(a, "advanced_toy", 20.0, 5.5))
+    n.add_fiber(_F("fab", "aba", "abz", 80.0, "SSMF"))
+    n.add_fiber(_F("fac", "aca", "acz", 80.0, "SSMF"))
+    n.add_fiber(_F("fcb", "cba", "cbz", 80.0, "SSMF"))
+    n.add_oms(_O("oms-AB", "A", "B", ("aba", "fab", "abz")))
+    n.add_oms(_O("oms-AC", "A", "C", ("aca", "fac", "acz")))
+    n.add_oms(_O("oms-CB", "C", "B", ("cba", "fcb", "cbz")))
+    return n
+
+
+def test_new_only_budget_not_starved_by_wavelength_variants():
+    """The distinct 2-hop route must be reachable even though >_PATH_BUDGET
+    lambda-variants of the cheaper 1-hop route precede it in weight order (they
+    would exhaust a raw-per-emission budget before the distinct route is seen)."""
+    from multilayer_optical_mcp.model.spectrum import SpectrumGrid
+    grid = SpectrumGrid(anchor_hz=191.4e12, spacing_hz=100e9, num_slots=80)
+    n = _cheap_route_plus_distinct_route()
+    g = build_layered_graph(n, grid=grid)
+    res = place_demands(n, g, FakeQot(15.0), src="A", dst="B",
+                        demand_gbps=100.0, policy="new_only", grid=grid)
+    routes = {p.new_lightpaths[0].oms_sequence for p in res if p.new_lightpaths}
+    assert ("oms-AC", "oms-CB") in routes, routes
+
+
 def test_groom_or_new_finds_hybrid_groom_plus_new():
     n = _groom_plus_gap_model()
     g = build_layered_graph(n)

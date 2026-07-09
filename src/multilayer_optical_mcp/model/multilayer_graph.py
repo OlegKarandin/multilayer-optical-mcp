@@ -264,8 +264,9 @@ def place_demands(
     ref_mode = model.modes.list()[0].id
     out: List[Placement] = []
     seen: set = set()
-    for i, path in enumerate(nx.shortest_simple_paths(h, s, t, weight="weight")):
-        if i >= _PATH_BUDGET or len(out) >= k:
+    examined = 0     # DISTINCT routes examined (budget counter, not raw emissions)
+    for path in nx.shortest_simple_paths(h, s, t, weight="weight"):
+        if len(out) >= k:
             break
         reused, new_runs = _parse_path(g, path)
         # Deduplicate by structural route (reused LP ids + new OMS sequences),
@@ -275,8 +276,13 @@ def place_demands(
         # instead of filling it with the same plan on every available slot.
         key = (tuple(reused), tuple(oms_seq for oms_seq, _, _, _ in new_runs))
         if key in seen:
-            continue
+            continue     # a lambda-variant of an already-seen route: does NOT
+                         # advance the budget, so a route with many free slots
+                         # can't starve structurally distinct routes.
         seen.add(key)
+        examined += 1
+        if examined > _PATH_BUDGET:
+            break
         realized: List[NewLightpathRun] = []
         feasible = True
         new_cap = float("inf")
