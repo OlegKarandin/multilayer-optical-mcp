@@ -22,3 +22,15 @@ def test_union_rejects_spectrum_clash():
     b = LoadingState(channels=(Channel(193.4e12, 100e9, None, "300G@4.8dB"),))
     with pytest.raises(ValueError, match="spectrum clash"):
         a.union(b)
+
+
+def test_union_allows_adjacent_channels():
+    """S2-1: touching-but-not-overlapping channels (a.high_hz == b.low_hz) must
+    union cleanly. The overlap predicate is strict '<' on both sides on purpose —
+    relaxing it to '<=' would reject legitimate adjacent channels on a 50 GHz grid.
+    Pinned here so that relaxation regresses loudly instead of silently."""
+    a = LoadingState(channels=(Channel(193.40e12, 100e9, None, "400G@7.1dB"),))
+    b = LoadingState(channels=(Channel(193.50e12, 100e9, None, "300G@4.8dB"),))
+    assert a.channels[0].high_hz == b.channels[0].low_hz  # exactly touching
+    merged = a.union(b)
+    assert len(merged.channels) == 2
