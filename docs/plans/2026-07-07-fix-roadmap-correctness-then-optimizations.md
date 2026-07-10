@@ -151,13 +151,26 @@ Order within batch is the roadmap's value÷risk order; each step independently s
    source (`TransceiverMode` lacks the field), so it falls back to the scalar 0.15.*
 
 ### Batch C8 — Small diagnostics & guards (Stage 4 E/F/G)
-1. **Step E — band-edge dummy (S4-1/A6) [Low]** — probe near the upper SI band edge ⇒ place the
-   dummy below the probe. Mostly moot after C2-Step C, keep for genuinely single-channel OMS.
-2. **Step F — limiting-element diagnostic (S4-7/A5) [Low]** — first decide: no CLAUDE.md tool
-   reads `limiting_element_id`, so either drop the field or compute it from finite-to-finite GSNR
-   deltas only. Pick deliberately; don't leave it silently wrong.
-3. **Step G — verify `_find_launch_transceiver` (S4-8)** — verification-only: assert a Transceiver
-   predecessor exists for toy and synthesized topologies; fix only if it fails.
+
+> **STATUS (2026-07-10): all 3 items landed on master.** GSNR unchanged
+> (`test_ground_truth_bridge.py` re-pin holds within `TOL_DB` — Step E only affects
+> genuinely single-channel band-edge probes, Step F only relabels the diagnostic).
+> Full suite green (267 passed). Tests: `tests/gnpy_adapter/test_c8_diagnostics.py`.
+> Step F resolved as **fix, not drop**: `limiting_element_id` *is* live tool surface
+> (`server.compute_qot`/`recompute`/`breakdown` + `views.ip_topology_dict`), so the
+> roadmap's "no CLAUDE.md tool reads it" premise was stale — corrected the min to
+> select from finite deltas only.
+
+1. ✅ **Step E — band-edge dummy (S4-1/A6) [Low]** — DONE. `_ensure_min_two_channels`
+   places the dummy below the probe (returning channels frequency-ascending) when
+   `probe + 100 GHz` would exceed the SI band edge `_SI_F_MAX_HZ` (196.1 THz).
+2. ✅ **Step F — limiting-element diagnostic (S4-7/A5) [Low]** — DONE **via fix** (not
+   drop). The min over GSNR deltas now guards `math.isfinite`, excluding the
+   first-noise `inf→finite` transition (`finite - inf = -inf`) that previously made the
+   booster always "limiting".
+3. ✅ **Step G — verify `_find_launch_transceiver` (S4-8)** — DONE (verification-only,
+   no production change). A Transceiver predecessor of the first path element exists
+   for both the synthesized (importer) and file-loaded toy topologies.
 
 ### Batch C9 — Layered-graph parallel-OMS collapse (Stage 7, newly found)
 1. **S7-13 layered-graph parallel-OMS collapse [Medium]** — (new; found 2026-07-09 during the C6

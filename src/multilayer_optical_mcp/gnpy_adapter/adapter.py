@@ -42,13 +42,25 @@ from .translate import (
 # state contains only a single carrier.
 _DUMMY_SPACING_HZ = 100e9
 
+# SI band upper edge (Hz). Mirrors the SI ``f_max`` synthesize.py builds
+# (191.3–196.1 THz) and the default spectrum grid's top slot (196.1 THz). A
+# single-channel dummy must stay within this edge; near the top of the band the
+# default ``probe + 100 GHz`` placement would land out of band (S4-1/A6).
+_SI_F_MAX_HZ = 196.1e12
+
 
 def _ensure_min_two_channels(loading: LoadingState, probe_freq_hz: float) -> LoadingState:
     """Return a loading state with at least two channels.
 
     If *loading* already has ≥ 2 channels, return it unchanged.  Otherwise
-    inject a dummy channel at ``probe_freq_hz + _DUMMY_SPACING_HZ`` so that
-    gnpy EDFAs (which require ≥ 2 carriers) can propagate.
+    inject a dummy channel one ``_DUMMY_SPACING_HZ`` step away from the probe so
+    that gnpy EDFAs (which require ≥ 2 carriers) can propagate.
+
+    The dummy is placed *above* the probe by default, but *below* it when the
+    above position would exceed the SI band edge (``_SI_F_MAX_HZ``) — otherwise a
+    probe near the top of the band would push the dummy out of band (S4-1/A6).
+    The returned channels are frequency-ascending so the frequency-resolved probe
+    index still aligns with gnpy's (frequency-ordered) SI arrays.
 
     The dummy uses the same mode_id as the probe channel so that
     ``build_si_for_loading`` receives a consistent label.  Its GSNR contribution
@@ -57,13 +69,20 @@ def _ensure_min_two_channels(loading: LoadingState, probe_freq_hz: float) -> Loa
     if len(loading.channels) >= 2:
         return loading
     probe = loading.channels[0]
+    above = probe_freq_hz + _DUMMY_SPACING_HZ
+    if above <= _SI_F_MAX_HZ:
+        dummy_freq_hz, ordered = above, (probe,)  # probe first (ascending)
+    else:
+        dummy_freq_hz, ordered = probe_freq_hz - _DUMMY_SPACING_HZ, None
     dummy = Channel(
-        center_freq_hz=probe_freq_hz + _DUMMY_SPACING_HZ,
+        center_freq_hz=dummy_freq_hz,
         slot_width_hz=probe.slot_width_hz,
         power_dbm=probe.power_dbm,
         mode_id=probe.mode_id,
     )
-    return LoadingState(channels=(probe, dummy))
+    # Keep channels frequency-ascending: dummy below → dummy first, else probe first.
+    channels = (dummy, probe) if ordered is None else (probe, dummy)
+    return LoadingState(channels=channels)
 
 
 def _find_probe_index(loading: LoadingState, probe_freq_hz: float) -> int:
@@ -358,15 +377,17 @@ def compute_qot(
     margin_db = final_gsnr_db - mode.required_gsnr_db
 
     # ------------------------------------------------------------------ limiting element
-    # The limiting element is the one with the most negative finite GSNR delta.
-    # Infinite deltas (first ASE introduction) are considered the "worst" in
-    # degradation terms — the first amplifier is always the primary noise source
-    # on a balanced chain — so we pick the minimum delta including -inf.
-    # If all deltas are +inf (degenerate case), there is no limiting element.
+    # The limiting element is the one with the most negative *finite* GSNR delta —
+    # the largest real degradation along the chain. Non-finite deltas are excluded
+    # (S4-7/A5): the first noise-introducing element (booster) transitions the
+    # probe from the noise-free +inf regime to a finite GSNR, giving a spurious
+    # ``finite - inf = -inf`` delta that would otherwise always win this min and
+    # make the diagnostic meaningless. Elements before any noise (+inf → +inf give
+    # NaN) are likewise skipped. If no finite delta exists, there is none.
     limiting_element_id: str | None = None
     min_delta = math.inf
     for snap in snapshots:
-        if snap.gsnr_delta_db < min_delta:
+        if math.isfinite(snap.gsnr_delta_db) and snap.gsnr_delta_db < min_delta:
             min_delta = snap.gsnr_delta_db
             limiting_element_id = snap.element_id
 
