@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from weakref import WeakKeyDictionary
 
 from ..model.network import NetworkModel
+from .bands import AMP_BAND, SI_BAND, TRANSCEIVER_BAND
 
 ROADM_TARGET_PCH_OUT_DB = -20.0
 ROADM_ADD_DROP_OSNR = 33.0
@@ -86,8 +87,10 @@ def _adv_config_path(nf: float, tmpdir: Path) -> str:
     """Write an advanced_model NF config file and return its path string."""
     cfg = {
         "nf_fit_coeff": [0.0, 0.0, 0.0, float(nf)],
-        "f_min": 191.275e12,
-        "f_max": 196.125e12,
+        # S3-10: the amp NF-fit band is one guard band wider than the SI channel
+        # band on each edge (see bands.py). Derived, not a bare literal.
+        "f_min": AMP_BAND.f_min_hz,
+        "f_max": AMP_BAND.f_max_hz,
         "nf_ripple": [0.0],
         "dgt": [1.0],
         "gain_ripple": [0.0],
@@ -145,11 +148,14 @@ def model_to_gnpy_equipment(model: NetworkModel,
         "Roadm": [{"target_pch_out_db": ROADM_TARGET_PCH_OUT_DB,
                    "add_drop_osnr": ROADM_ADD_DROP_OSNR, "pmd": 0, "pdl": 0,
                    "restrictions": {"preamp_variety_list": [], "booster_variety_list": []}}],
-        "SI": [{"f_min": 191.3e12, "baud_rate": 87.5e9, "f_max": 196.1e12,
+        "SI": [{"f_min": SI_BAND.f_min_hz, "baud_rate": 87.5e9,
+                "f_max": SI_BAND.f_max_hz,
                 "spacing": 100e9, "power_dbm": 0, "power_range_db": [0, 0, 1],
                 "roll_off": 0.15, "tx_osnr": 40, "sys_margins": 2}],
         "Transceiver": [{"type_variety": "vendor-A",
-                         "frequency": {"min": 191.35e12, "max": 196.1e12}, "mode": []}],
+                         "frequency": {"min": TRANSCEIVER_BAND.f_min_hz,
+                                       "max": TRANSCEIVER_BAND.f_max_hz},
+                         "mode": []}],
     }
 
 
