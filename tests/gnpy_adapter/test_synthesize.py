@@ -132,6 +132,31 @@ def test_non_ssmf_fiber_builds_without_keyerror():
     assert any(n.uid == "fiber_0_1_0" for n in network.nodes)
 
 
+def test_amps_share_one_documented_edfa_envelope_regardless_of_gain():
+    """S3-8: every synthesized advanced_model Edfa carries the SAME gain/power
+    envelope (gain_flatmax/gain_min/p_max) regardless of its per-instance gain_db.
+    Only NF and tilt vary per amp. Lock the single-envelope assumption as an
+    executable invariant and source the numbers from named constants, not literals.
+    """
+    from multilayer_optical_mcp.gnpy_adapter.synthesize import (
+        _EDFA_GAIN_FLATMAX_DB, _EDFA_GAIN_MIN_DB, _EDFA_P_MAX_DBM,
+    )
+    n = NetworkModel(modes=_reg())
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    # two amps with very different gains — the envelope must not vary with gain.
+    n.add_amplifier(Amplifier(id="amp_lo", type_variety="advanced_toy",
+                              gain_db=8.0, nf_db=5.5))
+    n.add_amplifier(Amplifier(id="amp_hi", type_variety="advanced_toy",
+                              gain_db=22.0, nf_db=7.5))
+    eqpt = model_to_gnpy_equipment(n)
+    envelopes = {
+        (e["gain_flatmax"], e["gain_min"], e["p_max"]) for e in eqpt["Edfa"]
+    }
+    assert envelopes == {
+        (_EDFA_GAIN_FLATMAX_DB, _EDFA_GAIN_MIN_DB, _EDFA_P_MAX_DBM)
+    }
+
+
 def test_unresolvable_oms_endpoint_raises():
     """S3-11/S3-4: an OMS endpoint that is neither roadm_<id> nor a registered
     transceiver must raise, not silently synthesize a penalty-free Transceiver."""

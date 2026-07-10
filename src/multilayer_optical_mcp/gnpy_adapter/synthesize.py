@@ -16,6 +16,19 @@ ROADM_ADD_DROP_OSNR = 33.0
 # from the design reference channel power (pch) and the ROADM target_pch_out.
 TX_LAUNCH_POWER_DBM = 0.0
 
+# S3-8: single EDFA gain/power envelope shared by EVERY synthesized advanced_model
+# amplifier. Per-amp state (NF via nf_fit_coeff, tilt) varies; the envelope does
+# not. This assumes a homogeneous C-band EDFA line — adequate for the toy and
+# reference topologies, whose amps all operate well inside 0..25 dB gain and below
+# 23 dBm output. Documented (not derived from the model's amps) on purpose: this
+# is an O3 hygiene batch, and deriving per-amp gain_flatmax/p_max would move GSNR
+# (propagation clamps effective_gain to p_max - pin_db), while no reference amp
+# comes near the envelope today. A topology whose amps exceed 0..25 dB / 23 dBm
+# would need per-amp envelopes derived here instead.
+_EDFA_GAIN_FLATMAX_DB = 25
+_EDFA_GAIN_MIN_DB = 0
+_EDFA_P_MAX_DBM = 23
+
 
 def _physical_fingerprint(model: NetworkModel) -> tuple:
     """Order-independent hashable key over exactly the model state that feeds
@@ -115,9 +128,10 @@ def model_to_gnpy_equipment(model: NetworkModel,
         {
             "type_variety": nf_type_variety(nf),
             "type_def": "advanced_model",
-            "gain_flatmax": 25,
-            "gain_min": 0,
-            "p_max": 23,
+            # S3-8: one shared envelope for all amps (see the constants above).
+            "gain_flatmax": _EDFA_GAIN_FLATMAX_DB,
+            "gain_min": _EDFA_GAIN_MIN_DB,
+            "p_max": _EDFA_P_MAX_DBM,
             "advanced_config_from_json": _adv_config_path(nf, _tmpdir),
             "out_voa_auto": False,
             "allowed_for_design": True,
