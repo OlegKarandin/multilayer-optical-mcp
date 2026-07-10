@@ -199,6 +199,43 @@ def test_new_only_budget_not_starved_by_wavelength_variants():
     assert ("oms-AC", "oms-CB") in routes, routes
 
 
+def _two_parallel_oms_model() -> NetworkModel:
+    """Two parallel A->B OMS (oms-AB-1, oms-AB-2) on physically-separate fibers,
+    no existing lightpath. A new A->B lightpath can be lit on EITHER fiber, so
+    both routes must be enumerable. On a plain nx.DiGraph the two WLE edges share
+    the ordered vertex pair ((WL,A,lam)->(WL,B,lam)) per slot and the second
+    overwrites the first (S7-13), collapsing them to one route."""
+    n = NetworkModel(modes=ModeRegistry([_TM_helper()]))
+    n.register_fiber_type(_FT("SSMF", 0.2))
+    for a in ("p1a", "p1z", "p2a", "p2z"):
+        n.add_amplifier(_A(a, "advanced_toy", 20.0, 5.5))
+    n.add_fiber(_F("fab1", "p1a", "p1z", 80.0, "SSMF"))
+    n.add_fiber(_F("fab2", "p2a", "p2z", 80.0, "SSMF"))
+    n.add_oms(_O("oms-AB-1", "A", "B", ("p1a", "fab1", "p1z")))
+    n.add_oms(_O("oms-AB-2", "A", "B", ("p2a", "fab2", "p2z")))
+    return n
+
+
+def test_parallel_oms_both_routes_enumerable():
+    """S7-13: both parallel A->B fibers must surface as distinct new-lightpath
+    routes; the DiGraph WL-layer overwrite silently kept only the last-added one."""
+    n = _two_parallel_oms_model()
+    g = build_layered_graph(n)
+    res = place_demands(n, g, FakeQot(15.0), src="A", dst="B",
+                        demand_gbps=100.0, policy="new_only")
+    routes = {p.new_lightpaths[0].oms_sequence for p in res if p.new_lightpaths}
+    assert routes == {("oms-AB-1",), ("oms-AB-2",)}, routes
+
+
+def test_wle_count_counts_parallel_oms_per_layer():
+    """Each parallel OMS contributes its own WLE edges per free slot (2 dirs);
+    the DiGraph overwrite would report a single OMS's count."""
+    n = _two_parallel_oms_model()
+    g = build_layered_graph(n)
+    assert wle_count_on_layer(g, "oms-AB-1", 0) == 2
+    assert wle_count_on_layer(g, "oms-AB-2", 0) == 2
+
+
 def test_groom_or_new_finds_hybrid_groom_plus_new():
     n = _groom_plus_gap_model()
     g = build_layered_graph(n)

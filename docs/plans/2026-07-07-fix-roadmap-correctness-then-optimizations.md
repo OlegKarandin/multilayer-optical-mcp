@@ -173,6 +173,19 @@ Order within batch is the roadmap's value÷risk order; each step independently s
    for both the synthesized (importer) and file-loaded toy topologies.
 
 ### Batch C9 — Layered-graph parallel-OMS collapse (Stage 7, newly found)
+
+> **STATUS (2026-07-10): landed on master.** `build_layered_graph` now returns an
+> `nx.MultiDiGraph` (WLE keyed by `oms.id`, LPE by `lp.id`); `place_demands` enumerates over a
+> `_collapse_to_simple` DiGraph (since `shortest_simple_paths` is not implemented for
+> multigraphs) and `_parse_paths` re-expands per-hop parallel edges via `itertools.product`
+> (mirrors the S6-4 collapse-then-expand). New tests: `test_parallel_oms_both_routes_enumerable`,
+> `test_wle_count_counts_parallel_oms_per_layer`. **Bonus:** fixed a pre-existing
+> generator-drain (confirmed 436s on master for the wide-grid S7-6 test) via a `_RAW_PATH_CAP`
+> safety valve — neither the distinct-route `_PATH_BUDGET` nor the `_DEFAULT_K` placement guard
+> bounds the raw `shortest_simple_paths` generator when distinct routes are few, so it enumerated
+> every lambda-mixing simple path. Wide-grid test 436s → ~3s; full suite 269 passed in 31s. No
+> physics touched (no ground-truth re-pin needed).
+
 1. **S7-13 layered-graph parallel-OMS collapse [Medium]** — (new; found 2026-07-09 during the C6
    S7-6 fix, recorded as Stage 7 finding 13 in `inspection-roadmap.md`). `build_layered_graph`
    uses `nx.DiGraph`, so `g.add_edge((WL,a,lam),(WL,b,lam), oms_id=…)` for two parallel OMS on the

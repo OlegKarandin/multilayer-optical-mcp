@@ -24,8 +24,9 @@ a new lightpath on that wavelength. No CvtE: wavelength continuity is structural
 """
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, List, Optional, Tuple
+from typing import Dict, FrozenSet, Iterator, List, Optional, Tuple
 
 import networkx as nx
 
@@ -90,12 +91,19 @@ def build_layered_graph(
     forbidden_assets: FrozenSet[str] = frozenset(),
     *,
     grid: SpectrumGrid | None = None,
-) -> nx.DiGraph:
+) -> nx.MultiDiGraph:
     """Construct the layered auxiliary graph for the model's current loading.
     `forbidden_assets` prunes any OMS touching them (no WLE) and any lightpath
-    crossing them (no LPE)."""
+    crossing them (no LPE).
+
+    A MultiDiGraph (not a plain DiGraph) so parallel OMS between the same ordered
+    node pair stay distinct per wavelength: on a DiGraph the second WLE
+    ``(WL,a,lam)->(WL,b,lam)`` overwrites the first, silently collapsing parallel
+    fibers to one route per slot (S7-13). Mirrors the flat OMS solver's
+    MultiDiGraph (S6-4). Parallel lightpaths on the same access hop stay distinct
+    for the same reason."""
     grid = grid or SpectrumGrid.default()
-    g = nx.DiGraph()
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
     spectrum = build_spectrum_state(model, grid)
 
     # forbidden OMS: any OMS whose asset set / endpoints intersect forbidden_assets
@@ -120,7 +128,7 @@ def build_layered_graph(
         if residual <= 0.0:
             continue
         u, v = _lightpath_endpoints(model, lp)
-        g.add_edge((ACCESS, u), (ACCESS, v),
+        g.add_edge((ACCESS, u), (ACCESS, v), key=lp.id,
                    kind="LPE", lightpath_id=lp.id, residual_gbps=residual,
                    weight=_W_LPE)
 
@@ -134,20 +142,25 @@ def build_layered_graph(
             if (occ >> lam) & 1:
                 continue   # slot lit -> no WLE
             for a, b in ((u, v), (v, u)):
-                g.add_edge((WL, a, lam), (WL, b, lam),
+                # key=oms.id keeps each parallel OMS a distinct WLE edge on the
+                # ordered (WL,a,lam)->(WL,b,lam) pair (the S7-13 fix); TxE/RxE use
+                # a constant key so multiple OMS at the same node/slot collapse to
+                # one launch/terminate edge rather than accumulating duplicates.
+                g.add_edge((WL, a, lam), (WL, b, lam), key=oms.id,
                            kind="WLE", oms_id=oms.id, lam=lam, weight=_W_WLE)
-                # TxE / RxE tie the wavelength layer to access at each endpoint
-                g.add_edge((ACCESS, a), (WL, a, lam), kind="TxE", lam=lam, weight=_W_NEW_LP)
-                g.add_edge((WL, b, lam), (ACCESS, b), kind="RxE", lam=lam, weight=_W_RXE)
+                g.add_edge((ACCESS, a), (WL, a, lam), key="TxE",
+                           kind="TxE", lam=lam, weight=_W_NEW_LP)
+                g.add_edge((WL, b, lam), (ACCESS, b), key="RxE",
+                           kind="RxE", lam=lam, weight=_W_RXE)
     return g
 
 
-def lpe_edges(g: nx.DiGraph) -> List[Tuple]:
+def lpe_edges(g: nx.MultiDiGraph) -> List[Tuple]:
     """All LPE edges as (u, v, data)."""
     return [(u, v, d) for u, v, d in g.edges(data=True) if d.get("kind") == "LPE"]
 
 
-def wle_count_on_layer(g: nx.DiGraph, oms_id: str, lam: int) -> int:
+def wle_count_on_layer(g: nx.MultiDiGraph, oms_id: str, lam: int) -> int:
     """Number of WLE edges for an OMS on a given wavelength layer (0 or 2:
     one per direction)."""
     return sum(1 for _, _, d in g.edges(data=True)
@@ -186,8 +199,19 @@ class Placement:
 _PATH_BUDGET = 64
 _DEFAULT_K = 8
 
+# Generous safety cap on RAW node paths drawn from shortest_simple_paths. The
+# _PATH_BUDGET / _DEFAULT_K guards count DISTINCT routes / accepted placements, so
+# on a topology with few distinct routes but a wide grid neither fires and the
+# generator drains to exhaustion — thousands of lambda-mixing simple paths (new
+# lightpaths regenerated across slots at an access node), Yen's algorithm churning
+# on each. This bounds that work while staying far above the lambda-variant count
+# that would otherwise starve a strictly-more-expensive distinct route (the S7-6
+# guard): a full C-band's worth of slots is < 128, so 1024 clears ~8 cheaper
+# distinct routes' variants before cutting off.
+_RAW_PATH_CAP = 1024
 
-def _policy_graph(g: nx.DiGraph, policy: str) -> nx.DiGraph:
+
+def _policy_graph(g: nx.MultiDiGraph, policy: str) -> nx.MultiDiGraph:
     """Restrict the graph to a lever:
       groom_only   - drop TxE edges: reuse existing lightpaths only (no new).
       new_only     - drop LPE edges: force fresh lightpaths (no reuse).
@@ -198,45 +222,73 @@ def _policy_graph(g: nx.DiGraph, policy: str) -> nx.DiGraph:
         raise ValueError(f"unknown policy {policy!r}")
     drop_kind = "TxE" if policy == "groom_only" else "LPE"
     h = g.copy()
-    h.remove_edges_from([(u, v) for u, v, d in h.edges(data=True)
+    h.remove_edges_from([(u, v, key) for u, v, key, d in h.edges(keys=True, data=True)
                          if d.get("kind") == drop_kind])
     return h
 
 
-def _parse_path(
-    g: nx.DiGraph, path: List,
-) -> Tuple[List[str], List[Tuple[Tuple[str, ...], int, str, str]]]:
-    """Split an access->access vertex path into (reused_lightpath_ids, new_runs)
-    where each new_run is (oms_sequence, lam, src_node, dst_node). The travel
-    endpoints come from the WL-vertex node components ((WL, node, lam)), so a
-    return-direction run over a physically-forward OMS records its true direction
-    rather than the OMS's physical orientation."""
-    reused: List[str] = []
-    new_runs: List[Tuple[Tuple[str, ...], int, str, str]] = []
-    cur_oms: List[str] = []
-    cur_lam: Optional[int] = None
-    cur_src: Optional[str] = None
-    cur_dst: Optional[str] = None
-    for a, b in zip(path, path[1:]):
-        d = g.get_edge_data(a, b)
-        kind = d.get("kind")
-        if kind == "LPE":
-            reused.append(d["lightpath_id"])
-        elif kind == "WLE":
-            cur_oms.append(d["oms_id"])
-            cur_lam = d["lam"]
-            if cur_src is None:
-                cur_src = a[1]      # from-node of the first hop in this run
-            cur_dst = b[1]          # to-node, advanced each hop
-        elif kind == "RxE":
-            if cur_oms:
-                new_runs.append((tuple(cur_oms), cur_lam, cur_src, cur_dst))
-                cur_oms, cur_lam, cur_src, cur_dst = [], None, None, None
-        # TxE: entry into a wl layer; nothing to record
-    return reused, new_runs
+def _collapse_to_simple(h: nx.MultiDiGraph) -> nx.DiGraph:
+    """Collapse parallel edges to a simple DiGraph for node-simple-path
+    enumeration (`nx.shortest_simple_paths` is not implemented for multigraphs),
+    each simple edge carrying the MIN parallel weight so the ordering matches the
+    cheapest realisation of the hop. The per-hop parallel choices are re-expanded
+    over the MultiDiGraph afterwards (`_parse_paths`) — mirrors the flat solver's
+    collapse-then-expand (S6-4)."""
+    simple = nx.DiGraph()
+    simple.add_nodes_from(h.nodes)
+    for u, v, d in h.edges(data=True):
+        w = d.get("weight", 1.0)
+        if simple.has_edge(u, v):
+            simple[u][v]["weight"] = min(simple[u][v]["weight"], w)
+        else:
+            simple.add_edge(u, v, weight=w)
+    return simple
 
 
-def _bottleneck_residual(g: nx.DiGraph, reused: List[str]) -> float:
+def _parse_paths(
+    g: nx.MultiDiGraph, path: List,
+) -> Iterator[Tuple[List[str], List[Tuple[Tuple[str, ...], int, str, str]]]]:
+    """Expand an access->access *vertex* path into every concrete
+    (reused_lightpath_ids, new_runs) it realises, choosing among parallel edges
+    per hop. On a MultiDiGraph a single node path may correspond to several routes
+    when parallel OMS (or parallel lightpaths) share an ordered vertex pair
+    (S7-13) — `nx.shortest_simple_paths` yields node paths only, so the per-hop
+    choice is re-expanded here (mirrors the flat solver's `itertools.product`).
+
+    Each new_run is (oms_sequence, lam, src_node, dst_node); the travel endpoints
+    come from the WL-vertex node components ((WL, node, lam)), so a return-direction
+    run over a physically-forward OMS records its true direction rather than the
+    OMS's physical orientation."""
+    hops = list(zip(path, path[1:]))
+    # per hop: the list of parallel edge-data dicts (MultiDiGraph get_edge_data
+    # returns {key: data}); a plain node path collapses these into one choice.
+    per_hop = [list(g.get_edge_data(a, b).values()) for a, b in hops]
+    for combo in itertools.product(*per_hop):
+        reused: List[str] = []
+        new_runs: List[Tuple[Tuple[str, ...], int, str, str]] = []
+        cur_oms: List[str] = []
+        cur_lam: Optional[int] = None
+        cur_src: Optional[str] = None
+        cur_dst: Optional[str] = None
+        for (a, b), d in zip(hops, combo):
+            kind = d.get("kind")
+            if kind == "LPE":
+                reused.append(d["lightpath_id"])
+            elif kind == "WLE":
+                cur_oms.append(d["oms_id"])
+                cur_lam = d["lam"]
+                if cur_src is None:
+                    cur_src = a[1]      # from-node of the first hop in this run
+                cur_dst = b[1]          # to-node, advanced each hop
+            elif kind == "RxE":
+                if cur_oms:
+                    new_runs.append((tuple(cur_oms), cur_lam, cur_src, cur_dst))
+                    cur_oms, cur_lam, cur_src, cur_dst = [], None, None, None
+            # TxE: entry into a wl layer; nothing to record
+        yield reused, new_runs
+
+
+def _bottleneck_residual(g: nx.MultiDiGraph, reused: List[str]) -> float:
     """Min residual_gbps across the reused LPE edges (inf if none reused)."""
     if not reused:
         return float("inf")
@@ -246,7 +298,7 @@ def _bottleneck_residual(g: nx.DiGraph, reused: List[str]) -> float:
 
 
 def place_demands(
-    model: NetworkModel, g: nx.DiGraph, qot, *,
+    model: NetworkModel, g: nx.MultiDiGraph, qot, *,
     src: str, dst: str, demand_gbps: float, policy: str,
     k: int = _DEFAULT_K, grid: Optional[SpectrumGrid] = None,
 ) -> List[Placement]:
@@ -257,55 +309,64 @@ def place_demands(
     from .allocation import _build_loading, _best_feasible_mode
     grid = grid or SpectrumGrid.default()
     h = _policy_graph(g, policy)
+    simple = _collapse_to_simple(h)
     s, t = (ACCESS, src), (ACCESS, dst)
-    if s not in h or t not in h or not nx.has_path(h, s, t):
+    if s not in simple or t not in simple or not nx.has_path(simple, s, t):
         return []
     spectrum = build_spectrum_state(model, grid)
     ref_mode = model.modes.list()[0].id
     out: List[Placement] = []
     seen: set = set()
     examined = 0     # DISTINCT routes examined (budget counter, not raw emissions)
-    for path in nx.shortest_simple_paths(h, s, t, weight="weight"):
-        if len(out) >= k:
+    raw_paths = 0    # RAW node paths drawn (safety valve against generator drain)
+    budget_hit = False
+    for path in nx.shortest_simple_paths(simple, s, t, weight="weight"):
+        if len(out) >= k or budget_hit or raw_paths >= _RAW_PATH_CAP:
             break
-        reused, new_runs = _parse_path(g, path)
-        # Deduplicate by structural route (reused LP ids + new OMS sequences),
-        # ignoring wavelength slot: same OMS sequence on lam=0 and lam=1 is the
-        # same route option, just a different channel assignment. Collapsing them
-        # keeps the k-best frontier meaningful (diverse routes/groom combos)
-        # instead of filling it with the same plan on every available slot.
-        key = (tuple(reused), tuple(oms_seq for oms_seq, _, _, _ in new_runs))
-        if key in seen:
-            continue     # a lambda-variant of an already-seen route: does NOT
-                         # advance the budget, so a route with many free slots
-                         # can't starve structurally distinct routes.
-        seen.add(key)
-        examined += 1
-        if examined > _PATH_BUDGET:
-            break
-        realized: List[NewLightpathRun] = []
-        feasible = True
-        new_cap = float("inf")
-        for oms_seq, lam, run_src, run_dst in new_runs:
-            loading = _build_loading(grid, spectrum, oms_seq, lam, ref_mode)
-            mode, gsnr = _best_feasible_mode(model, qot, oms_seq, loading, ref_mode)
-            if mode is None:
-                feasible = False
+        raw_paths += 1
+        # One node path may realise several routes when parallel OMS/lightpaths
+        # share an ordered vertex pair (S7-13); expand the per-hop choices.
+        for reused, new_runs in _parse_paths(h, path):
+            if len(out) >= k:
                 break
-            realized.append(NewLightpathRun(oms_seq, lam, mode.id, gsnr,
-                                             mode.bitrate_gbps,
-                                             src_node=run_src, dst_node=run_dst))
-            new_cap = min(new_cap, mode.bitrate_gbps)
-        if not feasible:
-            continue
-        groom_cap = _bottleneck_residual(g, reused)
-        restored = min(demand_gbps, groom_cap, new_cap)
-        if restored <= 0.0:
-            continue
-        out.append(Placement(
-            reused_lightpaths=tuple(reused),
-            new_lightpaths=tuple(realized),
-            restored_gbps=restored,
-            shortfall_gbps=max(0.0, demand_gbps - restored),
-        ))
+            # Deduplicate by structural route (reused LP ids + new OMS sequences),
+            # ignoring wavelength slot: same OMS sequence on lam=0 and lam=1 is the
+            # same route option, just a different channel assignment. Collapsing
+            # them keeps the k-best frontier meaningful (diverse routes/groom
+            # combos) instead of filling it with the same plan on every free slot.
+            key = (tuple(reused), tuple(oms_seq for oms_seq, _, _, _ in new_runs))
+            if key in seen:
+                continue     # a lambda-variant of an already-seen route: does NOT
+                             # advance the budget, so a route with many free slots
+                             # can't starve structurally distinct routes.
+            seen.add(key)
+            examined += 1
+            if examined > _PATH_BUDGET:
+                budget_hit = True
+                break
+            realized: List[NewLightpathRun] = []
+            feasible = True
+            new_cap = float("inf")
+            for oms_seq, lam, run_src, run_dst in new_runs:
+                loading = _build_loading(grid, spectrum, oms_seq, lam, ref_mode)
+                mode, gsnr = _best_feasible_mode(model, qot, oms_seq, loading, ref_mode)
+                if mode is None:
+                    feasible = False
+                    break
+                realized.append(NewLightpathRun(oms_seq, lam, mode.id, gsnr,
+                                                 mode.bitrate_gbps,
+                                                 src_node=run_src, dst_node=run_dst))
+                new_cap = min(new_cap, mode.bitrate_gbps)
+            if not feasible:
+                continue
+            groom_cap = _bottleneck_residual(g, reused)
+            restored = min(demand_gbps, groom_cap, new_cap)
+            if restored <= 0.0:
+                continue
+            out.append(Placement(
+                reused_lightpaths=tuple(reused),
+                new_lightpaths=tuple(realized),
+                restored_gbps=restored,
+                shortfall_gbps=max(0.0, demand_gbps - restored),
+            ))
     return out

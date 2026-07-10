@@ -583,7 +583,17 @@ transponders, hops) (:104) → status.
     custom `grid` to one and the default to the other would desync the WLE layers from the NLI
     comb. **ACTION: thread one grid/spectrum through both, or note the invariant.**
 13. **Parallel OMS collapse per wavelength on the `nx.DiGraph` WL layers [Medium — not
-    previously recorded; found 2026-07-09 during the C6 S7-6 fix].** `build_layered_graph`
+    previously recorded; found 2026-07-09 during the C6 S7-6 fix]. FIXED 2026-07-10 (Batch
+    C9).** `build_layered_graph` now returns an `nx.MultiDiGraph`, keying each parallel OMS's
+    WLE by `oms.id` so the two no longer overwrite; `shortest_simple_paths` (not implemented
+    for multigraphs) runs over a `_collapse_to_simple` DiGraph and `_parse_paths` re-expands the
+    per-hop parallel-edge choices via `itertools.product` (mirrors the S6-4 solver's
+    collapse-then-expand). Also fixed a **pre-existing** generator-drain (confirmed 436s on
+    master for the wide-grid S7-6 test): when a topology has few distinct routes, neither
+    `_PATH_BUDGET` (distinct-route) nor `_DEFAULT_K` (placement) guard fires and
+    `shortest_simple_paths` enumerates every lambda-mixing simple path — a new `_RAW_PATH_CAP`
+    (1024 raw node paths) bounds it (436s → ~3s). *Original finding text below.*
+    `build_layered_graph`
     adds WLE edges on a plain `nx.DiGraph` (multilayer_graph.py:98) via
     `g.add_edge((WL, a, lam), (WL, b, lam), oms_id=…)` (:137). When two **parallel OMS** share
     the same ordered node pair `a→b` and the same free slot `lam`, the second `add_edge`
