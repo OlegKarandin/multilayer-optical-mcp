@@ -236,6 +236,67 @@ def test_wle_count_counts_parallel_oms_per_layer():
     assert wle_count_on_layer(g, "oms-AB-2", 0) == 2
 
 
+# ---------------------------------------------------------------------------
+# O2: hoist the offered-load map + min-over-bound-links residual
+# ---------------------------------------------------------------------------
+
+def _multi_link_lightpath_model() -> NetworkModel:
+    """One lightpath (lp-AB) bound to TWO IP links (ip-AB loaded 60G, ip-AB2
+    loaded 20G), both reading the 100G mode. residual_gbps per link:
+    ip-AB -> 40, ip-AB2 -> 80. `max` reports 80 (the healthy link); `min`
+    reports 40 (the bottleneck link a groom is actually limited by)."""
+    n = _one_lightpath_model()               # lp-AB, ip-AB (R1->R2)
+    n.add_router(_R("R3", "A"))
+    n.add_router(_R("R4", "B"))
+    n.add_ip_link(_I("ip-AB2", "R3", "R4", "lp-AB"))  # 2nd link on same lightpath
+    n.add_service(Service("s1", "R1", "R2", 60.0, working_path=("ip-AB",)))
+    n.add_service(Service("s2", "R3", "R4", 20.0, working_path=("ip-AB2",)))
+    return n
+
+
+def test_residual_is_min_over_bound_ip_links_not_max():
+    """A lightpath serving two IP links, one more loaded than the other, reports
+    the BOTTLENECK residual (min), not the healthiest link's headroom (max) —
+    max would overstate capacity the groom can't actually use."""
+    n = _multi_link_lightpath_model()
+    g = build_layered_graph(n)
+    (u, v, data), = lpe_edges(g)
+    assert data["residual_gbps"] == 40.0     # min(40, 80), not max
+
+
+def _two_ip_bound_lightpaths_model() -> NetworkModel:
+    """Two lightpaths, each bound to its own IP link, so both exercise the
+    load-map branch of _residual_gbps (the no-IP-link branch skips the map)."""
+    n = _one_lightpath_model()               # oms-AB, lp-AB, ip-AB
+    for a in ("c1", "c2"):
+        n.add_amplifier(_A(a, "advanced_toy", 20.0, 5.5))
+    n.add_fiber(_F("fCD", "c1", "c2", 80.0, "SSMF"))
+    n.add_oms(_O("oms-CD", "C", "D", ("c1", "fCD", "c2")))
+    n.add_lightpath(_L("lp-CD", ("oms-CD",), "100G", 193.4e12))
+    n.set_qot_state("lp-CD", QoTState(gsnr_db=15.0, osnr_db=30.0, margin_db=3.0))
+    n.add_router(_R("R3", "C"))
+    n.add_router(_R("R4", "D"))
+    n.add_ip_link(_I("ip-CD", "R3", "R4", "lp-CD"))
+    return n
+
+
+def test_offered_load_map_built_once_per_graph_build(monkeypatch):
+    """S5-8/S7-8: the offered-load map is built ONCE per build_layered_graph,
+    not rebuilt inside the per-lightpath loop (O(L·S) -> O(L+S))."""
+    from multilayer_optical_mcp.model import ip_routing
+    n = _two_ip_bound_lightpaths_model()
+    calls = {"n": 0}
+    real = ip_routing.offered_load_per_link
+
+    def counting(model):
+        calls["n"] += 1
+        return real(model)
+
+    monkeypatch.setattr(ip_routing, "offered_load_per_link", counting)
+    build_layered_graph(n)
+    assert calls["n"] == 1                   # once, despite two lightpaths
+
+
 def test_groom_or_new_finds_hybrid_groom_plus_new():
     n = _groom_plus_gap_model()
     g = build_layered_graph(n)
