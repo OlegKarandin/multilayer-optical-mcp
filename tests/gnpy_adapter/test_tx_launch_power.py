@@ -10,7 +10,7 @@ too optimistic.
 from multilayer_optical_mcp.gnpy_adapter.loading import Channel, LoadingState
 from multilayer_optical_mcp.gnpy_adapter.translate import build_si_for_loading
 
-LOADING = LoadingState((Channel(193.4e12, 100e9, 0.0, "M"),))
+LOADING = LoadingState((Channel(193.4e12, 100e9, None, "M"),))
 
 
 def test_tx_power_defaults_to_launch_power_not_pch():

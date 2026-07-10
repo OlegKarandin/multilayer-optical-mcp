@@ -21,7 +21,7 @@ def _model_with_lightpath():
 def test_recompute_writes_state_and_returns_result_ids():
     n = _model_with_lightpath(); store = QoTResultStore()
     loading = LoadingState(channels=(
-        Channel(193.4e12, 100e9, 0.0, "400G@7.1dB"),
+        Channel(193.4e12, 100e9, None, "400G@7.1dB"),
     ))
     results = recompute_qot_under_loading(model=n, store=store, loading=loading)
     state, rid = results["lp1"]

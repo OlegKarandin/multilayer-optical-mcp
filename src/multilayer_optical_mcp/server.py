@@ -80,7 +80,9 @@ def build_app() -> FastMCP:
                 Channel(
                     center_freq_hz=c["center_freq_hz"],
                     slot_width_hz=c["slot_width_hz"],
-                    power_dbm=c["power_dbm"],
+                    # S2-2: omit or pass null for the tx_power default; a literal
+                    # 0.0 now means 0 dBm, not "don't care".
+                    power_dbm=c.get("power_dbm"),
                     mode_id=c["mode_id"],
                 )
                 for c in channels

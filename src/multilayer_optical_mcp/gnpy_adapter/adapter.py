@@ -425,7 +425,7 @@ def _per_path_loading(grid, occ_mask: int, probe_slot: int, mode_id: str) -> Loa
     slots = sorted({probe_slot} | {s for s in range(grid.num_slots)
                                    if (occ_mask >> s) & 1})
     channels = tuple(
-        Channel(grid.freq(s), grid.spacing_hz, 0.0, mode_id) for s in slots
+        Channel(grid.freq(s), grid.spacing_hz, None, mode_id) for s in slots
     )
     return LoadingState(channels)
 

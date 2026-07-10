@@ -100,9 +100,10 @@ def build_si_for_loading(
     tx_osnr:
         Transmitter OSNR in dB.
     tx_power_dbm:
-        Default per-channel *fiber-input* power (pch) in dBm when the channel's
-        own power_dbm field is 0.0. This is the ROADM ``target_pch_out`` the
-        channel enters the line at. Defaults to -20 dBm (1e-5 W).
+        Default per-channel *fiber-input* power (pch) in dBm used when the
+        channel's own ``power_dbm`` is ``None`` (S2-2). This is the ROADM
+        ``target_pch_out`` the channel enters the line at. Defaults to -20 dBm
+        (1e-5 W). A channel carrying a literal 0.0 now means 0 dBm, not "default".
     tx_launch_power_dbm:
         The *transponder launch* power in dBm, distinct from pch. It sets gnpy's
         ``tx_power`` and hence the TX-OSNR noise floor
@@ -135,10 +136,11 @@ def build_si_for_loading(
     import numpy as np
 
     frequencies = np.array([ch.center_freq_hz for ch in loading.channels], dtype=float)
-    # Use channel's own power if non-zero, otherwise fall back to tx_power_dbm.
+    # S2-2: use the channel's own power when set, else fall back to tx_power_dbm.
+    # None is the "default" sentinel; 0.0 is now a literal 0 dBm launch.
     powers_w = np.array(
         [
-            _dbm_to_watt(ch.power_dbm if ch.power_dbm != 0.0 else tx_power_dbm)
+            _dbm_to_watt(ch.power_dbm if ch.power_dbm is not None else tx_power_dbm)
             for ch in loading.channels
         ],
         dtype=float,

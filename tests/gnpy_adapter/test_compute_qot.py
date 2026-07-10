@@ -128,7 +128,7 @@ def _toy_model():
 def test_compute_qot_returns_state_and_result_id():
     n = _toy_model()
     store = QoTResultStore()
-    loading = LoadingState(channels=(Channel(193.4e12, 100e9, 0.0, "400G@7.1dB"),))
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, None, "400G@7.1dB"),))
     state, rid = compute_qot(
         model=n,
         store=store,
@@ -146,7 +146,7 @@ def test_compute_qot_returns_state_and_result_id():
 def test_breakdown_cached_in_store_with_one_snapshot_per_element():
     n = _toy_model()
     store = QoTResultStore()
-    loading = LoadingState(channels=(Channel(193.4e12, 100e9, 0.0, "400G@7.1dB"),))
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, None, "400G@7.1dB"),))
     _, rid = compute_qot(
         model=n,
         store=store,
@@ -166,7 +166,7 @@ def test_breakdown_cached_in_store_with_one_snapshot_per_element():
 def test_limiting_element_id_is_stable_uid_not_human_string():
     n = _toy_model()
     store = QoTResultStore()
-    loading = LoadingState(channels=(Channel(193.4e12, 100e9, 0.0, "400G@7.1dB"),))
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, None, "400G@7.1dB"),))
     state, rid = compute_qot(
         model=n,
         store=store,
@@ -198,8 +198,8 @@ def test_arbitrary_loading_superset_is_evaluated_without_provisioning():
     n = _toy_model()
     store = QoTResultStore()
     loading = LoadingState(channels=(
-        Channel(193.4e12, 100e9, 0.0, "400G@7.1dB"),
-        Channel(193.5e12, 100e9, 0.0, "800G@15.1dB"),
+        Channel(193.4e12, 100e9, None, "400G@7.1dB"),
+        Channel(193.5e12, 100e9, None, "800G@15.1dB"),
     ))
     state, _ = compute_qot(
         model=n,
@@ -216,7 +216,7 @@ def test_mode_feasible_flips_when_gsnr_below_required():
     """A mode with required_gsnr_db=100 is always infeasible on a real span."""
     n = _toy_model()
     store = QoTResultStore()
-    loading = LoadingState(channels=(Channel(193.4e12, 100e9, 0.0, "impossible"),))
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, None, "impossible"),))
     state, _ = compute_qot(
         model=n,
         store=store,

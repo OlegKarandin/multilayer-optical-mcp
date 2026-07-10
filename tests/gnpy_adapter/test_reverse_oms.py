@@ -17,7 +17,7 @@ from multilayer_optical_mcp.gnpy_adapter.loading import Channel, LoadingState
 from multilayer_optical_mcp.gnpy_adapter.adapter import compute_qot
 
 MODE = "400G@7.1dB"
-LOADING = LoadingState(channels=(Channel(193.4e12, 100e9, 0.0, MODE),))
+LOADING = LoadingState(channels=(Channel(193.4e12, 100e9, None, MODE),))
 
 
 def _line_ab_model():

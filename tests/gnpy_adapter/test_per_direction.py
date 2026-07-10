@@ -7,7 +7,7 @@ from multilayer_optical_mcp.gnpy_adapter.adapter import compute_qot, gated_qot
 from tests.gnpy_adapter.test_compute_qot import _toy_model
 
 
-LOADING = LoadingState(channels=(Channel(193.4e12, 100e9, 0.0, "400G@7.1dB"),))
+LOADING = LoadingState(channels=(Channel(193.4e12, 100e9, None, "400G@7.1dB"),))
 
 
 def test_both_directions_return_finite_gsnr():

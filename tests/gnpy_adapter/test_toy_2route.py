@@ -54,7 +54,7 @@ def _two_route_model() -> NetworkModel:
 
 def _gsnr(model, oms_id, direction=Direction.FORWARD) -> float:
     store = QoTResultStore()
-    loading = LoadingState(channels=(Channel(193.4e12, 100e9, 0.0, "400G@7.1dB"),))
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, None, "400G@7.1dB"),))
     state, _ = compute_qot(
         model=model, store=store, oms_sequence=(oms_id,),
         direction=direction, mode_id="400G@7.1dB", loading=loading,

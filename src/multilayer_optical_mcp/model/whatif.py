@@ -33,7 +33,7 @@ def loading_from_model(model: NetworkModel) -> LoadingState:
         channels.append(Channel(
             center_freq_hz=lp.center_freq_hz,
             slot_width_hz=mode.channel_spacing_hz,
-            power_dbm=0.0,
+            power_dbm=None,  # S2-2: use the adapter tx_power default
             mode_id=lp.mode_id,
         ))
     return LoadingState(channels=tuple(channels))

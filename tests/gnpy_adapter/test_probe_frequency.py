@@ -21,9 +21,9 @@ MODE = "400G@7.1dB"
 # edge one (193.3) has a single neighbor -> the center channel has more NLI and
 # therefore a lower GSNR.
 THREE = LoadingState(channels=(
-    Channel(193.3e12, 100e9, 0.0, MODE),
-    Channel(193.4e12, 100e9, 0.0, MODE),
-    Channel(193.5e12, 100e9, 0.0, MODE),
+    Channel(193.3e12, 100e9, None, MODE),
+    Channel(193.4e12, 100e9, None, MODE),
+    Channel(193.5e12, 100e9, None, MODE),
 ))
 
 

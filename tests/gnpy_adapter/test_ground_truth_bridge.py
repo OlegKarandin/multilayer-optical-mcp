@@ -84,7 +84,7 @@ def _toy_model_legacy() -> NetworkModel:
 def _gsnr_synthesized() -> float:
     model = _toy_model_synthesized()
     store = QoTResultStore()
-    loading = LoadingState(channels=(Channel(193.4e12, 100e9, 0.0, MODE),))
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, None, MODE),))
     state, _ = compute_qot(model=model, store=store, oms_sequence=("oms_syn",),
                            direction=Direction.FORWARD, mode_id=MODE, loading=loading)
     return state.gsnr_db
@@ -94,7 +94,7 @@ def _gsnr_legacy() -> float:
     """GSNR from the file-loaded toy_2span.json via topo_path."""
     model = _toy_model_legacy()
     store = QoTResultStore()
-    loading = LoadingState(channels=(Channel(193.4e12, 100e9, 0.0, MODE),))
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, None, MODE),))
     state, _ = compute_qot(model=model, store=store, oms_sequence=("oms_leg",),
                            direction=Direction.FORWARD, mode_id=MODE, loading=loading,
                            topo_path=TOY)
@@ -114,7 +114,7 @@ def test_german_17_routed_path_finite_and_monotone():
     graph = json.loads(GERMAN_17.read_text())
     model = model_from_abstract_graph(graph, modes=ModeRegistry([_mode()]))
     store = QoTResultStore()
-    loading = LoadingState(channels=(Channel(193.4e12, 100e9, 0.0, MODE),))
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, None, MODE),))
 
     def gsnr(oms_id: str) -> float:
         st, _ = compute_qot(model=model, store=store, oms_sequence=(oms_id,),

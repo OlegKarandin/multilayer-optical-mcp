@@ -1,13 +1,16 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Optional, Tuple
 
 
 @dataclass(frozen=True)
 class Channel:
     center_freq_hz: float
     slot_width_hz: float
-    power_dbm: float
+    # S2-2: None means "use the adapter's tx_power_dbm default"; a float is a
+    # literal launch power. Using 0.0 as the sentinel made a genuine 0 dBm (1 mW,
+    # a common coherent launch) inexpressible.
+    power_dbm: Optional[float]
     mode_id: str
 
     @property

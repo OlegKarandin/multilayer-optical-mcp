@@ -82,7 +82,7 @@ def test_resolve_unknown_oms_raises():
 
 def test_build_si_for_single_channel():
     loading = LoadingState(channels=(
-        Channel(193.4e12, 100e9, 0.0, "400G@7.1dB"),
+        Channel(193.4e12, 100e9, None, "400G@7.1dB"),
     ))
     si = build_si_for_loading(loading, baud_rate=87.5e9,
                               roll_off=0.15, tx_osnr=40.0)
@@ -96,3 +96,17 @@ def test_build_si_empty_loading_returns_empty_si():
                               roll_off=0.15, tx_osnr=40.0)
     carriers = list(si.carriers) if hasattr(si, "carriers") else list(si)
     assert len(carriers) == 0
+
+
+def test_none_power_uses_default_pch_while_zero_dbm_is_literal():
+    """S2-2: None means 'use tx_power_dbm default'; a literal 0.0 means 0 dBm (1 mW).
+    Before the fix, 0.0 was the sentinel and a genuine 0 dBm channel was
+    inexpressible."""
+    default = build_si_for_loading(
+        LoadingState((Channel(193.4e12, 100e9, None, "M"),)),
+        baud_rate=87.5e9, roll_off=0.15, tx_power_dbm=-20.0)
+    zero_dbm = build_si_for_loading(
+        LoadingState((Channel(193.4e12, 100e9, 0.0, "M"),)),
+        baud_rate=87.5e9, roll_off=0.15, tx_power_dbm=-20.0)
+    assert abs(float(default.signal[0]) - 1e-5) < 1e-12   # -20 dBm default
+    assert abs(float(zero_dbm.signal[0]) - 1e-3) < 1e-12  # literal 0 dBm = 1 mW

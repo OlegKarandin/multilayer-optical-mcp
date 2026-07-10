@@ -103,9 +103,9 @@ def _build_loading(
     OMS (its WDM neighbors, which set NLI). Probe goes first so the adapter
     identifies it."""
     occ = occupied_along(state, oms_sequence)
-    probe = Channel(grid.freq(probe_slot), grid.spacing_hz, 0.0, ref_mode_id)
+    probe = Channel(grid.freq(probe_slot), grid.spacing_hz, None, ref_mode_id)
     neighbors = tuple(
-        Channel(grid.freq(s), grid.spacing_hz, 0.0, ref_mode_id)
+        Channel(grid.freq(s), grid.spacing_hz, None, ref_mode_id)
         for s in range(grid.num_slots)
         if s != probe_slot and (occ >> s) & 1
     )

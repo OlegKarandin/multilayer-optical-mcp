@@ -29,7 +29,7 @@ def _one_edge_model(extra_loss_db: float = 0.0):
 
 def _gsnr(m):
     store = QoTResultStore()
-    loading = LoadingState(channels=(Channel(193.4e12, 100e9, 0.0, MODE),))
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, None, MODE),))
     st, _ = compute_qot(model=m, store=store, oms_sequence=("oms_0_1",),
                         direction=Direction.FORWARD, mode_id=MODE, loading=loading)
     return st.gsnr_db
