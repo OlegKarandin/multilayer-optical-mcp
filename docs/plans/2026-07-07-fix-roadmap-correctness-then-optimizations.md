@@ -213,6 +213,15 @@ overload — wrong bottleneck, highest-risk surface; revisit only if post-O1 pro
 itself dominates.
 
 ### Batch O2 — Hoist the offered-load map (S5-8 / S7-8) [Low]
+
+> **STATUS (2026-07-10): landed on master.** `build_layered_graph` builds
+> `offered_load_per_link(model)` once and passes the map into `_residual_gbps` (was rebuilt
+> per lightpath, O(L·S)). `max`→`min` over a lightpath's bound IP links: chose **min** (the
+> bottleneck link a groom is actually limited by); `max` overstated headroom a saturated
+> sibling link can't provide. No behavior change on the live 1:1 model (min == max on a single
+> link). No physics touched — no ground-truth re-pin. Full suite green (278 passed). New tests:
+> `test_offered_load_map_built_once_per_graph_build`, `test_residual_is_min_over_bound_ip_links_not_max`.
+
 `_residual_gbps` calls `offered_load_per_link(model)` inside `build_layered_graph`'s per-lightpath
 loop (`multilayer_graph.py:80/119`) → O(L·S). Build once, pass in. While there: decide `max` vs
 `min` over a lightpath's bound IP links for grooming residual (the `max` overstates when one link
