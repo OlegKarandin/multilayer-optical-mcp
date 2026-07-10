@@ -17,6 +17,7 @@
     {"uid": "east edfa at Z", "type": "Edfa",
      "type_variety": "advanced_toy",
      "operational": {"gain_target": 20, "tilt_target": 0}},
+    {"uid": "ROADM Z", "type": "Roadm"},
     {"uid": "trx Z", "type": "Transceiver"}
   ],
   "connections": [
@@ -26,6 +27,7 @@
     {"from_node": "east fiber A to ILA", "to_node": "east edfa in ILA"},
     {"from_node": "east edfa in ILA",    "to_node": "east fiber ILA to Z"},
     {"from_node": "east fiber ILA to Z", "to_node": "east edfa at Z"},
-    {"from_node": "east edfa at Z",      "to_node": "trx Z"}
+    {"from_node": "east edfa at Z",      "to_node": "ROADM Z"},
+    {"from_node": "ROADM Z",             "to_node": "trx Z"}
   ]
 }

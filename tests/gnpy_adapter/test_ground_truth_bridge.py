@@ -6,7 +6,7 @@ from pathlib import Path
 from multilayer_optical_mcp.gnpy_adapter.adapter import compute_qot
 from multilayer_optical_mcp.gnpy_adapter.loading import Channel, LoadingState
 from multilayer_optical_mcp.model.assets import (
-    Amplifier, Direction, Fiber, FiberType, OMS, ROADM, TransceiverMode,
+    Amplifier, Direction, Fiber, FiberType, OMS, ROADM, Transceiver, TransceiverMode,
 )
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
@@ -26,21 +26,26 @@ def _mode():
 
 
 def _toy_model_synthesized() -> NetworkModel:
-    """Model whose synthesized GNPy network mirrors toy_2span.json.
+    """Model whose synthesized GNPy network mirrors the (symmetric) toy_2span.json.
 
     Uses fresh UIDs (not the legacy toy_2span names) so build_gnpy_network
     constructs the GNPy graph from scratch without loading a topology file.
-    The amplifier chain matches toy_2span.json exactly:
-      ROADM -> booster (gain=20 dB) -> fiber(80 km) -> ILA (gain=20 dB)
-            -> fiber(80 km) -> preamp (gain=20 dB)
+    The line system matches toy_2span.json exactly:
+      trx_A -> ROADM_A -> booster -> fiber(80 km) -> ILA -> fiber(80 km)
+            -> preamp -> ROADM_Z -> trx_Z
 
-    No explicit transceivers are registered; the OMS src/dst node IDs become
-    synthetic Transceiver elements in the GNPy graph (same as test_compute_qot
-    pattern and toy_2span.json which has no paired Z-side ROADM).
+    Both ends terminate at a ROADM (S3-11 Option B): a bare transceiver on the
+    line is not a real topology. The OMS endpoints are node ids that resolve to
+    roadm_A (add, chain[0]) and roadm_Z (drop, appended by C2 Step B via
+    _roadm_successor); trx_A/trx_Z are explicitly registered, so synthesis never
+    needs the removed synthetic-transceiver fallback.
     """
     n = NetworkModel(modes=ModeRegistry([_mode()]))
     n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
     n.add_roadm(ROADM(id="roadm_A"))
+    n.add_roadm(ROADM(id="roadm_Z"))
+    n.add_transceiver(Transceiver(id="trx_A", site="A"))
+    n.add_transceiver(Transceiver(id="trx_Z", site="Z"))
     n.add_amplifier(Amplifier(id="amp_booster", type_variety="advanced_toy",
                               gain_db=20.0, nf_db=5.5))
     n.add_fiber(Fiber(id="fiber_0", a_end="roadm_A", z_end="amp_ila",
@@ -51,7 +56,7 @@ def _toy_model_synthesized() -> NetworkModel:
                       length_km=80.0, type_variety="SSMF"))
     n.add_amplifier(Amplifier(id="amp_preamp", type_variety="advanced_toy",
                               gain_db=20.0, nf_db=5.5))
-    n.add_oms(OMS(id="oms_syn", src_node_id="trx_A", dst_node_id="trx_Z", elements=(
+    n.add_oms(OMS(id="oms_syn", src_node_id="A", dst_node_id="Z", elements=(
         "roadm_A", "amp_booster", "fiber_0", "amp_ila",
         "fiber_1", "amp_preamp")))
     return n
