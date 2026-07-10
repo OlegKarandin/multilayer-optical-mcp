@@ -228,6 +228,31 @@ loop (`multilayer_graph.py:80/119`) → O(L·S). Build once, pass in. While ther
 is saturated) and document the choice.
 
 ### Batch O3 — Model hygiene cleanups (Stage 1 + Stage 3 leftovers)
+
+> **STATUS (2026-07-10): all items landed on branch `o3-model-hygiene`.** Five commits,
+> one per finding, TDD (failing test → fix → pass). Full suite 287 passed.
+> - **S1-6** (subsumes **S1-3**): removed the dead `OpticalNode` class, `_optical_nodes`
+>   dict, `add_optical_node`, the `clone()` line, and the importer call; dropped the
+>   `_optical_nodes` line from the Phase 7 plan's `clone()` listing (line ~129). S1-3
+>   resolved as **removal** (Literal moot once the class is gone). Note: the roadmap
+>   listed `snapshots.py` as a site, but C3 already centralized cloning into
+>   `NetworkModel.clone()`, so `snapshots.py` had no `_optical_nodes` reference to remove.
+>   Test: `test_optical_node_shadow_registry_is_gone`.
+> - **S1-1**: `RiskGroup.metadata` now wrapped in `MappingProxyType` via `__post_init__`
+>   (defensive copy of the incoming mapping) — genuinely immutable, `dict()` consumers
+>   unaffected. Test: `test_risk_group_metadata_is_read_only_and_defensively_copied`.
+> - **S3-10**: new `gnpy_adapter/bands.py` with a `Band` value object; SI is the single
+>   canonical literal (feeds `automatic_nch`), amp (widened) and transceiver (narrowed)
+>   derived by named guard margins; import-time assert enforces amp ⊇ SI ⊇ transceiver.
+>   `synthesize.py` and `adapter.py` (`_SI_F_MAX_HZ`) now source edges from the bands.
+>   **GSNR-neutral**: every derived edge equals its former literal bit-for-bit — ground-truth
+>   bridge unchanged, no re-pin. Tests: `tests/gnpy_adapter/test_bands.py`.
+> - **S3-8**: resolved as **document** (not derive). Named the shared EDFA envelope
+>   (`_EDFA_GAIN_FLATMAX_DB`/`_EDFA_GAIN_MIN_DB`/`_EDFA_P_MAX_DBM`) and documented the
+>   single-homogeneous-envelope assumption; deriving per-amp bounds would move GSNR and no
+>   reference amp nears the envelope. GSNR-neutral. Test:
+>   `test_amps_share_one_documented_edfa_envelope_regardless_of_gain`.
+
 1. **S1-6 remove `_optical_nodes` + `add_optical_node`** (written, cloned, never read) from
    `network.py`, `topology_import.py`, `snapshots.py`. **Also delete the `_optical_nodes` line from
    the Phase 7 plan's `clone()` listing** (Task 1, plan doc line ~129) so the plan doesn't
