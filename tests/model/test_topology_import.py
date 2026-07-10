@@ -85,6 +85,33 @@ def test_import_registers_fibertype_per_distinct_fiber_type():
     assert n.get_fiber("fiber_0_1_0").type_variety == "LEAF"
 
 
+def test_import_rejects_span_lengths_not_summing_to_length():
+    """Addendum-2: span_lengths_km that grossly disagree with length_km must fail
+    loudly rather than be silently discarded and re-derived (which could drop the
+    intended per-span NFs)."""
+    graph = {
+        "nodes": [{"id": 0}, {"id": 1}],
+        "edges": [{"src": 0, "dst": 1, "length_km": 160.0,
+                   "span_lengths_km": [80.0, 80.0, 80.0],  # sums to 240, not 160
+                   "amplifier_nf_db": [5.5, 5.5, 5.5]}],
+    }
+    with pytest.raises(ValueError):
+        model_from_abstract_graph(graph, modes=_reg())
+
+
+def test_import_rejects_nf_count_span_count_mismatch():
+    """Addendum-2: amplifier_nf_db whose length differs from the span count must
+    fail loudly rather than silently truncate/default the per-span NFs."""
+    graph = {
+        "nodes": [{"id": 0}, {"id": 1}],
+        "edges": [{"src": 0, "dst": 1, "length_km": 160.0,
+                   "span_lengths_km": [80.0, 80.0],
+                   "amplifier_nf_db": [5.5]}],  # 1 NF for 2 spans
+    }
+    with pytest.raises(ValueError):
+        model_from_abstract_graph(graph, modes=_reg())
+
+
 def test_import_german_17_structural_counts():
     graph = json.loads(GERMAN_17.read_text())
     n = model_from_abstract_graph(graph, modes=_reg())

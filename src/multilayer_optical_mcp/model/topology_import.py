@@ -51,7 +51,17 @@ SSMF_LOSS_COEF_DB_PER_KM = 0.2
 
 def _edge_spans(edge: Dict[str, Any]) -> List[float]:
     spans = edge.get("span_lengths_km")
-    if spans and abs(sum(spans) - edge["length_km"]) < 1.0:
+    if spans:
+        # Addendum-2: span_lengths_km are authoritative when present. If they do
+        # NOT sum to length_km, that is a data error — fail loudly rather than
+        # silently discard them and re-derive a different span count (which would
+        # then mis-index amplifier_nf_db by span position).
+        if abs(sum(spans) - float(edge["length_km"])) >= 1.0:
+            raise ValueError(
+                f"edge {edge.get('src')}-{edge.get('dst')}: span_lengths_km "
+                f"{spans} sum to {sum(spans):g} km, not length_km "
+                f"{edge['length_km']:g} km"
+            )
         return [float(s) for s in spans]
     return split_link_into_spans(float(edge["length_km"]))
 
@@ -86,7 +96,17 @@ def model_from_abstract_graph(
 
     for edge in graph["edges"]:
         spans = _edge_spans(edge)
-        nfs = edge.get("amplifier_nf_db") or [DEFAULT_AMP_NF_DB] * len(spans)
+        # Addendum-2: an explicit amplifier_nf_db must line up with the span count
+        # one-for-one. A shorter/longer list otherwise silently truncates or
+        # DEFAULT-fills per-span NFs (nfs[i] fallback in _add_directed_oms).
+        nfs = edge.get("amplifier_nf_db")
+        if nfs is None:
+            nfs = [DEFAULT_AMP_NF_DB] * len(spans)
+        elif len(nfs) != len(spans):
+            raise ValueError(
+                f"edge {edge.get('src')}-{edge.get('dst')}: amplifier_nf_db has "
+                f"{len(nfs)} entries but the link resolves to {len(spans)} spans"
+            )
         fiber_type = edge.get("fiber_type", "SSMF")
         for src, dst in ((edge["src"], edge["dst"]), (edge["dst"], edge["src"])):
             _add_directed_oms(n, str(src), str(dst), spans, nfs,
