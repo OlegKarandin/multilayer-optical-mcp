@@ -58,10 +58,23 @@ def model_to_gnpy_equipment(model: NetworkModel,
         }
         for nf in nfs
     ]
+    # S3-1: one equipment Fiber entry per registered FiberType, carrying the
+    # model's dispersion/effective_area/pmd. A second variety (LEAF, NZDSF) would
+    # otherwise raise KeyError in network_from_json, and even a custom-parameter
+    # SSMF silently ran on library defaults. Fall back to SSMF when the model
+    # registered no fiber types at all (bare hand-built test models).
+    fiber_types = list(model.list_fiber_types())
+    if not fiber_types:
+        from ..model.assets import FiberType
+        fiber_types = [FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2)]
+    fiber_eqpt = [
+        {"type_variety": ft.type_variety, "dispersion": ft.dispersion,
+         "effective_area": ft.effective_area, "pmd_coef": ft.pmd_coef}
+        for ft in fiber_types
+    ]
     return {
         "Edfa": edfa,
-        "Fiber": [{"type_variety": "SSMF", "dispersion": 1.67e-05,
-                   "effective_area": 83e-12, "pmd_coef": 1.265e-15}],
+        "Fiber": fiber_eqpt,
         "Span": [{"power_mode": True, "delta_power_range_db": [0, 0, 0.5],
                   "max_fiber_lineic_loss_for_raman": 0.25, "target_extended_gain": 2.5,
                   "max_length": 150, "length_units": "km", "max_loss": 28,

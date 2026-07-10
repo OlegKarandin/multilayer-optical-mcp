@@ -64,9 +64,18 @@ def model_from_abstract_graph(
 ) -> NetworkModel:
     """Build a NetworkModel optical layer from an abstract node/edge graph."""
     n = NetworkModel(modes=modes)
-    n.register_fiber_type(
-        FiberType(type_variety="SSMF", loss_coef_db_per_km=fiber_loss_coef_db_per_km)
-    )
+    # Addendum-1: register a FiberType for every distinct fiber_type named in the
+    # graph (SSMF always). Without this, add_fiber raises ValueError on the first
+    # non-SSMF edge. The graph carries only a type *name*, not per-type physics, so
+    # non-SSMF varieties take FiberType's default dispersion/effective_area/pmd and
+    # the shared loss coefficient — best-effort until the graph schema carries them.
+    fiber_type_names = {"SSMF"} | {
+        str(e.get("fiber_type", "SSMF")) for e in graph["edges"]
+    }
+    for name in sorted(fiber_type_names):
+        n.register_fiber_type(
+            FiberType(type_variety=name, loss_coef_db_per_km=fiber_loss_coef_db_per_km)
+        )
 
     for node in graph["nodes"]:
         nid = str(node["id"])

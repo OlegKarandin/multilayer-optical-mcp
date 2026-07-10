@@ -20,7 +20,7 @@ class FiberType:
     type_variety: str
     loss_coef_db_per_km: float
     dispersion: float = 1.67e-05    # s/m/m
-    gamma: float = 0.00127          # 1/W/m
+    effective_area: float = 83e-12  # m^2 (SSMF reference; GNPy derives gamma from it)
     pmd_coef: float = 1.265e-15     # s/sqrt(m)
 
 

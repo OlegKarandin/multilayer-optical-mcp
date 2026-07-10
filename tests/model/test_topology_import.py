@@ -71,6 +71,20 @@ def test_import_tiny_graph_builds_optical_layer():
     assert n.get_amplifier("amp_0_1_0").nf_db == 5.5
 
 
+def test_import_registers_fibertype_per_distinct_fiber_type():
+    """Addendum-1: an edge naming a non-SSMF fiber_type must not crash the
+    importer; the type is registered so add_fiber accepts it."""
+    graph = {
+        "nodes": [{"id": 0}, {"id": 1}],
+        "edges": [{"src": 0, "dst": 1, "length_km": 80.0,
+                   "span_lengths_km": [80.0], "fiber_type": "LEAF",
+                   "amplifier_nf_db": [5.5]}],
+    }
+    n = model_from_abstract_graph(graph, modes=_reg())  # must not raise ValueError
+    assert "LEAF" in {ft.type_variety for ft in n.list_fiber_types()}
+    assert n.get_fiber("fiber_0_1_0").type_variety == "LEAF"
+
+
 def test_import_german_17_structural_counts():
     graph = json.loads(GERMAN_17.read_text())
     n = model_from_abstract_graph(graph, modes=_reg())

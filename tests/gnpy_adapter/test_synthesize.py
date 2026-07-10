@@ -96,3 +96,37 @@ def test_roadm_target_pch_out_db_is_per_instance():
     topo = model_to_gnpy_topology(model)
     roadm = next(e for e in topo["elements"] if e["uid"] == "roadm_A")
     assert roadm["params"]["target_pch_out_db"] == -17.0
+
+
+def test_equipment_emits_one_fiber_entry_per_registered_type():
+    """S3-1: every registered FiberType must produce its own equipment Fiber entry
+    with its dispersion/effective_area/pmd, not just a single hardcoded SSMF."""
+    leaf = FiberType(type_variety="LEAF", loss_coef_db_per_km=0.22,
+                     dispersion=4.2e-6, effective_area=72e-12, pmd_coef=1.0e-15)
+    model = _model_with(
+        roadm=ROADM(id="roadm_A"),
+        amp=Amplifier(id="amp_x", type_variety="advanced_toy", gain_db=20.0, nf_db=5.5),
+        fiber_types=(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2), leaf),
+    )
+    eqpt = model_to_gnpy_equipment(model)
+    by_type = {f["type_variety"]: f for f in eqpt["Fiber"]}
+    assert {"SSMF", "LEAF"} <= set(by_type)
+    assert by_type["LEAF"]["dispersion"] == 4.2e-6
+    assert by_type["LEAF"]["effective_area"] == 72e-12
+    assert by_type["LEAF"]["pmd_coef"] == 1.0e-15
+    # SSMF ground-truth constants preserved (the pinned values).
+    assert by_type["SSMF"]["effective_area"] == 83e-12
+    assert by_type["SSMF"]["dispersion"] == 1.67e-05
+
+
+def test_non_ssmf_fiber_builds_without_keyerror():
+    """S3-1: a second fiber variety must not raise KeyError in network_from_json."""
+    from multilayer_optical_mcp.gnpy_adapter.synthesize import build_gnpy_network
+    model = model_from_abstract_graph({
+        "nodes": [{"id": 0}, {"id": 1}],
+        "edges": [{"src": 0, "dst": 1, "length_km": 80.0,
+                   "span_lengths_km": [80.0], "fiber_type": "LEAF",
+                   "amplifier_nf_db": [5.5]}],
+    }, modes=_reg())
+    eqpt, network = build_gnpy_network(model)  # must not raise
+    assert any(n.uid == "fiber_0_1_0" for n in network.nodes)
