@@ -171,10 +171,19 @@ def build_gnpy_network(model: NetworkModel):
 
     Reuses gnpy's network_from_json + design_network so synthesized results
     match a hand-written topology of the same shape.
+
+    The equipment config files (adv_nf_*.json, eqpt.json) are consumed at
+    load_equipment time and never reopened afterwards, so the temp directory is
+    deleted the instant equipment construction returns — no orphaned dirs.
     """
+    import shutil
     from gnpy.tools.json_io import network_from_json
 
-    equipment = _equipment_from_dict(model_to_gnpy_equipment(model))
+    tmpdir = Path(tempfile.mkdtemp())
+    try:
+        equipment = _equipment_from_dict(model_to_gnpy_equipment(model, _tmpdir=tmpdir))
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
     network = network_from_json(model_to_gnpy_topology(model), equipment)
     gnpy_design_network(network, equipment)
     return equipment, network
