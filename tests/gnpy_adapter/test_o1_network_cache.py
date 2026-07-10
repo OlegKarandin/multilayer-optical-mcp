@@ -77,3 +77,53 @@ def test_fingerprint_changes_on_nf_delta():
     fp_before = S._physical_fingerprint(model)
     model.apply_nf_delta("amp_ila", 2.0)
     assert S._physical_fingerprint(model) != fp_before
+
+
+def test_repeated_build_returns_same_objects():
+    model = _toy_model()
+    eq1, net1 = S.build_gnpy_network(model)
+    eq2, net2 = S.build_gnpy_network(model)
+    assert eq1 is eq2
+    assert net1 is net2
+
+
+def test_physical_mutation_rebuilds():
+    model = _toy_model()
+    _eq1, net1 = S.build_gnpy_network(model)
+    model.apply_nf_delta("amp_ila", 2.0)
+    _eq2, net2 = S.build_gnpy_network(model)
+    assert net2 is not net1
+
+
+def test_cached_reuse_matches_fresh_gsnr_no_drift():
+    """A heavy loading then a light probe on the SAME (cached) network must give
+    the identical probe GSNR a fresh build would — proving effective_gain is reset."""
+    from multilayer_optical_mcp.gnpy_adapter.adapter import compute_qot
+    from multilayer_optical_mcp.gnpy_adapter.loading import Channel, LoadingState
+    from multilayer_optical_mcp.model.assets import Direction
+    from multilayer_optical_mcp.model.qot_results import QoTResultStore
+
+    probe = Channel(193.4e12, 100e9, None, MODE.id)
+    heavy = LoadingState(channels=tuple(
+        Channel(193.0e12 + i * 100e9, 100e9, None, MODE.id) for i in range(6)))
+    light = LoadingState(channels=(probe,))
+
+    # Fresh model, single light computation = ground truth.
+    fresh = _toy_model()
+    store_f = QoTResultStore()
+    g_fresh, _ = compute_qot(model=fresh, store=store_f, oms_sequence=("oms_syn",),
+                             direction=Direction.FORWARD, mode_id=MODE.id,
+                             loading=light, center_freq_hz=193.4e12)
+
+    # Same model reused: heavy first (ratchets gains), then the light probe.
+    reused = _toy_model()
+    store_r = QoTResultStore()
+    compute_qot(model=reused, store=store_r, oms_sequence=("oms_syn",),
+                direction=Direction.FORWARD, mode_id=MODE.id, loading=heavy,
+                center_freq_hz=193.4e12)
+    g_reuse, _ = compute_qot(model=reused, store=store_r, oms_sequence=("oms_syn",),
+                             direction=Direction.FORWARD, mode_id=MODE.id,
+                             loading=light, center_freq_hz=193.4e12)
+
+    assert g_reuse.gsnr_db == g_fresh.gsnr_db, (
+        f"cached reuse drifted: reuse={g_reuse.gsnr_db} fresh={g_fresh.gsnr_db}")

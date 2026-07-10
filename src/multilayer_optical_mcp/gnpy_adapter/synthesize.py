@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import tempfile
+from collections import namedtuple
 from pathlib import Path
 from typing import Any, Dict, List
+from weakref import WeakKeyDictionary
 
 from ..model.network import NetworkModel
 
@@ -41,6 +43,38 @@ def _physical_fingerprint(model: NetworkModel) -> tuple:
         (o.id, o.src_node_id, o.dst_node_id, tuple(o.elements))
         for o in model.list_oms()))
     return (fiber_types, amps, roadms, transceivers, fibers, oms)
+
+
+# Module-level, single-threaded cache of the synthesized GNPy network per model.
+# Keyed by the NetworkModel instance (weak, so a dropped branch is auto-evicted);
+# the entry is reused only while the model's physical fingerprint is unchanged.
+# No GNPy object is ever stored on the NetworkModel itself — the adapter remains
+# the only component that holds GNPy state. Not guarded for concurrent access;
+# the server is single-threaded.
+_CacheEntry = namedtuple("_CacheEntry", "fingerprint equipment network design_gains")
+_NETWORK_CACHE: "WeakKeyDictionary[NetworkModel, _CacheEntry]" = WeakKeyDictionary()
+
+
+def _snapshot_design_gains(network) -> Dict[str, float]:
+    """Capture each EDFA's design-time effective_gain (set by design_network)."""
+    from gnpy.core.elements import Edfa
+    return {n.uid: n.effective_gain
+            for n in network.nodes if isinstance(n, Edfa)}
+
+
+def _restore_design_gains(network, gains: Dict[str, float]) -> None:
+    """Reset each EDFA's effective_gain to its design value.
+
+    Propagation ratchets effective_gain DOWN in place
+    (``self.effective_gain = min(self.effective_gain, p_max - pin_db)`` in
+    ``Edfa.interpol_params``); this restore undoes the ratchet so a reused
+    network propagates as if freshly designed. Verified GSNR-identical (|Δ|=0.0 dB)
+    on GNPy 2.14.0.
+    """
+    from gnpy.core.elements import Edfa
+    for n in network.nodes:
+        if isinstance(n, Edfa) and n.uid in gains:
+            n.effective_gain = gains[n.uid]
 
 
 def nf_type_variety(nf_db: float) -> str:
@@ -198,15 +232,25 @@ def model_to_gnpy_topology(model: NetworkModel) -> Dict[str, Any]:
 def build_gnpy_network(model: NetworkModel):
     """Return (equipment, network) built from the model, ready to propagate.
 
-    Reuses gnpy's network_from_json + design_network so synthesized results
-    match a hand-written topology of the same shape.
+    Cached per model instance and keyed by the model's physical fingerprint: a
+    repeated call with an unchanged model returns the same objects after resetting
+    every EDFA to its design-time operating point (undoing the propagation
+    effective_gain ratchet), so a bulk recompute over K lightpaths synthesizes the
+    network exactly once. Any physical mutation changes the fingerprint and triggers
+    a fresh build. Single-threaded; not guarded for concurrent access.
 
     The equipment config files (adv_nf_*.json, eqpt.json) are consumed at
-    load_equipment time and never reopened afterwards, so the temp directory is
-    deleted the instant equipment construction returns — no orphaned dirs.
+    load_equipment time and never reopened, so the temp directory is deleted
+    immediately after equipment construction.
     """
     import shutil
     from gnpy.tools.json_io import network_from_json
+
+    fingerprint = _physical_fingerprint(model)
+    entry = _NETWORK_CACHE.get(model)
+    if entry is not None and entry.fingerprint == fingerprint:
+        _restore_design_gains(entry.network, entry.design_gains)
+        return entry.equipment, entry.network
 
     tmpdir = Path(tempfile.mkdtemp())
     try:
@@ -215,6 +259,10 @@ def build_gnpy_network(model: NetworkModel):
         shutil.rmtree(tmpdir, ignore_errors=True)
     network = network_from_json(model_to_gnpy_topology(model), equipment)
     gnpy_design_network(network, equipment)
+
+    _NETWORK_CACHE[model] = _CacheEntry(
+        fingerprint=fingerprint, equipment=equipment, network=network,
+        design_gains=_snapshot_design_gains(network))
     return equipment, network
 
 
