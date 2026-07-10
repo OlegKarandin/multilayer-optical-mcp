@@ -3,7 +3,7 @@ import math
 from dataclasses import replace
 from typing import TYPE_CHECKING, Dict, Optional, Tuple
 from .assets import (
-    OpticalNode, FiberType, Fiber, Amplifier, ROADM, Transceiver, OMS,
+    FiberType, Fiber, Amplifier, ROADM, Transceiver, OMS,
     Lightpath, Router, IPLink, Service, SRLG, RiskGroup,
 )
 from .modes import ModeRegistry
@@ -30,7 +30,6 @@ class NetworkModel:
         self._grid = grid
         self._frozen = False
         self._fiber_types: Dict[str, FiberType] = {}
-        self._optical_nodes: Dict[str, OpticalNode] = {}
         self._fibers: Dict[str, Fiber] = {}
         self._amplifiers: Dict[str, Amplifier] = {}
         self._roadms: Dict[str, ROADM] = {}
@@ -66,7 +65,6 @@ class NetworkModel:
         frozen snapshot can be thawed into a working copy by cloning it."""
         c = NetworkModel(modes=self.modes, grid=self._grid)
         c._fiber_types = dict(self._fiber_types)
-        c._optical_nodes = dict(self._optical_nodes)
         c._fibers = dict(self._fibers)
         c._amplifiers = dict(self._amplifiers)
         c._roadms = dict(self._roadms)
@@ -94,12 +92,6 @@ class NetworkModel:
 
     def list_fiber_types(self) -> Tuple[FiberType, ...]:
         return tuple(self._fiber_types.values())
-
-    # ---------------------------------------------------------------- optical nodes
-
-    def add_optical_node(self, n: OpticalNode) -> None:
-        self._check_mutable()
-        self._optical_nodes[n.id] = n
 
     # ---------------------------------------------------------------- fibers
 

@@ -1,5 +1,5 @@
 from multilayer_optical_mcp.model.assets import (
-    OpticalNode, FiberType, Fiber, Amplifier, ROADM, Transceiver,
+    FiberType, Fiber, Amplifier, ROADM, Transceiver,
     TransceiverMode, OMS, Lightpath, Router, IPLink, Service,
     SRLG, RiskGroup, Direction,
 )

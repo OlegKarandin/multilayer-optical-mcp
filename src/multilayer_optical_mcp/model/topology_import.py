@@ -39,7 +39,7 @@ def split_link_into_spans(
 
 
 from .assets import (
-    Amplifier, Fiber, FiberType, OMS, OpticalNode, ROADM, Router, Transceiver,
+    Amplifier, Fiber, FiberType, OMS, ROADM, Router, Transceiver,
 )
 from .modes import ModeRegistry
 from .network import NetworkModel
@@ -89,7 +89,6 @@ def model_from_abstract_graph(
 
     for node in graph["nodes"]:
         nid = str(node["id"])
-        n.add_optical_node(OpticalNode(id=f"roadm_{nid}", kind="roadm"))
         n.add_roadm(ROADM(id=f"roadm_{nid}"))
         n.add_transceiver(Transceiver(id=f"trx_{nid}", site=nid))
         n.add_router(Router(id=f"router_{nid}", site=nid))

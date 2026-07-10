@@ -10,12 +10,6 @@ class Direction(str, Enum):
 
 
 @dataclass(frozen=True)
-class OpticalNode:
-    id: str
-    kind: str  # "roadm" | "amplifier_site" | "transceiver_site"
-
-
-@dataclass(frozen=True)
 class FiberType:
     type_variety: str
     loss_coef_db_per_km: float
