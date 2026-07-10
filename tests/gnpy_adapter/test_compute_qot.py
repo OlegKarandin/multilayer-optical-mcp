@@ -1,7 +1,8 @@
-# GROUND TRUTH (gnpy==2.14.0, toy_2span.json, 400G@7.1dB @ 193.4 THz):
-# Topology: trx A → ROADM A → booster A → fiber(80km) → ILA → fiber(80km) → preamp → trx Z
-# Cascade GSNR (no penalties): fwd ~21.36 dB, bwd ~19.22 dB.
-# After add_drop_osnr=33 dB + tx_osnr=35 dB (OpenROADM v4/v5): fwd ~18.85 dB, bwd ~17.53 dB.
+# GROUND TRUTH (gnpy==2.14.0, symmetric toy_2span.json, 400G@7.1dB @ 193.4 THz):
+# Topology: trx A → ROADM A → booster → fiber(80km) → ILA → fiber(80km) → preamp → ROADM Z → trx Z
+# Both ends terminate at a ROADM (S3-11 Option B), so each direction carries one
+# add + one drop add_drop_osnr=33 dB penalty (plus tx_osnr=35 dB, OpenROADM v4/v5).
+# GSNR: fwd ~17.81 dB, bwd ~17.81 dB (symmetric, was 18.85/17.53 pre-drop-ROADM).
 # Updates on intentional gnpy bumps only.
 
 import math

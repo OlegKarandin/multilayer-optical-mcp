@@ -116,10 +116,6 @@ def model_to_gnpy_topology(model: NetworkModel) -> Dict[str, Any]:
 
     connections: List[Dict[str, str]] = []
     seen: set = set()
-    # Collect synthetic transceiver UIDs we need to add (for legacy test models
-    # whose OMS src_node_id / dst_node_id is a bare transceiver UID, not a ROADM
-    # key and not an explicitly registered transceiver).
-    _synthetic_trx: set = set()
 
     def connect(a: str, b: str) -> None:
         if (a, b) not in seen:
@@ -129,20 +125,23 @@ def model_to_gnpy_topology(model: NetworkModel) -> Dict[str, Any]:
     def _resolve_endpoint(node_id: str) -> str:
         """Return the GNPy UID for an OMS endpoint (src or dst).
 
-        Priority:
-        1. ``roadm_<node_id>`` exists as a real ROADM → use the ROADM uid.
-        2. ``node_id`` is an explicitly registered transceiver → use it directly.
-        3. Legacy / test model with bare UID → register as synthetic transceiver
-           and return the raw uid.
+        S3-11: an endpoint must be either a ``roadm_<node_id>`` ROADM or an
+        explicitly registered transceiver. Anything else — a mistyped ROADM
+        site — is a modelling error and raises (S3-4), rather than being
+        silently demoted to a penalty-free synthetic Transceiver that would drop
+        the site's add/drop OSNR. A transceiver hanging off the line with no
+        ROADM is not a real optical terminal.
         """
         roadm_uid = f"roadm_{node_id}"
         if roadm_uid in model._roadms:
             return roadm_uid
         if node_id in model._transceivers:
             return node_id
-        # Legacy bare uid — synthesize a Transceiver element on first encounter.
-        _synthetic_trx.add(node_id)
-        return node_id
+        raise ValueError(
+            f"OMS endpoint {node_id!r} resolves to neither a registered ROADM "
+            f"({roadm_uid!r}) nor a registered transceiver; register one or fix "
+            f"the OMS endpoint id"
+        )
 
     for t in model._transceivers.values():
         connect(t.id, f"roadm_{t.site}")
@@ -163,10 +162,6 @@ def model_to_gnpy_topology(model: NetworkModel) -> Dict[str, Any]:
         # Wire last element → dst.
         dst_uid = _resolve_endpoint(oms.dst_node_id)
         connect(chain[-1], dst_uid)
-
-    # Append synthetic transceiver elements (deduped, stable order).
-    for uid in sorted(_synthetic_trx):
-        elements.append({"uid": uid, "type": "Transceiver"})
 
     return {"elements": elements, "connections": connections}
 

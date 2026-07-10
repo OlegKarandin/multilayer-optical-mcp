@@ -42,27 +42,26 @@ def test_forward_walks_terminal_drop_roadm():
 
 
 def test_terminal_drop_penalty_lowers_forward_gsnr():
-    """The terminal drop ROADM's add_drop_osnr must actually cost GSNR: a path
-    terminating at a ROADM is worse than the identical span terminating at a bare
-    transceiver (no drop penalty)."""
+    """The terminal drop ROADM's add_drop_osnr must actually cost GSNR.
+
+    A bare-transceiver terminus (the old no-penalty baseline) is not a real
+    optical terminal and is no longer synthesizable (S3-11 Option B), so instead
+    of comparing against it we assert the penalty *within* the propagation: the
+    final end-to-end GSNR (which applies the add_drop_osnr of every propagated
+    ROADM, terminal drop ROADM included) sits below the raw GSNR propagated up to
+    and including that terminal ROADM element. Combined with
+    test_forward_walks_terminal_drop_roadm (roadm_B is propagated and terminal),
+    this pins that the terminal drop penalty is real."""
     model = _line_ab_model()
     store = QoTResultStore()
-    st_roadm, _ = compute_qot(model=model, store=store, oms_sequence=("oms_A_B",),
-                              direction=Direction.FORWARD, mode_id=MODE, loading=LOADING)
-
-    # Identical physical span but the OMS drops into a bare transceiver (no ROADM
-    # named roadm_<dst>), so there is no terminal drop penalty.
-    trx_model = _line_ab_model()
-    oms = trx_model.get_oms("oms_A_B")
-    from dataclasses import replace
-    trx_model._oms["oms_A_B"] = replace(oms, dst_node_id="trx_end")
-    st_trx, _ = compute_qot(model=trx_model, store=QoTResultStore(),
-                            oms_sequence=("oms_A_B",),
-                            direction=Direction.FORWARD, mode_id=MODE, loading=LOADING)
-
-    assert st_roadm.gsnr_db < st_trx.gsnr_db - 0.01, (
-        f"drop-ROADM path {st_roadm.gsnr_db:.3f} must be worse than trx-terminated "
-        f"{st_trx.gsnr_db:.3f} dB by the add_drop_osnr penalty"
+    st, rid = compute_qot(model=model, store=store, oms_sequence=("oms_A_B",),
+                          direction=Direction.FORWARD, mode_id=MODE, loading=LOADING)
+    snaps = store.get(rid).snapshots
+    assert snaps[-1].element_id == "roadm_B"
+    raw_end_to_end = snaps[-1].gsnr_db_after  # pre-penalty (penalties are post-loop)
+    assert st.gsnr_db < raw_end_to_end - 0.01, (
+        f"post-propagation penalties (incl. terminal drop ROADM) must lower GSNR: "
+        f"final={st.gsnr_db:.3f} vs raw propagated={raw_end_to_end:.3f} dB"
     )
 
 
