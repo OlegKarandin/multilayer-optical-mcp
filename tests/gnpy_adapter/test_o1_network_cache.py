@@ -127,3 +127,54 @@ def test_cached_reuse_matches_fresh_gsnr_no_drift():
 
     assert g_reuse.gsnr_db == g_fresh.gsnr_db, (
         f"cached reuse drifted: reuse={g_reuse.gsnr_db} fresh={g_fresh.gsnr_db}")
+
+
+def _toy_model_with_lightpaths(n_lp: int) -> NetworkModel:
+    from multilayer_optical_mcp.model.assets import Lightpath
+    # recompute_qot_under_loading evaluates BOTH directions per lightpath, and
+    # backward QoT requires a physically-separate paired reverse OMS (C2). The
+    # plan's forward-only _toy_model has no reverse OMS, so build on the
+    # bidirectional toy from test_compute_qot (the same one test_recompute_
+    # under_loading imports). One model instance = one build = one synthesis, so
+    # the "synthesize once" assertion is unaffected.
+    from tests.gnpy_adapter.test_compute_qot import _toy_model as _bidi_toy_model
+    model = _bidi_toy_model()
+    for i in range(n_lp):
+        model.add_lightpath(Lightpath(
+            id=f"lp{i}", oms_sequence=("oms-AZ",), mode_id="400G@7.1dB",
+            center_freq_hz=193.0e12 + i * 100e9))
+    return model
+
+
+def test_bulk_recompute_synthesizes_once(monkeypatch):
+    import tempfile
+    from multilayer_optical_mcp.gnpy_adapter.adapter import recompute_qot_under_loading
+    from multilayer_optical_mcp.gnpy_adapter.loading import Channel, LoadingState
+    from multilayer_optical_mcp.model.qot_results import QoTResultStore
+
+    calls = {"topology": 0}
+    real_topology = S.model_to_gnpy_topology
+
+    def spy_topology(model):
+        calls["topology"] += 1
+        return real_topology(model)
+
+    monkeypatch.setattr(S, "model_to_gnpy_topology", spy_topology)
+
+    created = []
+    real_mkdtemp = tempfile.mkdtemp
+    monkeypatch.setattr(tempfile, "mkdtemp",
+                        lambda *a, **k: created.append(Path(real_mkdtemp(*a, **k)))
+                        or str(created[-1]))
+
+    model = _toy_model_with_lightpaths(4)
+    store = QoTResultStore()
+    loading = LoadingState(channels=tuple(
+        Channel(193.0e12 + i * 100e9, 100e9, None, MODE.id) for i in range(4)))
+
+    recompute_qot_under_loading(model=model, store=store, loading=loading)
+
+    assert calls["topology"] == 1, (
+        f"expected exactly one synthesis across the bulk recompute, "
+        f"got {calls['topology']}")
+    assert not [p for p in created if p.exists()], "orphaned temp dirs after recompute"
