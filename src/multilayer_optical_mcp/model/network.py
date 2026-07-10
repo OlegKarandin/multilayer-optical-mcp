@@ -225,6 +225,15 @@ class NetworkModel:
     def set_service_working_path(
         self, service_id: str, ip_path: Tuple[str, ...],
     ) -> None:
+        """Set the service's intended working path (validated for connectivity only).
+
+        S1-8: this is a statement of INTENT, not a guarantee the path is up. It
+        deliberately does not check link-up status (margin >= 0) — restoration
+        and make-before-break planning must be able to pin a path before its
+        lightpaths are provisioned, or while a link is degraded mid-migration.
+        `simulate_ip_routing` is the place that reads actual capacity/margin and
+        reports real drops; this method never does.
+        """
         from .ip_routing import is_contiguous_path
         self._check_mutable()
         svc = self._services[service_id]
@@ -309,6 +318,18 @@ class NetworkModel:
     # ---------------------------------------------------------------- derived capacity
 
     def ip_link_capacity_gbps(self, link_id: str) -> float:
+        """Derived IP link capacity: the bound lightpath's mode bitrate, gated to
+        0 when margin < 0. Raises LookupError when no QoT has been recorded yet
+        (caller must recompute first — see ip_routing.simulate_ip_routing's guard).
+
+        S5-6: QoT is stored as a single QoTState per lightpath (the worse of
+        forward/backward, per gated_qot's min), so a per-direction asymmetric
+        degradation — CLAUDE.md's storm-damages-one-fiber-direction scenario —
+        cannot manifest as a directional IP capacity change; the IP layer is
+        undirected by construction. Documented as a known modeling boundary, not
+        a bug: directional IP capacity would require a QoTState keyed by
+        (lightpath, direction), which no current caller needs.
+        """
         link = self._ip_links[link_id]
         lp = self._lightpaths[link.lightpath_id]
         state = self._qot_state.get(lp.id)
