@@ -1,4 +1,23 @@
-"""IP routing models and functions."""
+"""IP routing models and functions.
+
+Coupling chokepoint: capacity is DERIVED from the bound lightpath's QoT-gated
+mode (NetworkModel.ip_link_capacity_gbps), never stored — CLAUDE.md's
+derived-capacity rule. `simulate_ip_routing` is a pure read: it never reroutes,
+never mutates state, and (S5-4) never raises out of the MCP surface.
+
+Stage 5 assumptions (recorded explicitly, from the inspection roadmap):
+- Every IP link's lightpath is assumed to have a recorded QoT state; before the
+  first `recompute_qot_under_loading`, `ip_link_capacity_gbps` raises
+  LookupError and callers here treat that as capacity "unknown" (S5-4), never a
+  crash.
+- `working_path` is the only load-bearing path; `protection_path` is standby and
+  contributes zero load.
+- The IP layer is undirected: one capacity scalar per link, either-orientation
+  traversal in `is_contiguous_path` (S5-6 — per-direction optical asymmetry
+  never reaches this layer; see NetworkModel.ip_link_capacity_gbps).
+- `offered_load_per_link`'s dict is keyed only by currently-existing IP links;
+  pinned paths always reference live links (no `remove_ip_link` exists).
+"""
 
 from __future__ import annotations
 
@@ -13,7 +32,13 @@ class GroomingMap:
     """Bidirectional mapping between services and lightpaths.
 
     Attributes:
-        by_service: Map from service id to tuple of lightpath ids on its working path.
+        by_service: Map from service id to tuple of lightpath ids on its working
+            path, IN PATH ORDER, WITH DUPLICATES if the path crosses one
+            lightpath twice (a routing loop). S5-2: chosen over dedup so
+            by_service stays a faithful trace of the path, consistent with how
+            offered_load_per_link sums demand per link traversal (also not
+            deduped). by_lightpath (the reverse map) DOES dedup service ids,
+            since "does this service use this lightpath" is boolean.
         by_lightpath: Map from lightpath id to tuple of service ids using it (sorted).
     """
 
@@ -82,6 +107,12 @@ class DroppedService:
 
 @dataclass(frozen=True)
 class IPRoutingResult:
+    """S5-9: `overflow_gbps` (excess on congested links) and `dropped_services`
+    (losses on down links) are computed from disjoint link SETS — a link is
+    either congested or down, never both — but one SERVICE can appear in both:
+    once via a congested link's overflow and again, via a different link on its
+    path, in dropped_services. Do not sum the two as "total lost traffic": that
+    double-counts any such service."""
     utilizations: Tuple[LinkUtilization, ...]
     congested_links: Tuple[str, ...]      # utilization > 1, not down
     down_links: Tuple[str, ...]           # every down link (capacity 0), loaded or idle
@@ -91,7 +122,20 @@ class IPRoutingResult:
 
 def simulate_ip_routing(model: NetworkModel) -> IPRoutingResult:
     """Pure read: account pinned working_path demand onto IP links and report
-    utilization, congestion, and drops. Routes nothing."""
+    utilization, congestion, and drops. Routes nothing.
+
+    S5-7: this function never consults `model.failed_assets()` directly — it
+    trusts that a QoT recompute has already left the right sentinel in
+    `_qot_state`. Calling `model.mark_failed(...)` and never recomputing will
+    NOT surface as a drop here (the stale feasible QoT is still on record);
+    `whatif.inject_failure` writes the -inf sentinel immediately, which is why
+    it is the documented entry point for failures. Since the C4-1 fix (S8-1),
+    `recompute_qot_under_loading` also re-derives the sentinel from
+    `model.failed_assets()` on every call regardless of whether
+    `inject_failure` ever ran, so the gap is narrower than it once was: any
+    recompute after a bare `mark_failed` self-heals it. But a bare
+    `mark_failed` with no recompute at all still will not down anything here.
+    """
     load = offered_load_per_link(model)
     utils: List[LinkUtilization] = []
     congested: List[str] = []
