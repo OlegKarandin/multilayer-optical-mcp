@@ -35,6 +35,7 @@ def loading_from_model(model: NetworkModel) -> LoadingState:
             slot_width_hz=mode.channel_spacing_hz,
             power_dbm=None,  # S2-2: use the adapter tx_power default
             mode_id=lp.mode_id,
+            baud_rate_hz=mode.symbol_rate_baud,  # S2-4: per-carrier spectral shape
         ))
     return LoadingState(channels=tuple(channels))
 

@@ -148,8 +148,18 @@ def build_si_for_loading(
     # TX launch power (transponder), distinct from pch — sets the TX-OSNR floor.
     tx_power_w = np.full(len(loading.channels), _dbm_to_watt(tx_launch_power_dbm),
                          dtype=float)
-    baud_rates = np.full(len(loading.channels), baud_rate, dtype=float)
-    roll_offs = np.full(len(loading.channels), roll_off, dtype=float)
+    # S2-4: prefer each channel's own baud/roll-off; fall back to the scalar
+    # defaults when unset, so mixed-baud loading states get per-carrier shapes.
+    baud_rates = np.array(
+        [ch.baud_rate_hz if ch.baud_rate_hz is not None else baud_rate
+         for ch in loading.channels],
+        dtype=float,
+    )
+    roll_offs = np.array(
+        [ch.roll_off if ch.roll_off is not None else roll_off
+         for ch in loading.channels],
+        dtype=float,
+    )
     tx_osnrs = np.full(len(loading.channels), tx_osnr, dtype=float)
     slot_widths = np.array([ch.slot_width_hz for ch in loading.channels], dtype=float)
     delta_pdb = np.zeros(len(loading.channels), dtype=float)

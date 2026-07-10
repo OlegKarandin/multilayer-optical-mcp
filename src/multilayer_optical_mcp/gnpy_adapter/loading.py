@@ -12,6 +12,12 @@ class Channel:
     # a common coherent launch) inexpressible.
     power_dbm: Optional[float]
     mode_id: str
+    # S2-4: per-channel spectral shape. None means "use build_si_for_loading's
+    # scalar fallback". Populate baud_rate_hz from the channel's TransceiverMode
+    # so a loading state mixing formats at different symbol rates computes NLI
+    # with each carrier's own shape rather than one broadcast baud.
+    baud_rate_hz: Optional[float] = None
+    roll_off: Optional[float] = None
 
     @property
     def low_hz(self) -> float:

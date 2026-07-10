@@ -110,3 +110,15 @@ def test_none_power_uses_default_pch_while_zero_dbm_is_literal():
         baud_rate=87.5e9, roll_off=0.15, tx_power_dbm=-20.0)
     assert abs(float(default.signal[0]) - 1e-5) < 1e-12   # -20 dBm default
     assert abs(float(zero_dbm.signal[0]) - 1e-3) < 1e-12  # literal 0 dBm = 1 mW
+
+
+def test_per_channel_baud_rate_overrides_scalar_fallback():
+    """S2-4: a channel carrying its own baud_rate_hz must shape that carrier at
+    its rate, while a channel with baud_rate_hz=None falls back to the scalar."""
+    loading = LoadingState((
+        Channel(193.4e12, 100e9, None, "A", baud_rate_hz=64e9),  # explicit
+        Channel(193.5e12, 100e9, None, "B"),                     # fallback
+    ))
+    si = build_si_for_loading(loading, baud_rate=87.5e9, roll_off=0.15)
+    bauds = sorted(float(b) for b in si.baud_rate)
+    assert bauds == [64e9, 87.5e9]
