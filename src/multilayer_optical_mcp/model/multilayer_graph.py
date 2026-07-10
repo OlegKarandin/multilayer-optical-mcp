@@ -66,10 +66,18 @@ def _lightpath_forbidden(model: NetworkModel, lp, forbidden_assets: FrozenSet[st
     return bool(assets & forbidden_assets)
 
 
-def _residual_gbps(model: NetworkModel, lp) -> float:
+def _residual_gbps(model: NetworkModel, lp, load: Dict[str, float]) -> float:
     """Derived capacity of the lightpath's bound IP link(s) minus current load.
-    A lightpath with no IP link bound yields its full mode rate (margin-gated)."""
-    from .ip_routing import offered_load_per_link
+    A lightpath with no IP link bound yields its full mode rate (margin-gated).
+
+    `load` is the offered-load-per-IP-link map, built ONCE by the caller and
+    passed in — rebuilding it per lightpath is O(L·S) (S5-8/S7-8).
+
+    Over multiple bound IP links we take the **min** residual (the bottleneck),
+    not the max. A groom onto this lightpath rides one of its bound IP links, and
+    at graph-build time we don't know which, so the honest headroom is the tightest
+    link's: `max` would report the healthiest link and overstate capacity a
+    saturated sibling link can't actually provide (a confident wrong number)."""
     ip_ids = model.ip_links_for_lightpath(lp.id)
     if not ip_ids:
         # no IP link bound: capacity is mode rate iff margin >= 0
@@ -78,11 +86,10 @@ def _residual_gbps(model: NetworkModel, lp) -> float:
         except LookupError:
             return 0.0
         return 0.0 if state.margin_db < 0 else model.modes.get(lp.mode_id).bitrate_gbps
-    load = offered_load_per_link(model)
-    residual = 0.0
+    residual = float("inf")
     for ip_id in ip_ids:
         cap = model.ip_link_capacity_gbps(ip_id)   # 0.0 when margin<0
-        residual = max(residual, cap - load.get(ip_id, 0.0))
+        residual = min(residual, cap - load.get(ip_id, 0.0))
     return residual
 
 
@@ -102,9 +109,13 @@ def build_layered_graph(
     fibers to one route per slot (S7-13). Mirrors the flat OMS solver's
     MultiDiGraph (S6-4). Parallel lightpaths on the same access hop stay distinct
     for the same reason."""
+    from .ip_routing import offered_load_per_link
     grid = grid or SpectrumGrid.default()
     g: nx.MultiDiGraph = nx.MultiDiGraph()
     spectrum = build_spectrum_state(model, grid)
+    # Build the offered-load map once (S5-8/S7-8): _residual_gbps used to rebuild
+    # it per lightpath (O(L·S)); it's loading-state-wide, so hoist it out of the loop.
+    load = offered_load_per_link(model)
 
     # forbidden OMS: any OMS whose asset set / endpoints intersect forbidden_assets
     def _oms_forbidden(oms) -> bool:
@@ -124,7 +135,7 @@ def build_layered_graph(
     for lp in model.list_lightpaths():
         if _lightpath_forbidden(model, lp, forbidden_assets):
             continue
-        residual = _residual_gbps(model, lp)
+        residual = _residual_gbps(model, lp, load)
         if residual <= 0.0:
             continue
         u, v = _lightpath_endpoints(model, lp)
