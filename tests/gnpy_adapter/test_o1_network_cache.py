@@ -56,3 +56,24 @@ def test_build_leaves_no_temp_dirs(monkeypatch):
     assert created, "expected build_gnpy_network to create at least one temp dir"
     still_there = [p for p in created if p.exists()]
     assert not still_there, f"orphaned temp dirs left behind: {still_there}"
+
+
+def test_fingerprint_stable_across_qot_mutation():
+    from multilayer_optical_mcp.model.qot import QoTState
+    from multilayer_optical_mcp.model.assets import Lightpath
+
+    model = _toy_model()
+    model.add_lightpath(Lightpath(id="lp0", oms_sequence=("oms_syn",),
+                                  mode_id=MODE.id, center_freq_hz=193.4e12))
+    fp_before = S._physical_fingerprint(model)
+    # A QoT write is NOT physical state — must not change the fingerprint.
+    model.set_qot_state("lp0", QoTState(gsnr_db=18.0, osnr_db=25.0,
+                                        margin_db=10.9, limiting_element_id=None))
+    assert S._physical_fingerprint(model) == fp_before
+
+
+def test_fingerprint_changes_on_nf_delta():
+    model = _toy_model()
+    fp_before = S._physical_fingerprint(model)
+    model.apply_nf_delta("amp_ila", 2.0)
+    assert S._physical_fingerprint(model) != fp_before

@@ -14,6 +14,35 @@ ROADM_ADD_DROP_OSNR = 33.0
 TX_LAUNCH_POWER_DBM = 0.0
 
 
+def _physical_fingerprint(model: NetworkModel) -> tuple:
+    """Order-independent hashable key over exactly the model state that feeds
+    model_to_gnpy_equipment / model_to_gnpy_topology.
+
+    EXCLUDES _qot_state, lightpaths, the IP layer, services, risk groups, and
+    failed assets — none of those touch the synthesized GNPy network, and
+    set_qot_state is called inside recompute_qot_under_loading's own loop, so
+    including it would invalidate the cache mid-recompute.
+    """
+    fiber_types = tuple(sorted(
+        (ft.type_variety, ft.loss_coef_db_per_km, ft.dispersion,
+         ft.effective_area, ft.pmd_coef)
+        for ft in model.list_fiber_types()))
+    amps = tuple(sorted(
+        (a.id, a.type_variety, a.gain_db, a.nf_db, a.tilt_db)
+        for a in model._amplifiers.values()))
+    roadms = tuple(sorted(
+        (r.id, r.target_pch_out_db) for r in model._roadms.values()))
+    transceivers = tuple(sorted(
+        (t.id, t.site) for t in model._transceivers.values()))
+    fibers = tuple(sorted(
+        (f.id, f.type_variety, f.length_km, f.extra_loss_db, f.a_end, f.z_end)
+        for f in model._fibers.values()))
+    oms = tuple(sorted(
+        (o.id, o.src_node_id, o.dst_node_id, tuple(o.elements))
+        for o in model.list_oms()))
+    return (fiber_types, amps, roadms, transceivers, fibers, oms)
+
+
 def nf_type_variety(nf_db: float) -> str:
     """Stable name for the advanced-model Edfa type_variety carrying flat NF=nf_db."""
     return f"adv_nf_{nf_db:g}"
