@@ -7,7 +7,7 @@ import asyncio
 
 from multilayer_optical_mcp.server import build_app
 from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, ROADM, OMS, Lightpath,
+    FiberType, Fiber, Amplifier, ROADM, OMS, Lightpath, Transceiver,
 )
 
 
@@ -30,21 +30,25 @@ def _seed_app():
     app = build_app()
     m = app._snapshots.current()
     m.register_fiber_type(FiberType("SSMF", 0.2))
-    m.add_roadm(ROADM(id="ROADM A", target_pch_out_db=-20.0))
-    m.add_roadm(ROADM(id="ROADM Z", target_pch_out_db=-20.0))
+    # S3-11 Option B: both ends terminate at a ROADM (roadm_<id>) with a
+    # registered transceiver; OMS endpoints are node ids "A"/"Z".
+    m.add_roadm(ROADM(id="roadm_A", target_pch_out_db=-20.0))
+    m.add_roadm(ROADM(id="roadm_Z", target_pch_out_db=-20.0))
+    m.add_transceiver(Transceiver(id="trx_A", site="A"))
+    m.add_transceiver(Transceiver(id="trx_Z", site="Z"))
     for amp in ("booster A", "east edfa in ILA", "east edfa at Z",
                 "booster Z", "west edfa in ILA", "west edfa at A"):
         m.add_amplifier(Amplifier(id=amp, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
-    m.add_fiber(Fiber("east fiber A to ILA", "ROADM A", "east edfa in ILA", 80.0, "SSMF"))
+    m.add_fiber(Fiber("east fiber A to ILA", "roadm_A", "east edfa in ILA", 80.0, "SSMF"))
     m.add_fiber(Fiber("east fiber ILA to Z", "east edfa in ILA", "east edfa at Z", 80.0, "SSMF"))
-    m.add_fiber(Fiber("west fiber Z to ILA", "ROADM Z", "west edfa in ILA", 80.0, "SSMF"))
+    m.add_fiber(Fiber("west fiber Z to ILA", "roadm_Z", "west edfa in ILA", 80.0, "SSMF"))
     m.add_fiber(Fiber("west fiber ILA to A", "west edfa in ILA", "west edfa at A", 80.0, "SSMF"))
-    m.add_oms(OMS("oms-AZ", "trx A", "trx Z", (
-        "ROADM A", "booster A", "east fiber A to ILA",
+    m.add_oms(OMS("oms-AZ", "A", "Z", (
+        "roadm_A", "booster A", "east fiber A to ILA",
         "east edfa in ILA", "east fiber ILA to Z", "east edfa at Z",
     )))
-    m.add_oms(OMS("oms-ZA", "trx Z", "trx A", (
-        "ROADM Z", "booster Z", "west fiber Z to ILA",
+    m.add_oms(OMS("oms-ZA", "Z", "A", (
+        "roadm_Z", "booster Z", "west fiber Z to ILA",
         "west edfa in ILA", "west fiber ILA to A", "west edfa at A",
     )))
     return app, m
@@ -73,7 +77,7 @@ def test_check_spectrum_feasibility_clash_after_lightpath():
 def test_solve_rsa_places_demand_with_real_gnpy_mode():
     app, _ = _seed_app()
     out = _call(app, "solve_rsa",
-                demands=[{"id": "d1", "src": "trx A", "dst": "trx Z"}])
+                demands=[{"id": "d1", "src": "A", "dst": "Z"}])
     assert out["status"] == "solution"
     p = out["placements"][0]
     assert p["working"]["oms_path"]["oms_sequence"] == ["oms-AZ"]
@@ -83,9 +87,9 @@ def test_solve_rsa_places_demand_with_real_gnpy_mode():
 def test_solve_allocation_greenfield_with_inventory():
     app, _ = _seed_app()
     out = _call(app, "solve_allocation",
-                demands=[{"id": "d1", "src": "trx A", "dst": "trx Z",
+                demands=[{"id": "d1", "src": "A", "dst": "Z",
                           "demand_gbps": 100.0}],
-                spare_inventory={"trx A": 1, "trx Z": 1})
+                spare_inventory={"A": 1, "Z": 1})
     assert out["status"] == "solution"
     assert out["placements"][0]["demand_id"] == "d1"
     assert out["unplaced"] == []
@@ -94,8 +98,8 @@ def test_solve_allocation_greenfield_with_inventory():
 def test_solve_allocation_no_inventory_is_no_solution():
     app, _ = _seed_app()
     out = _call(app, "solve_allocation",
-                demands=[{"id": "d1", "src": "trx A", "dst": "trx Z",
+                demands=[{"id": "d1", "src": "A", "dst": "Z",
                           "demand_gbps": 100.0}],
-                spare_inventory={"trx A": 0, "trx Z": 0})
+                spare_inventory={"A": 0, "Z": 0})
     assert out["status"] == "no_solution"
     assert out["unplaced"][0]["demand_id"] == "d1"
