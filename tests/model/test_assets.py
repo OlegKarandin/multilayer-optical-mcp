@@ -1,5 +1,6 @@
+import pytest
 from multilayer_optical_mcp.model.assets import (
-    OpticalNode, FiberType, Fiber, Amplifier, ROADM, Transceiver,
+    FiberType, Fiber, Amplifier, ROADM, Transceiver,
     TransceiverMode, OMS, Lightpath, Router, IPLink, Service,
     SRLG, RiskGroup, Direction,
 )
@@ -51,6 +52,26 @@ def test_lightpath_uses_oms_sequence_no_slot_width_no_margin():
 def test_ip_link_bound_to_lightpath_no_capacity_field():
     link = IPLink(id="ip-1", a_router="R1", z_router="R2", lightpath_id="lp1")
     assert not hasattr(link, "capacity_gbps")
+
+
+def test_risk_group_metadata_is_read_only_and_defensively_copied():
+    # S1-1: a frozen dataclass carrying a bare dict is only shallow-frozen —
+    # rg.metadata[k] = v mutates it. Store a read-only mapping instead.
+    rg = RiskGroup(id="rg1", asset_ids=("a",), metadata={"severity": "high"})
+    assert rg.metadata["severity"] == "high"
+    with pytest.raises(TypeError):
+        rg.metadata["severity"] = "low"
+
+    # The mapping passed in must be defensively copied, so a later mutation of
+    # the caller's own dict can't leak into the frozen risk group.
+    src = {"k": 1}
+    rg2 = RiskGroup(id="rg2", asset_ids=(), metadata=src)
+    src["k"] = 999
+    assert rg2.metadata["k"] == 1
+
+    # Equality against a plain dict / another RiskGroup still holds.
+    assert dict(rg.metadata) == {"severity": "high"}
+    assert rg == RiskGroup(id="rg1", asset_ids=("a",), metadata={"severity": "high"})
 
 
 def test_direction_enum():

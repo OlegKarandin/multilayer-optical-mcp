@@ -44,6 +44,18 @@ def test_oms_requires_existing_elements():
                       elements=("amp1", "fiber-missing")))
 
 
+def test_optical_node_shadow_registry_is_gone():
+    # S1-6: the OpticalNode class and its _optical_nodes registry were written,
+    # cloned, and never read. Lock the removal so nobody resurrects a second,
+    # perpetually-drifting node store alongside _roadms/_transceivers.
+    import multilayer_optical_mcp.model.assets as assets
+    assert not hasattr(assets, "OpticalNode")
+    n = _bare()
+    assert not hasattr(n, "add_optical_node")
+    assert not hasattr(n, "_optical_nodes")
+    assert not hasattr(n.clone(), "_optical_nodes")
+
+
 def test_lightpath_requires_existing_oms():
     n = _bare()
     with pytest.raises(ValueError, match="unknown OMS"):

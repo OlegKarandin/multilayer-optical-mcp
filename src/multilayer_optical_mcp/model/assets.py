@@ -1,18 +1,13 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Tuple
+from types import MappingProxyType
+from typing import Mapping, Tuple
 
 
 class Direction(str, Enum):
     FORWARD = "forward"
     BACKWARD = "backward"
-
-
-@dataclass(frozen=True)
-class OpticalNode:
-    id: str
-    kind: str  # "roadm" | "amplifier_site" | "transceiver_site"
 
 
 @dataclass(frozen=True)
@@ -115,4 +110,13 @@ class SRLG:
 class RiskGroup:
     id: str
     asset_ids: Tuple[str, ...]
-    metadata: dict = field(default_factory=dict)
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # S1-1: frozen=True only blocks rebinding the attribute, not mutating a
+        # dict stored in it. Wrap a *copy* of the incoming mapping in a read-only
+        # MappingProxyType so the frozen risk group is genuinely immutable and the
+        # caller's original dict is not a live backdoor.
+        object.__setattr__(
+            self, "metadata", MappingProxyType(dict(self.metadata))
+        )

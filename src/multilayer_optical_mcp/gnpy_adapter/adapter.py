@@ -28,6 +28,7 @@ from ..model.assets import Direction
 from ..model.network import NetworkModel
 from ..model.qot import ElementSnapshot, QoTBreakdown, QoTState
 from ..model.qot_results import QoTResultStore
+from .bands import SI_BAND
 from .loading import Channel, LoadingState
 from .translate import (
     DEFAULT_EQPT,
@@ -42,11 +43,12 @@ from .translate import (
 # state contains only a single carrier.
 _DUMMY_SPACING_HZ = 100e9
 
-# SI band upper edge (Hz). Mirrors the SI ``f_max`` synthesize.py builds
-# (191.3–196.1 THz) and the default spectrum grid's top slot (196.1 THz). A
-# single-channel dummy must stay within this edge; near the top of the band the
-# default ``probe + 100 GHz`` placement would land out of band (S4-1/A6).
-_SI_F_MAX_HZ = 196.1e12
+# SI band upper edge (Hz). Sourced from the single canonical SI band (bands.py,
+# 191.3–196.1 THz), which synthesize.py also builds the SI config from, so the two
+# can no longer drift (S3-10). A single-channel dummy must stay within this edge;
+# near the top of the band the default ``probe + 100 GHz`` placement would land
+# out of band (S4-1/A6).
+_SI_F_MAX_HZ = SI_BAND.f_max_hz
 
 
 def _ensure_min_two_channels(loading: LoadingState, probe_freq_hz: float) -> LoadingState:
