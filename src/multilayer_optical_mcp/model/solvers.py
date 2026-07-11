@@ -8,6 +8,23 @@ Routing is over an OMS graph: optical nodes are vertices, each OMS is an edge.
 Parallel OMS between the same node pair are distinct routes, so candidate
 enumeration walks node-simple-paths and expands the parallel-edge choices per
 hop (node-level k-shortest alone would collapse parallel OMS into one route).
+
+Stage 6 assumptions (recorded explicitly, from the inspection roadmap):
+- The OMS routing graph is DIRECTED (S6-4): one edge per OMS in its travel
+  direction; a bidirectional span is two independent directed OMS/edges, so
+  compute_paths(A,B) can never return the B->A OMS and compute_disjoint_paths
+  can never return the two directions of one span as a "disjoint" pair.
+- Avoidance is layer-agnostic per-OMS-edge pruning, applied twice
+  (build_oms_graph and re-threaded through _oms_between) — the design's key
+  correctness property; it holds because both filter on the same `forbidden`
+  set (see S6-9 below).
+- `avoid.assets` intersects the OMS asset set (oms id + fiber/amp/roadm
+  elements) PLUS both endpoint nodes, so naming a ROADM id in avoid.assets
+  prunes every OMS through it, not just one fiber at that site.
+- Enumeration is deterministic: `_oms_between` sorts by (length, id) when
+  weight="length", else by id.
+- Disjointness keys are namespaced (`phys:`/`node:`/`srlg:`/`rg:`) so
+  basis="union" never collides two different kinds of key.
 """
 from __future__ import annotations
 
@@ -96,7 +113,13 @@ def oms_length_km(model: NetworkModel, oms_id: str) -> float:
 
 def _avoid_sets(constraints: Optional[dict]) -> Tuple[frozenset, frozenset]:
     """Extract (avoid_assets, avoid_risk_groups) from a constraints dict.
-    Missing/empty -> empty sets (no pruning)."""
+    Missing/empty -> empty sets (no pruning).
+
+    S6-7: despite the name, the `risk_groups` constraint key matches BOTH
+    RiskGroup ids and static SRLG ids — see forbidden_oms, which iterates
+    `list_srlgs() + list_risk_groups()`. An id collision between an SRLG and a
+    RiskGroup expands both. Intentional (one avoid-key for "any named group"),
+    not a bug — documented rather than split into two keys."""
     avoid = (constraints or {}).get("avoid") or {}
     return frozenset(avoid.get("assets", ())), frozenset(avoid.get("risk_groups", ()))
 
@@ -149,7 +172,15 @@ def _enumerate_oms_paths(
     since reachable SNR tracks length). When *max_node_paths* is set, stop after
     that many distinct node paths have been expanded (parallels within them do
     not count toward the limit) — so a highly-parallel earlier node path cannot
-    starve topological diversity in the disjoint-pair search."""
+    starve topological diversity in the disjoint-pair search.
+
+    S6-5: `weight="length"` is only APPROXIMATELY length-ordered, not a true
+    k-shortest-by-km guarantee — the collapsed simple graph gives each hop the
+    MINIMUM parallel-OMS length, so node paths are ranked by best-case
+    parallel, and hop expansion then emits every parallel per hop in odometer
+    order (not re-sorted by realized total length). `solve_rsa` relies on this
+    ordering as a heuristic proxy for reachable SNR, not a certified guarantee;
+    the first `k` results are not provably shortest-by-fiber-km."""
     g = build_oms_graph(model, forbidden)
     if src not in g or dst not in g or src == dst:
         return
@@ -162,6 +193,12 @@ def _enumerate_oms_paths(
     simple.add_nodes_from(g.nodes)
     for u, v in g.edges():
         if by_length:
+            # S6-9: min() assumes _oms_between(u, v, forbidden=forbidden) is
+            # non-empty for every edge g.edges() yields — true only because `g`
+            # (from build_oms_graph) and _oms_between are filtered on the SAME
+            # `forbidden` set. If the two filters ever diverge this raises
+            # ValueError on an empty min() rather than silently misrouting;
+            # that's intentional — a loud failure, not a defensive fallback.
             w = min(oms_length_km(model, o) for o in _oms_between(model, u, v, forbidden=forbidden))
             if simple.has_edge(u, v):
                 simple[u][v]["weight"] = min(simple[u][v]["weight"], w)
@@ -254,7 +291,15 @@ def compute_disjoint_paths(
     fully-disjoint pair as SOLUTION; with best_effort=True returns the
     minimum-overlap pair as PARTIAL when no fully-disjoint pair exists; with
     best_effort=False and none disjoint, NO_SOLUTION. `weight` ∈ {"hops",
-    "length"} orders candidate routes."""
+    "length"} orders candidate routes.
+
+    S6-8: "minimum-overlap" (best_effort) minimizes the COUNT of shared
+    namespaced keys (`len(shared)`), not physical severity — one shared SRLG
+    (1 key) ranks better than two shared amps (2 keys) regardless of how many
+    correlated physical assets the SRLG actually covers. Documented rather than
+    weighted by asset count: the cap-32 candidate window (_DISJOINT_CANDIDATE_CAP)
+    already makes an exact severity ranking unreliable, so a naive weighting
+    would be false precision."""
     avoid_assets, avoid_rgs = _avoid_sets(constraints)
     forbidden = forbidden_oms(model, avoid_assets, avoid_rgs)
     cands = list(_enumerate_oms_paths(model, src, dst, _DISJOINT_EMISSION_CAP,
