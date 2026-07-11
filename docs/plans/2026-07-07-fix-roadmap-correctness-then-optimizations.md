@@ -270,10 +270,11 @@ is saturated) and document the choice.
 ## PART 3 — DOCUMENTATION & PINNING-TEST BATCH (Batch D)
 
 > **STATUS (2026-07-11): landed on branch `batch-d-docs-and-pinning-tests`.** Nine
-> docs-only commits (one per file/finding-group) plus the S2-1 pinning test, executed via
-> `docs/plans/2026-07-10-batch-d-docs-and-pinning-tests.md` under
+> commits total — eight docs-only (one per file/finding-group) plus the S2-1 pinning
+> test — executed via `docs/plans/2026-07-10-batch-d-docs-and-pinning-tests.md` under
 > superpowers:subagent-driven-development (fresh implementer + task reviewer per task, all
-> nine reviews clean on first pass). No production logic changed anywhere in the batch —
+> nine reviews clean on first pass, plus a clean final whole-branch review). No production
+> logic changed anywhere in the batch —
 > `synthesize.py`'s S3-2/S3-3 comments were re-verified against the ground-truth bridge
 > test to confirm the physics literals (`33.0`, `[0.0, 0.0, 0.0, float(nf)]`) are
 > byte-identical. **S7-9 confirmed NOT retired**: C7-7/S2-4 landed the
