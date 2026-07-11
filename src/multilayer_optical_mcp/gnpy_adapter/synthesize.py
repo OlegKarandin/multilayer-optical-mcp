@@ -11,6 +11,13 @@ from ..model.network import NetworkModel
 from .bands import AMP_BAND, SI_BAND, TRANSCEIVER_BAND
 
 ROADM_TARGET_PCH_OUT_DB = -20.0
+# S3-2: every synthesized ROADM gets this add/drop OSNR penalty regardless of
+# hardware — there is no per-instance field on the `ROADM` dataclass to source
+# a different value from (unlike target_pch_out_db, which IS per-instance;
+# see S3-5 and model_to_gnpy_topology). A vendor ROADM with a genuinely
+# different add/drop floor is not representable without adding that field to
+# `ROADM` and threading it through synthesis the same way S3-5 did for
+# target_pch_out_db.
 ROADM_ADD_DROP_OSNR = 33.0
 # Transponder launch power (dBm) — the TX-OSNR noise-floor reference. Distinct
 # from the design reference channel power (pch) and the ROADM target_pch_out.
@@ -99,6 +106,12 @@ def nf_type_variety(nf_db: float) -> str:
 def _adv_config_path(nf: float, tmpdir: Path) -> str:
     """Write an advanced_model NF config file and return its path string."""
     cfg = {
+        # S3-3: a flat (degree-0) polynomial — NF is constant across gain, not
+        # gain-dependent as on a real EDFA. Required shape for CLAUDE.md's
+        # advanced_model requirement (nf_fit_coeff must exist so
+        # inject_degradation's NF delta actually takes effect — see the
+        # gnpy-nf-injection-advanced-model memory), but a simplification versus
+        # a real per-amp gain-dependent NF curve.
         "nf_fit_coeff": [0.0, 0.0, 0.0, float(nf)],
         # S3-10: the amp NF-fit band is one guard band wider than the SI channel
         # band on each edge (see bands.py). Derived, not a bare literal.
