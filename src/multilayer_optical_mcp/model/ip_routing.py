@@ -10,13 +10,15 @@ Stage 5 assumptions (recorded explicitly, from the inspection roadmap):
   first `recompute_qot_under_loading`, `ip_link_capacity_gbps` raises
   LookupError and callers here treat that as capacity "unknown" (S5-4), never a
   crash.
-- `working_path` is the only load-bearing path; `protection_path` is standby and
-  contributes zero load.
+- `working_path` is the steady-state load-bearing path; `protection_path` is a
+  dedicated 1:1 standby that reserves (but does not carry) its full demand and is
+  activated by `simulate_ip_routing` the instant any working link goes down.
 - The IP layer is undirected: one capacity scalar per link, either-orientation
   traversal in `is_contiguous_path` (S5-6 — per-direction optical asymmetry
   never reaches this layer; see NetworkModel.ip_link_capacity_gbps).
-- `offered_load_per_link`'s dict is keyed only by currently-existing IP links;
-  pinned paths always reference live links (no `remove_ip_link` exists).
+- `offered_load_per_link` is the working-only NOMINAL load; a pinned path may now
+  reference a removed link (Phase 7 `remove_lightpath`/`remove_ip_link`), which
+  the failover-aware `simulate_ip_routing` treats as a down link, never a KeyError.
 """
 
 from __future__ import annotations
@@ -80,13 +82,88 @@ def build_grooming_map(model: NetworkModel) -> GroomingMap:
 
 
 def offered_load_per_link(model: NetworkModel) -> Dict[str, float]:
-    """Sum each routed service's demand onto every IP link in its pinned
-    working_path. Empty working_path => unrouted, carries no load."""
+    """Working-only NOMINAL load: each routed service's demand on every IP link in
+    its pinned working_path, ignoring failures. Empty working_path => unrouted,
+    carries no load. Missing (removed) links are skipped. Feeds the 1:1
+    reservation-admission check and ip_topology; the failover-aware view lives in
+    active_load_per_link / simulate_ip_routing."""
     load: Dict[str, float] = {link.id: 0.0 for link in model.list_ip_links()}
     for svc in model.list_services():
         for ip_id in svc.working_path:
-            load[ip_id] += svc.demand_gbps
+            if ip_id in load:
+                load[ip_id] += svc.demand_gbps
     return load
+
+
+def reserved_capacity_per_link(model: NetworkModel) -> Dict[str, float]:
+    """Σ protection-path demand reserved on each IP link. Dedicated 1:1: every
+    protected service reserves its FULL demand on every link of its protection
+    path, and reservations SUM across services sharing a link, so the reservation
+    holds under any single-or-simultaneous failover. Feeds PROTECTION_OVERSUBSCRIBED."""
+    reserved: Dict[str, float] = {link.id: 0.0 for link in model.list_ip_links()}
+    for svc in model.list_services():
+        for ip_id in svc.protection_path:
+            if ip_id in reserved:
+                reserved[ip_id] += svc.demand_gbps
+    return reserved
+
+
+def _link_status(model: NetworkModel, ip_id: str) -> str:
+    """Three-state link status (C5-1, S5-4): "removed" (absent), "unknown" (present
+    but no QoT recomputed yet — NOT down), "down" (capacity 0 / margin-negative),
+    or "up" (capacity > 0). The unknown state is what stops a freshly-provisioned
+    link from spuriously dropping its service before the first recompute."""
+    try:
+        cap = model.ip_link_capacity_gbps(ip_id)
+    except KeyError:
+        return "removed"
+    except LookupError:
+        return "unknown"
+    return "up" if cap > 0.0 else "down"
+
+
+def _path_usable(model: NetworkModel, path: Tuple[str, ...]) -> bool:
+    """A path is ridable iff it is non-empty and every link is up OR unknown — an
+    un-evaluated link is treated optimistically (unknown != down), so only a
+    provably down/removed link forces failover."""
+    return bool(path) and all(
+        _link_status(model, ip) in ("up", "unknown") for ip in path)
+
+
+def _active_path(model: NetworkModel, svc) -> Tuple[Optional[Tuple[str, ...]], str]:
+    """The path a service currently rides under 1:1 auto-failover: working if
+    ridable; else the reserved protection path if ridable; else (None, "none").
+    Returns (path, "working" | "protection" | "none")."""
+    if _path_usable(model, svc.working_path):
+        return svc.working_path, "working"
+    if _path_usable(model, svc.protection_path):
+        return svc.protection_path, "protection"
+    return None, "none"
+
+
+def active_load_per_link(model: NetworkModel) -> Dict[str, float]:
+    """Failover-aware load: each service contributes its demand to whichever path
+    it currently rides (working if up, else reserved protection). A service with
+    no usable path contributes nothing — it is dropped."""
+    load: Dict[str, float] = {link.id: 0.0 for link in model.list_ip_links()}
+    for svc in model.list_services():
+        path, _which = _active_path(model, svc)
+        if path is None:
+            continue
+        for ip_id in path:
+            if ip_id in load:
+                load[ip_id] += svc.demand_gbps
+    return load
+
+
+def _first_bad_link(model: NetworkModel, path: Tuple[str, ...]) -> Tuple[str, str]:
+    """First link in `path` that is provably removed or down (an unknown link is
+    NOT bad); ("", "none") if none. Attributes a drop to a concrete failed link."""
+    for ip_id in path:
+        status = _link_status(model, ip_id)
+        if status in ("removed", "down"):
+            return ip_id, status
+    return "", "none"
 
 
 @dataclass(frozen=True)
@@ -101,8 +178,8 @@ class LinkUtilization:
 @dataclass(frozen=True)
 class DroppedService:
     service_id: str
-    reason: str                    # currently always "link_down"
-    on_link: str
+    reason: str                    # "link_down" | "link_removed" | "unrouted"
+    on_link: str                   # the failed link ("" for an unrouted service)
 
 
 @dataclass(frozen=True)
@@ -118,25 +195,24 @@ class IPRoutingResult:
     down_links: Tuple[str, ...]           # every down link (capacity 0), loaded or idle
     dropped_services: Tuple[DroppedService, ...]
     overflow_gbps: float                  # Σ max(0, offered-cap) over congested links
+    restored_services: Tuple[str, ...] = ()   # riding reserved protection after a working failure
 
 
 def simulate_ip_routing(model: NetworkModel) -> IPRoutingResult:
-    """Pure read: account pinned working_path demand onto IP links and report
-    utilization, congestion, and drops. Routes nothing.
+    """Failover-aware pure read: place each service on its ACTIVE path (working if
+    up, else its reserved 1:1 protection), account utilization, and report
+    congestion, drops, and services restored onto protection. Routes nothing;
+    only pins the paths already declared on each service.
 
     S5-7: this function never consults `model.failed_assets()` directly — it
     trusts that a QoT recompute has already left the right sentinel in
-    `_qot_state`. Calling `model.mark_failed(...)` and never recomputing will
-    NOT surface as a drop here (the stale feasible QoT is still on record);
-    `whatif.inject_failure` writes the -inf sentinel immediately, which is why
-    it is the documented entry point for failures. Since the C4-1 fix (S8-1),
-    `recompute_qot_under_loading` also re-derives the sentinel from
-    `model.failed_assets()` on every call regardless of whether
-    `inject_failure` ever ran, so the gap is narrower than it once was: any
-    recompute after a bare `mark_failed` self-heals it. But a bare
-    `mark_failed` with no recompute at all still will not down anything here.
+    `_qot_state` (a bare `mark_failed` with no recompute still downs nothing
+    here; `whatif.inject_failure` / `recompute_qot_under_loading` are the
+    documented entry points that write the -inf sentinel). A link is "down" for
+    failover purposes when it is removed (absent) or margin-negative — see
+    `_link_is_up`.
     """
-    load = offered_load_per_link(model)
+    load = active_load_per_link(model)
     utils: List[LinkUtilization] = []
     congested: List[str] = []
     down: List[str] = []
@@ -158,19 +234,28 @@ def simulate_ip_routing(model: NetworkModel) -> IPRoutingResult:
         elif util is not None and util > 1.0:
             congested.append(link.id)
             overflow += offered - cap
-    down_set = set(down)
     dropped: List[DroppedService] = []
+    restored: List[str] = []
     for svc in model.list_services():
-        for ip_id in svc.working_path:
-            if ip_id in down_set:
-                dropped.append(DroppedService(svc.id, "link_down", ip_id))
-                break  # service is fully lost once any link on it is down
+        path, which = _active_path(model, svc)
+        if path is None:
+            if not svc.working_path:
+                # A service with demand but no working path: its demand must not
+                # silently vanish — it is lost traffic (Decision 6 conservation).
+                dropped.append(DroppedService(svc.id, "unrouted", ""))
+            else:
+                bad_id, kind = _first_bad_link(model, svc.working_path)
+                reason = "link_removed" if kind == "removed" else "link_down"
+                dropped.append(DroppedService(svc.id, reason, bad_id))
+        elif which == "protection":
+            restored.append(svc.id)  # survived via reserved 1:1 failover
     return IPRoutingResult(
         utilizations=tuple(utils),
         congested_links=tuple(congested),
         down_links=tuple(down),
         dropped_services=tuple(dropped),
         overflow_gbps=overflow,
+        restored_services=tuple(restored),
     )
 
 

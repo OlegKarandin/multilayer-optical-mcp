@@ -241,3 +241,90 @@ def test_affected_services_includes_protection_path():
                           protection_path=("ipAB", "ipBC")))
     # lpBC only on the protection path -> still affected.
     assert ip_routing.affected_services(n, "lpBC") == ("svc-AC",)
+
+
+# --- Phase 7 Task 2: removal + failover-aware routing + 1:1 reservation ---
+from multilayer_optical_mcp.model.assets import (
+    Amplifier as _Amp, Fiber as _Fiber, OMS as _OMS, Lightpath as _LP,
+    IPLink as _IPLink, Service as _Svc, FiberType as _FT, TransceiverMode as _TM,
+)
+from multilayer_optical_mcp.model.qot import QoTState as _QoT
+from multilayer_optical_mcp.model.modes import ModeRegistry as _MR
+from multilayer_optical_mcp.model.network import NetworkModel as _NM
+from multilayer_optical_mcp.model.ip_routing import simulate_ip_routing as _sim
+
+
+def _model_with_service():
+    m = _NM(modes=_MR([_TM(
+        id="400G@7.1dB", bitrate_gbps=400.0, required_gsnr_db=7.1,
+        symbol_rate_baud=87.5e9, channel_spacing_hz=100e9)]))
+    m.register_fiber_type(_FT(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    m.add_amplifier(_Amp(id="a1", type_variety="adv", gain_db=20.0, nf_db=5.5))
+    m.add_fiber(_Fiber(id="fAB", a_end="a1", z_end="a2", length_km=80.0, type_variety="SSMF"))
+    m.add_oms(_OMS(id="omsAB", src_node_id="A", dst_node_id="B", elements=("a1", "fAB")))
+    m.add_lightpath(_LP(id="lpAB", oms_sequence=("omsAB",),
+                        mode_id="400G@7.1dB", center_freq_hz=193.4e12))
+    m.add_ip_link(_IPLink(id="ipAB", a_router="rA", z_router="rB", lightpath_id="lpAB"))
+    m.add_service(_Svc(id="svc", src_router="rA", dst_router="rB",
+                       demand_gbps=100.0, working_path=("ipAB",)))
+    m.set_qot_state("lpAB", _QoT(gsnr_db=10.0, osnr_db=22.0, margin_db=2.0))
+    return m
+
+
+def test_remove_ip_link_then_service_is_dropped():
+    m = _model_with_service()
+    m.remove_ip_link("ipAB")
+    res = _sim(m)        # must not KeyError on the missing link
+    assert "svc" in {d.service_id for d in res.dropped_services}
+    assert any(d.reason == "link_removed" for d in res.dropped_services)
+
+
+def test_remove_lightpath_also_unbinds_ip_link():
+    m = _model_with_service()
+    m.remove_lightpath("lpAB")          # removes the lightpath and its bound IP link
+    assert "lpAB" not in m._lightpaths
+    assert "ipAB" not in m._ip_links
+    res = _sim(m)
+    assert "svc" in {d.service_id for d in res.dropped_services}
+
+
+def _protected_model():
+    from dataclasses import replace
+    m = _model_with_service()                       # svc demand 100, working ("ipAB",)
+    m.add_amplifier(_Amp(id="a3", type_variety="adv", gain_db=20.0, nf_db=5.5))
+    m.add_fiber(_Fiber(id="fCD", a_end="a3", z_end="a4", length_km=80.0, type_variety="SSMF"))
+    m.add_oms(_OMS(id="omsCD", src_node_id="A", dst_node_id="B", elements=("a3", "fCD")))
+    m.add_lightpath(_LP(id="lpCD", oms_sequence=("omsCD",),
+                        mode_id="400G@7.1dB", center_freq_hz=193.5e12))
+    m.add_ip_link(_IPLink(id="ipCD", a_router="rA", z_router="rB", lightpath_id="lpCD"))
+    m.set_qot_state("lpCD", _QoT(gsnr_db=10.0, osnr_db=22.0, margin_db=2.0))
+    m._services["svc"] = replace(m.get_service("svc"), protection_path=("ipCD",))
+    return m
+
+
+def test_working_failure_fails_over_to_protection_not_dropped():
+    m = _protected_model()
+    m.set_qot_state("lpAB", _QoT(gsnr_db=5.0, osnr_db=18.0, margin_db=-1.0))  # working dark
+    res = _sim(m)
+    assert "svc" not in {d.service_id for d in res.dropped_services}   # survived
+    assert "svc" in res.restored_services                             # via protection
+    util = {u.ip_link_id: u for u in res.utilizations}
+    assert util["ipCD"].offered_gbps == 100.0                        # load moved to protection
+    assert util["ipAB"].offered_gbps == 0.0                          # off the dead working link
+
+
+def test_both_paths_down_drops_service():
+    m = _protected_model()
+    m.set_qot_state("lpAB", _QoT(gsnr_db=5.0, osnr_db=18.0, margin_db=-1.0))
+    m.set_qot_state("lpCD", _QoT(gsnr_db=5.0, osnr_db=18.0, margin_db=-1.0))
+    res = _sim(m)
+    assert "svc" in {d.service_id for d in res.dropped_services}
+    assert "svc" not in res.restored_services
+
+
+def test_reserved_capacity_sums_protection_demand():
+    from multilayer_optical_mcp.model.ip_routing import reserved_capacity_per_link
+    m = _protected_model()                          # svc reserves 100 on ipCD
+    reserved = reserved_capacity_per_link(m)
+    assert reserved["ipCD"] == 100.0
+    assert reserved["ipAB"] == 0.0                  # working link carries no reservation

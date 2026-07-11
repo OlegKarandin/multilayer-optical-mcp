@@ -205,6 +205,7 @@ def ip_routing_result_dict(res) -> Dict[str, Any]:
             for u in res.utilizations
         ],
         "congestion": list(res.congested_links),
+        "restored": list(res.restored_services),
         "dropped": {
             "services": [
                 {"service_id": d.service_id, "reason": d.reason,

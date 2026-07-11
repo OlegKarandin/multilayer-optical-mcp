@@ -157,7 +157,7 @@ def test_ip_routing_result_dict_shape():
     n = _model_with_services()
     from multilayer_optical_mcp.model import ip_routing
     d = views.ip_routing_result_dict(ip_routing.simulate_ip_routing(n))
-    assert set(d) == {"utilizations", "congestion", "dropped"}
+    assert set(d) == {"utilizations", "congestion", "restored", "dropped"}
     u = {x["ip_link_id"]: x for x in d["utilizations"]}
     assert u["ipAB"]["utilization"] == 0.6
     assert d["congestion"] == []
