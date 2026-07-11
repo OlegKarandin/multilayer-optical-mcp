@@ -3,6 +3,18 @@
 Margin is an OUTPUT: the sweep screens recorded margin; inject_degradation
 perturbs a physical parameter and lets margin move via recompute. None of these
 mutate ground truth — callers pass a branch model.
+
+Stage 8 assumptions (recorded explicitly, from the inspection roadmap):
+- Injection mutates the model's physical parameters in place on a BRANCH;
+  correctness depends on snapshots._clone copying the mutated
+  _amplifiers/_fibers AND _failed_assets, and diff() reporting failed_assets
+  — verified present.
+- `inject_failure`'s -inf QoT sentinel — not `_failed_assets` alone — is the
+  mechanism that reaches `simulate_ip_routing` (see
+  ip_routing.simulate_ip_routing's S5-7 docstring for how a bare
+  model.mark_failed() without a subsequent recompute would be missed there).
+- `margin_threshold_sweep` is a pure read; lightpaths with no recorded QoT are
+  omitted, never defaulted. Margin is never an input anywhere in this module.
 """
 from __future__ import annotations
 
