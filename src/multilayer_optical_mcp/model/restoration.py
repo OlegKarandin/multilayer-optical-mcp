@@ -60,6 +60,13 @@ def _lever(p: Placement) -> str:
 
 def _candidate(model: NetworkModel, p: Placement) -> RestorationCandidate:
     lever = _lever(p)
+    # S7-11: cost_facets are PROXIES, not the named physical quantity. "hops"
+    # is reused-plus-new LIGHTPATH count, not fiber/span hops; "transponders"
+    # assumes every new lightpath needs exactly 2 (one per end) and ignores
+    # any already-spare transponder inventory. compute_restoration sorts
+    # candidates on these proxies (shortfall, transponders, hops) until
+    # evaluate_objective's richer cost vector (CLAUDE.md) lands as the ranking
+    # function instead.
     cost = {
         "transponders": 2.0 * len(p.new_lightpaths),
         "new_lightpaths": float(len(p.new_lightpaths)),
