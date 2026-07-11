@@ -269,6 +269,22 @@ is saturated) and document the choice.
 
 ## PART 3 — DOCUMENTATION & PINNING-TEST BATCH (Batch D)
 
+> **STATUS (2026-07-11): landed on branch `batch-d-docs-and-pinning-tests`.** Nine
+> docs-only commits (one per file/finding-group) plus the S2-1 pinning test, executed via
+> `docs/plans/2026-07-10-batch-d-docs-and-pinning-tests.md` under
+> superpowers:subagent-driven-development (fresh implementer + task reviewer per task, all
+> nine reviews clean on first pass). No production logic changed anywhere in the batch —
+> `synthesize.py`'s S3-2/S3-3 comments were re-verified against the ground-truth bridge
+> test to confirm the physics literals (`33.0`, `[0.0, 0.0, 0.0, float(nf)]`) are
+> byte-identical. **S7-9 confirmed NOT retired**: C7-7/S2-4 landed the
+> `Channel.baud_rate_hz`/`roll_off` plumbing, but `allocation._build_loading` (used by both
+> `allocation.py` and `multilayer_graph.place_demands`) still doesn't populate them from
+> `ref_mode_id`, so the ref-mode QoT probe assumption documented at
+> `multilayer_graph.py`'s `place_demands` is still live — independently verified by the
+> Task 5 reviewer against `allocation.py`/`loading.py`/`translate.py`. Full suite: 288
+> passed (287 baseline + the new S2-1 test), no regressions. Branch not yet merged to
+> `master` — see the branch's own finishing-a-development-branch step.
+
 One PR of docstrings + tests locking in invariants (roadmap ACTIONs verbatim):
 - **S2-1** `test_union_allows_adjacent_channels` — pin strict-`<` overlap so a future `<=` can't
   break 50 GHz grids.
