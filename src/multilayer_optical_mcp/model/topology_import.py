@@ -1,3 +1,22 @@
+# src/multilayer_optical_mcp/model/topology_import.py
+"""Model-build half of Phase 6a: NetworkModel <- an abstract node/edge graph.
+
+Call order: model_from_abstract_graph(graph, modes) -> per node adds
+roadm_/trx_/router_<id>; per edge _edge_spans (-> split_link_into_spans when
+span_lengths_km is absent/inconsistent) then _add_directed_oms TWICE (both
+directions), each emitting a booster + per-span (fiber, amp) + an OMS whose
+elements start at roadm_<src>. The synthesis half (synthesize.py, adapter.py)
+is Stage 3/4 of the inspection roadmap.
+
+Importer assumptions (recorded explicitly, from the inspection roadmap):
+- One ROADM/Transceiver/Router per node; roadm_<id> / trx_<id> / router_<id>
+  naming. `Router.site == optical-node id` is the src_router -> optical-node
+  convention Stage 7 restoration depends on.
+- Every edge is bidirectional -> two independent directed OMS with independent
+  amp chains (amp_<src>_<dst>_* vs amp_<dst>_<src>_*). The importer builds
+  correct reverse-chain impairments, which the adapter (post-S4-2/A2 fix) now
+  actually propagates into BACKWARD QoT.
+"""
 from __future__ import annotations
 
 import math
@@ -50,6 +69,12 @@ SSMF_LOSS_COEF_DB_PER_KM = 0.2
 
 
 def _edge_spans(edge: Dict[str, Any]) -> List[float]:
+    """Resolve an edge's per-span lengths from span_lengths_km, or derive them
+    from length_km via split_link_into_spans.
+
+    S3-add-5: `edge["num_spans"]`, if present, is NEVER read or cross-checked
+    against len(span_lengths_km) / the derived span count. A graph whose
+    num_spans disagrees with the actual span count imports silently."""
     spans = edge.get("span_lengths_km")
     if spans:
         # Addendum-2: span_lengths_km are authoritative when present. If they do
@@ -127,6 +152,11 @@ def _add_directed_oms(
     for i, span_km in enumerate(spans):
         fid = f"fiber_{src}_{dst}_{i}"
         aid = f"amp_{src}_{dst}_{i}"
+        # S3-add-4: a_end/z_end are DECORATIVE. They skip the booster (span
+        # 0's true predecessor in `elements`) and synthesis wires connections
+        # purely from OMS.elements order (synthesize.py), never from these
+        # fields. Auditing physical adjacency from Fiber.a_end/z_end reads a
+        # topology one hop off from what actually propagates.
         n.add_fiber(Fiber(id=fid, a_end=f"roadm_{src}" if i == 0 else f"amp_{src}_{dst}_{i-1}",
                           z_end=aid, length_km=float(span_km), type_variety=fiber_type))
         nf_i = float(nfs[i]) if i < len(nfs) else DEFAULT_AMP_NF_DB
