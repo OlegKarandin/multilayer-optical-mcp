@@ -21,6 +21,25 @@ Edges (directed; every edge carries a 'weight'):
 A path access(src) -> access(dst) that stays on existing lightpaths uses only
 LPE edges (grooming). A path that dips via TxE -> WLEs (one lam) -> RxE realizes
 a new lightpath on that wavelength. No CvtE: wavelength continuity is structural.
+
+Stage 7 assumptions (recorded explicitly, from the inspection roadmap):
+- `Router.site == optical-node id` is the src/dst -> optical-node resolution
+  the restoration caller (`compute_restoration`) depends on.
+- Wavelength continuity is structural (no cross-lambda edge): a new lightpath
+  run is one lambda end-to-end, never converted mid-path.
+- A returned candidate does NOT commit to a specific wavelength; provisioning
+  must re-run spectrum assignment before actually lighting a new run.
+- New-lightpath runs within ONE placement are assumed OMS-disjoint (S7-10):
+  `_build_loading` QoTs each new run against the committed spectrum snapshot
+  only, ignoring channels that OTHER new runs in the same placement would
+  light. Harmless today because successive runs in one placement are
+  separated by grooming hops on different OMS (no shared-fiber NLI between
+  them) — an unstated precondition, not a proof.
+- `build_layered_graph` and `place_demands` each call `build_spectrum_state`
+  independently (S7-12): they agree today because both default to
+  `SpectrumGrid.default()`, but passing a custom `grid` to one call and not
+  the other would desync the WLE wavelength layers from the NLI loading comb.
+  Thread one grid through both if that ever becomes a real caller pattern.
 """
 from __future__ import annotations
 
@@ -325,6 +344,15 @@ def place_demands(
     if s not in simple or t not in simple or not nx.has_path(simple, s, t):
         return []
     spectrum = build_spectrum_state(model, grid)
+    # S7-9: every new-lightpath run in this placement is probed at the SAME
+    # ref_mode (the registry's first mode), regardless of which mode
+    # _best_feasible_mode later selects for it. Correct only while GSNR is
+    # mode-independent given a fixed probe — true here because _build_loading
+    # doesn't populate the probe Channel's baud_rate_hz/roll_off from
+    # ref_mode_id (they fall back to build_si_for_loading's scalar default,
+    # the S2-4 residual), so the probe's spectral shape doesn't vary with
+    # ref_mode either. Would need to re-probe at the delivered mode if
+    # per-format baud is ever threaded through this probe.
     ref_mode = model.modes.list()[0].id
     out: List[Placement] = []
     seen: set = set()
@@ -358,6 +386,10 @@ def place_demands(
             realized: List[NewLightpathRun] = []
             feasible = True
             new_cap = float("inf")
+            # S7-10: each new run is QoT'd against the committed `spectrum`
+            # snapshot only — a run does not see the channels any OTHER new
+            # run in this same placement would light on a shared OMS. See the
+            # module docstring's Stage 7 assumptions (OMS-disjoint runs).
             for oms_seq, lam, run_src, run_dst in new_runs:
                 loading = _build_loading(grid, spectrum, oms_seq, lam, ref_mode)
                 mode, gsnr = _best_feasible_mode(model, qot, oms_seq, loading, ref_mode)
