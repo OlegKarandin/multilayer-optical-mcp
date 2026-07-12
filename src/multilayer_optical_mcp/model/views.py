@@ -284,6 +284,17 @@ def validation_report_dict(report) -> Dict[str, Any]:
     }
 
 
+def _jsonify_diff(diff):
+    """Normalize a registry diff to JSON-native lists (the per-registry deltas
+    carry tuples from snapshots._delta; JSON has no tuple). A rejection diff maps
+    a registry-shaped key to a plain string ({"error": msg}) — passed through."""
+    if diff is None:
+        return None
+    return {reg: {k: list(v) for k, v in delta.items()}
+            if isinstance(delta, dict) else delta
+            for reg, delta in diff.items()}
+
+
 def commit_result_dict(result) -> Dict[str, Any]:
     """Serialize a CommitResult (status/applied/failed + the simulated diff for a
     dry-run and the embedded validation report)."""
@@ -295,7 +306,7 @@ def commit_result_dict(result) -> Dict[str, Any]:
         "intended_snapshot_id": result.intended_snapshot_id,
         "validation": validation_report_dict(result.validation)
         if result.validation is not None else None,
-        "diff": result.diff,
+        "diff": _jsonify_diff(result.diff),
     }
 
 

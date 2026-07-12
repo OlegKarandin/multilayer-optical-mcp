@@ -71,3 +71,39 @@ def test_validate_plan_tool_returns_typed_report():
           ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
     out = _call(app, "validate_plan", plan={"ops": []})
     assert "violations" in out and "ok" in out and "num_states" in out
+
+
+def test_commit_dry_run_tool_reports_diff_without_mutating():
+    app = build_app()
+    n = _seed(app)
+    mode = n.modes.list()[0].id
+    plan = {"ops": [
+        {"op": "provision_lightpath",
+         "lightpath": {"id": "lpX", "oms_sequence": ["omsAB"], "mode_id": mode,
+                       "center_freq_hz": 193.4e12},
+         "ip_link": {"id": "ipX", "a_router": "rA", "z_router": "rB"}}]}
+    out = _call(app, "commit_plan", plan=plan, dry_run=True)
+    assert out["status"] == "dry_run"
+    assert out["diff"]["lightpaths"]["added"] == ["lpX"]
+    assert "lpX" not in app._snapshots.current()._lightpaths
+
+
+def test_commit_live_requires_confirm_then_reconcile_in_sync():
+    app = build_app()
+    n = _seed(app)
+    mode = n.modes.list()[0].id
+    plan = {"ops": [
+        {"op": "provision_lightpath",
+         "lightpath": {"id": "lpX", "oms_sequence": ["omsAB"], "mode_id": mode,
+                       "center_freq_hz": 193.4e12},
+         "ip_link": {"id": "ipX", "a_router": "rA", "z_router": "rB"}}]}
+    pending = _call(app, "commit_plan", plan=plan, dry_run=False, confirm=False)
+    assert pending["status"] == "requires_approval"
+
+    done = _call(app, "commit_plan", plan=plan, dry_run=False, confirm=True)
+    assert done["status"] == "committed"
+    assert "lpX" in app._snapshots.current()._lightpaths
+
+    drift = _call(app, "reconcile", intended_snapshot_id=done["intended_snapshot_id"])
+    assert drift["in_sync"] is True
+    assert drift["drift"] == []

@@ -189,6 +189,7 @@ def build_app() -> FastMCP:
     )
     from .model.assets import Lightpath as _Lightpath, IPLink as _IPLink
     from .model.validate import validate_plan as _validate_plan
+    from .model.commit import commit_plan as _commit_plan, reconcile as _reconcile
     from .model.views import (
         validation_report_dict, commit_result_dict, drift_report_dict,
     )
@@ -459,6 +460,30 @@ def build_app() -> FastMCP:
         apply_op(snapshots.current(), SetModulationFormat(
             lightpath_id=lightpath_id, mode_id=mode_id))
         return {"lightpath_id": lightpath_id, "mode_id": mode_id}
+
+    @app.tool()
+    def commit_plan(
+        plan: dict, dry_run: bool = True, confirm: bool = False,
+        basis: str = "physical", level: str = "link",
+        dropped_tolerance_gbps: float = 0.0,
+    ) -> dict:
+        """dry_run=True simulates on a clone and returns the would-be diff without
+        touching state. A live commit (dry_run=False) validates first, requires
+        confirm=True, then actuates; status is 'rejected' (violations),
+        'requires_approval' (unconfirmed), 'committed', or
+        'committed_with_failures' (control-plane partial failure — call reconcile)."""
+        result = _commit_plan(
+            snapshots, plan_from_dict(plan), store_results=results,
+            dry_run=dry_run, confirm=confirm, basis=basis, level=level,
+            dropped_tolerance_gbps=dropped_tolerance_gbps)
+        return commit_result_dict(result)
+
+    @app.tool()
+    def reconcile(intended_snapshot_id: str) -> dict:
+        """After a live commit, diff actual network state against the intended
+        end-state recorded at commit time. Returns typed drift[] (the ops the
+        control plane failed to actuate); in_sync=True when reality matches."""
+        return drift_report_dict(_reconcile(snapshots, intended_snapshot_id))
 
     return app
 
