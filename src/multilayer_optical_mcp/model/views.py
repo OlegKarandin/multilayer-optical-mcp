@@ -267,3 +267,44 @@ def restoration_result_dict(res) -> Dict[str, Any]:
             "service_id": res.service_id,
             "demand_gbps": res.demand_gbps,
             "candidates": [_cand(c) for c in res.candidates]}
+
+
+def validation_report_dict(report) -> Dict[str, Any]:
+    """Serialize a ValidationReport: ok/num_states plus the typed violation list,
+    each violation carrying its state_index, transient flag, and remediation
+    detail (Decision 4: the detail points the agent at the right fix)."""
+    return {
+        "ok": report.ok,
+        "num_states": report.num_states,
+        "violations": [
+            {"type": v.type.value, "state_index": v.state_index,
+             "asset_id": v.asset_id, "transient": v.transient, "detail": v.detail}
+            for v in report.violations
+        ],
+    }
+
+
+def commit_result_dict(result) -> Dict[str, Any]:
+    """Serialize a CommitResult (status/applied/failed + the simulated diff for a
+    dry-run and the embedded validation report)."""
+    return {
+        "status": result.status,
+        "dry_run": result.dry_run,
+        "applied_ops": result.applied_ops,
+        "failed_ops": result.failed_ops,
+        "intended_snapshot_id": result.intended_snapshot_id,
+        "validation": validation_report_dict(result.validation)
+        if result.validation is not None else None,
+        "diff": result.diff,
+    }
+
+
+def drift_report_dict(report) -> Dict[str, Any]:
+    """Serialize a DriftReport (in_sync + typed drift entries from reconcile)."""
+    return {
+        "in_sync": report.in_sync,
+        "drift": [
+            {"registry": d.registry, "kind": d.kind, "asset_id": d.asset_id}
+            for d in report.drift
+        ],
+    }
