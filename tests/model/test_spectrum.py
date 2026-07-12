@@ -4,6 +4,7 @@ Occupancy is STORED as one integer bit-vector per OMS; feasibility along a path
 is a bitwise OR of the path's OMS masks. (This is not the IP-capacity
 'derived, never stored' rule — that is about capacity = f(mode), not spectrum.)
 """
+from multilayer_optical_mcp.model.assets import ROADM
 from multilayer_optical_mcp.model.assets import (
     FiberType, Fiber, Amplifier, OMS, Lightpath, TransceiverMode,
 )
@@ -29,8 +30,10 @@ def _model(*, lit_slot=None) -> NetworkModel:
         n.add_amplifier(Amplifier(id=a, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
     n.add_fiber(Fiber(id="fN", a_end="aN1", z_end="aN2", length_km=80.0, type_variety="SSMF"))
     n.add_fiber(Fiber(id="fS", a_end="aS1", z_end="aS2", length_km=80.0, type_variety="SSMF"))
-    n.add_oms(OMS(id="oms-north", src_node_id="A", dst_node_id="Z", elements=("aN1", "fN", "aN2")))
-    n.add_oms(OMS(id="oms-south", src_node_id="A", dst_node_id="Z", elements=("aS1", "fS", "aS2")))
+    for node in ("A", "Z"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    n.add_oms(OMS(id="oms-north", src_node_id="A", dst_node_id="Z", elements=("roadm_A", "aN1", "fN", "aN2")))
+    n.add_oms(OMS(id="oms-south", src_node_id="A", dst_node_id="Z", elements=("roadm_A", "aS1", "fS", "aS2")))
     if lit_slot is not None:
         grid = _grid()
         n.add_lightpath(Lightpath(id="lp-north", oms_sequence=("oms-north",),

@@ -1,4 +1,5 @@
 import pytest
+from multilayer_optical_mcp.model.assets import ROADM
 from multilayer_optical_mcp.model.assets import (
     FiberType, Amplifier, Fiber, OMS, Lightpath, IPLink, Service,
 )
@@ -24,7 +25,9 @@ def _model():
     m.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
     m.add_amplifier(Amplifier(id="a1", type_variety="adv", gain_db=20.0, nf_db=5.5))
     m.add_fiber(Fiber(id="fAB", a_end="a1", z_end="a2", length_km=80.0, type_variety="SSMF"))
-    m.add_oms(OMS(id="omsAB", src_node_id="A", dst_node_id="B", elements=("a1", "fAB")))
+    for node in ("A", "B"):
+        m.add_roadm(ROADM(id=f"roadm_{node}"))
+    m.add_oms(OMS(id="omsAB", src_node_id="A", dst_node_id="B", elements=("roadm_A", "a1", "fAB")))
     return m
 
 

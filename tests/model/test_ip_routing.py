@@ -26,10 +26,12 @@ def _two_link_model():
                       type_variety="SSMF"))
     n.add_fiber(Fiber(id="fBC", a_end="a2", z_end="a3", length_km=80.0,
                       type_variety="SSMF"))
+    for node in ("A", "B", "C"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
     n.add_oms(OMS(id="omsAB", src_node_id="A", dst_node_id="B",
-                  elements=("a1", "fAB", "a2")))
+                  elements=("roadm_A", "a1", "fAB", "a2")))
     n.add_oms(OMS(id="omsBC", src_node_id="B", dst_node_id="C",
-                  elements=("a2", "fBC", "a3")))
+                  elements=("roadm_B", "a2", "fBC", "a3")))
     n.add_lightpath(Lightpath(id="lpAB", oms_sequence=("omsAB",),
                               mode_id="200G-16QAM", center_freq_hz=193.4e12))
     n.add_lightpath(Lightpath(id="lpBC", oms_sequence=("omsBC",),
@@ -247,6 +249,7 @@ def test_affected_services_includes_protection_path():
 from multilayer_optical_mcp.model.assets import (
     Amplifier as _Amp, Fiber as _Fiber, OMS as _OMS, Lightpath as _LP,
     IPLink as _IPLink, Service as _Svc, FiberType as _FT, TransceiverMode as _TM,
+    ROADM,
 )
 from multilayer_optical_mcp.model.qot import QoTState as _QoT
 from multilayer_optical_mcp.model.modes import ModeRegistry as _MR
@@ -261,7 +264,9 @@ def _model_with_service():
     m.register_fiber_type(_FT(type_variety="SSMF", loss_coef_db_per_km=0.2))
     m.add_amplifier(_Amp(id="a1", type_variety="adv", gain_db=20.0, nf_db=5.5))
     m.add_fiber(_Fiber(id="fAB", a_end="a1", z_end="a2", length_km=80.0, type_variety="SSMF"))
-    m.add_oms(_OMS(id="omsAB", src_node_id="A", dst_node_id="B", elements=("a1", "fAB")))
+    for node in ("A", "B"):
+        m.add_roadm(ROADM(id=f"roadm_{node}"))
+    m.add_oms(_OMS(id="omsAB", src_node_id="A", dst_node_id="B", elements=("roadm_A", "a1", "fAB")))
     m.add_lightpath(_LP(id="lpAB", oms_sequence=("omsAB",),
                         mode_id="400G@7.1dB", center_freq_hz=193.4e12))
     m.add_ip_link(_IPLink(id="ipAB", a_router="rA", z_router="rB", lightpath_id="lpAB"))
@@ -293,7 +298,7 @@ def _protected_model():
     m = _model_with_service()                       # svc demand 100, working ("ipAB",)
     m.add_amplifier(_Amp(id="a3", type_variety="adv", gain_db=20.0, nf_db=5.5))
     m.add_fiber(_Fiber(id="fCD", a_end="a3", z_end="a4", length_km=80.0, type_variety="SSMF"))
-    m.add_oms(_OMS(id="omsCD", src_node_id="A", dst_node_id="B", elements=("a3", "fCD")))
+    m.add_oms(_OMS(id="omsCD", src_node_id="A", dst_node_id="B", elements=("roadm_A", "a3", "fCD")))
     m.add_lightpath(_LP(id="lpCD", oms_sequence=("omsCD",),
                         mode_id="400G@7.1dB", center_freq_hz=193.5e12))
     m.add_ip_link(_IPLink(id="ipCD", a_router="rA", z_router="rB", lightpath_id="lpCD"))

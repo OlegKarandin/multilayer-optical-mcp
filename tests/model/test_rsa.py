@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from multilayer_optical_mcp.model.assets import ROADM
 from multilayer_optical_mcp.model.assets import (
     FiberType, Fiber, Amplifier, OMS, Lightpath, SRLG, TransceiverMode,
 )
@@ -51,8 +52,10 @@ def _two_routes() -> NetworkModel:
         n.add_amplifier(Amplifier(id=a, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
     n.add_fiber(Fiber("fN", "aN1", "aN2", 80.0, "SSMF"))
     n.add_fiber(Fiber("fS", "aS1", "aS2", 120.0, "SSMF"))
-    n.add_oms(OMS("oms-north", "A", "Z", ("aN1", "fN", "aN2")))
-    n.add_oms(OMS("oms-south", "A", "Z", ("aS1", "fS", "aS2")))
+    for node in ("A", "Z"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    n.add_oms(OMS("oms-north", "A", "Z", ("roadm_A", "aN1", "fN", "aN2")))
+    n.add_oms(OMS("oms-south", "A", "Z", ("roadm_A", "aS1", "fS", "aS2")))
     return n
 
 
@@ -61,7 +64,9 @@ def _single_route() -> NetworkModel:
     n.register_fiber_type(FiberType("SSMF", 0.2))
     n.add_amplifier(Amplifier(id="a1", type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
     n.add_fiber(Fiber("f1", "a1", "a1b", 80.0, "SSMF"))
-    n.add_oms(OMS("oms-AZ", "A", "Z", ("a1", "f1")))
+    for node in ("A", "Z"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    n.add_oms(OMS("oms-AZ", "A", "Z", ("roadm_A", "a1", "f1")))
     return n
 
 

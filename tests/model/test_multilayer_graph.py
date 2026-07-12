@@ -2,7 +2,7 @@
 """Layered auxiliary graph: existing lightpaths -> LPE edges (residual,
 margin-gated); free wavelengths -> WLE edges driven from the OMS bitmask."""
 from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, Lightpath, Router, IPLink, TransceiverMode,
+    FiberType, Fiber, Amplifier, OMS, ROADM, Lightpath, Router, IPLink, TransceiverMode,
 )
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
@@ -21,7 +21,9 @@ def _one_lightpath_model(margin_db: float = 3.0) -> NetworkModel:
     for a in ("a1", "a2"):
         n.add_amplifier(Amplifier(id=a, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
     n.add_fiber(Fiber("fAB", "a1", "a2", 80.0, "SSMF"))
-    n.add_oms(OMS("oms-AB", "A", "B", ("a1", "fAB", "a2")))
+    for node in ("A", "B"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    n.add_oms(OMS("oms-AB", "A", "B", ("roadm_A", "a1", "fAB", "a2")))
     # Lightpath on slot 20 (193.4 THz on the default grid).
     n.add_lightpath(Lightpath("lp-AB", ("oms-AB",), "100G", 193.4e12))
     n.set_qot_state("lp-AB", QoTState(gsnr_db=15.0, osnr_db=30.0, margin_db=margin_db))

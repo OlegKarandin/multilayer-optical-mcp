@@ -1,6 +1,7 @@
 # tests/model/test_avoidance.py
 """Avoidance: route over survivors by pruning forbidden OMS before enumeration.
 Reuses the two-parallel-route shape (oms-north / oms-south, A->B)."""
+from multilayer_optical_mcp.model.assets import ROADM
 from multilayer_optical_mcp.model.assets import (
     FiberType, Fiber, Amplifier, OMS, SRLG, TransceiverMode,
 )
@@ -18,8 +19,10 @@ def _two_parallel() -> NetworkModel:
         n.add_amplifier(Amplifier(id=a, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
     n.add_fiber(Fiber("fiber-north", "aN1", "aN2", 80.0, "SSMF"))
     n.add_fiber(Fiber("fiber-south", "aS1", "aS2", 80.0, "SSMF"))
-    n.add_oms(OMS("oms-north", "A", "B", ("aN1", "fiber-north", "aN2")))
-    n.add_oms(OMS("oms-south", "A", "B", ("aS1", "fiber-south", "aS2")))
+    for node in ("A", "B"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    n.add_oms(OMS("oms-north", "A", "B", ("roadm_A", "aN1", "fiber-north", "aN2")))
+    n.add_oms(OMS("oms-south", "A", "B", ("roadm_A", "aS1", "fiber-south", "aS2")))
     return n
 
 

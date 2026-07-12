@@ -3,7 +3,7 @@ center_freq_hz against it at add-time (via grid.slot_of) instead of letting an
 off-grid frequency surface only at build_spectrum_state (routing time)."""
 import pytest
 from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, Lightpath, TransceiverMode,
+    FiberType, Fiber, Amplifier, OMS, ROADM, Lightpath, TransceiverMode,
 )
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
@@ -23,8 +23,10 @@ def _base(grid=None) -> NetworkModel:
                       type_variety="SSMF"))
     n.add_amplifier(Amplifier(id="amp2", type_variety="advanced_toy",
                               gain_db=20.0, nf_db=5.5))
+    for node in ("A", "B"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
     n.add_oms(OMS(id="oms1", src_node_id="A", dst_node_id="B",
-                  elements=("amp1", "f1", "amp2")))
+                  elements=("roadm_A", "amp1", "f1", "amp2")))
     return n
 
 

@@ -1,6 +1,6 @@
 import pytest
 from multilayer_optical_mcp.model.assets import (
-    FiberType, Amplifier, Fiber, OMS, Lightpath, Router, IPLink, TransceiverMode,
+    FiberType, Amplifier, Fiber, OMS, ROADM, Lightpath, Router, IPLink, TransceiverMode,
 )
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
@@ -24,8 +24,10 @@ def _model_with_lightpath(mode_id="200G-16QAM"):
                       length_km=80.0, type_variety="SSMF"))
     n.add_amplifier(Amplifier(id="amp2", type_variety="advanced_toy",
                               gain_db=20.0, nf_db=5.5))
+    for node in ("A", "B"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
     n.add_oms(OMS(id="oms1", src_node_id="A", dst_node_id="B",
-                  elements=("amp1", "f1", "amp2")))
+                  elements=("roadm_A", "amp1", "f1", "amp2")))
     n.add_lightpath(Lightpath(id="lp1", oms_sequence=("oms1",),
                               mode_id=mode_id, center_freq_hz=193.4e12))
     n.add_router(Router(id="R1", site="A"))

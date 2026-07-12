@@ -2,7 +2,7 @@
 import pytest
 from multilayer_optical_mcp.server import build_app
 from multilayer_optical_mcp.model.assets import (
-    FiberType, Amplifier, Fiber, OMS, Lightpath, Router, IPLink, Service,
+    FiberType, Amplifier, Fiber, OMS, ROADM, Lightpath, Router, IPLink, Service,
 )
 from multilayer_optical_mcp.model.qot import QoTState
 
@@ -18,10 +18,12 @@ def _seed(app):
                       type_variety="SSMF"))
     n.add_fiber(Fiber(id="fBC", a_end="a2", z_end="a3", length_km=80.0,
                       type_variety="SSMF"))
+    for node in ("A", "B", "C"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
     n.add_oms(OMS(id="omsAB", src_node_id="A", dst_node_id="B",
-                  elements=("a1", "fAB", "a2")))
+                  elements=("roadm_A", "a1", "fAB", "a2")))
     n.add_oms(OMS(id="omsBC", src_node_id="B", dst_node_id="C",
-                  elements=("a2", "fBC", "a3")))
+                  elements=("roadm_B", "a2", "fBC", "a3")))
     # modes come from modulation_formats.yaml; pick the first available id.
     mode_id = app._snapshots.current().modes.list()[0].id
     n.add_lightpath(Lightpath(id="lpAB", oms_sequence=("omsAB",),

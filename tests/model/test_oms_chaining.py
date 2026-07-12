@@ -2,6 +2,7 @@
 chain (each OMS's dst_node must equal the next OMS's src_node). A gap or
 inversion otherwise passes silently and surfaces only at propagation time."""
 import pytest
+from multilayer_optical_mcp.model.assets import ROADM
 from multilayer_optical_mcp.model.assets import (
     FiberType, Fiber, Amplifier, OMS, Lightpath, TransceiverMode,
 )
@@ -22,10 +23,14 @@ def _base() -> NetworkModel:
                       type_variety="SSMF"))
     n.add_amplifier(Amplifier(id="amp2", type_variety="advanced_toy",
                               gain_db=20.0, nf_db=5.5))
-    els = ("amp1", "f1", "amp2")
-    n.add_oms(OMS(id="oms_AB", src_node_id="A", dst_node_id="B", elements=els))
-    n.add_oms(OMS(id="oms_BC", src_node_id="B", dst_node_id="C", elements=els))
-    n.add_oms(OMS(id="oms_CD", src_node_id="C", dst_node_id="D", elements=els))
+    for node in ("A", "B", "C", "D"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    n.add_oms(OMS(id="oms_AB", src_node_id="A", dst_node_id="B",
+                  elements=("roadm_A", "amp1", "f1", "amp2")))
+    n.add_oms(OMS(id="oms_BC", src_node_id="B", dst_node_id="C",
+                  elements=("roadm_B", "amp1", "f1", "amp2")))
+    n.add_oms(OMS(id="oms_CD", src_node_id="C", dst_node_id="D",
+                  elements=("roadm_C", "amp1", "f1", "amp2")))
     return n
 
 

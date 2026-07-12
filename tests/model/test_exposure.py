@@ -1,6 +1,6 @@
 import pytest
 from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, Lightpath, Router, IPLink, Service,
+    FiberType, Fiber, Amplifier, OMS, ROADM, Lightpath, Router, IPLink, Service,
     RiskGroup, TransceiverMode,
 )
 from multilayer_optical_mcp.model.modes import ModeRegistry
@@ -19,6 +19,8 @@ def _model_two_paths() -> NetworkModel:
                         channel_spacing_hz=50e9),
     ]))
     n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    for node in ("A", "B"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
     for amp_id in ("ampA1", "ampA2", "ampB1", "ampB2"):
         n.add_amplifier(Amplifier(id=amp_id, type_variety="advanced_toy",
                                   gain_db=20.0, nf_db=5.5))
@@ -27,9 +29,9 @@ def _model_two_paths() -> NetworkModel:
     n.add_fiber(Fiber(id="fiber-south", a_end="ampB1", z_end="ampB2",
                       length_km=80.0, type_variety="SSMF"))
     n.add_oms(OMS(id="oms-north", src_node_id="A", dst_node_id="B",
-                  elements=("ampA1", "fiber-north", "ampA2")))
+                  elements=("roadm_A", "ampA1", "fiber-north", "ampA2")))
     n.add_oms(OMS(id="oms-south", src_node_id="A", dst_node_id="B",
-                  elements=("ampB1", "fiber-south", "ampB2")))
+                  elements=("roadm_A", "ampB1", "fiber-south", "ampB2")))
     n.add_lightpath(Lightpath(id="lp-north", oms_sequence=("oms-north",),
                               mode_id="100G-QPSK", center_freq_hz=193.4e12))
     n.add_lightpath(Lightpath(id="lp-south", oms_sequence=("oms-south",),

@@ -3,7 +3,7 @@ import math
 import pytest
 from multilayer_optical_mcp.server import build_app
 from multilayer_optical_mcp.model.assets import (
-    FiberType, Amplifier, Fiber, OMS, Lightpath, IPLink, Router, Service,
+    FiberType, Amplifier, Fiber, OMS, ROADM, Lightpath, IPLink, Router, Service,
 )
 from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model.qot_results import QoTResultStore
@@ -21,7 +21,9 @@ def _seed_branch_with_lightpath(app):
     n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
     n.add_amplifier(Amplifier(id="a1", type_variety="adv", gain_db=20.0, nf_db=5.5))
     n.add_fiber(Fiber(id="fAB", a_end="a1", z_end="a2", length_km=80.0, type_variety="SSMF"))
-    n.add_oms(OMS(id="omsAB", src_node_id="A", dst_node_id="B", elements=("a1", "fAB")))
+    for node in ("A", "B"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    n.add_oms(OMS(id="omsAB", src_node_id="A", dst_node_id="B", elements=("roadm_A", "a1", "fAB")))
     mode_id = n.modes.list()[0].id
     n.add_lightpath(Lightpath(id="lpAB", oms_sequence=("omsAB",),
                               mode_id=mode_id, center_freq_hz=193.4e12))
@@ -74,8 +76,10 @@ def test_inject_failure_tool_multiple_assets():
     n.add_amplifier(Amplifier(id="a2", type_variety="adv", gain_db=20.0, nf_db=5.5))
     n.add_fiber(Fiber(id="fAB", a_end="a1", z_end="a2", length_km=80.0, type_variety="SSMF"))
     n.add_fiber(Fiber(id="fBC", a_end="a2", z_end="a3", length_km=80.0, type_variety="SSMF"))
-    n.add_oms(OMS(id="omsAB", src_node_id="A", dst_node_id="B", elements=("a1", "fAB")))
-    n.add_oms(OMS(id="omsBC", src_node_id="B", dst_node_id="C", elements=("a2", "fBC")))
+    for node in ("A", "B", "C"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    n.add_oms(OMS(id="omsAB", src_node_id="A", dst_node_id="B", elements=("roadm_A", "a1", "fAB")))
+    n.add_oms(OMS(id="omsBC", src_node_id="B", dst_node_id="C", elements=("roadm_B", "a2", "fBC")))
     mode_id = n.modes.list()[0].id
     n.add_lightpath(Lightpath(id="lpAB", oms_sequence=("omsAB",),
                               mode_id=mode_id, center_freq_hz=193.4e12))

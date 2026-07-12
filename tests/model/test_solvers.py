@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, Lightpath, Router, IPLink, Service,
+    FiberType, Fiber, Amplifier, OMS, ROADM, Lightpath, Router, IPLink, Service,
     SRLG, TransceiverMode,
 )
 from multilayer_optical_mcp.model.modes import ModeRegistry
@@ -28,6 +28,8 @@ def _model_two_paths() -> NetworkModel:
                         channel_spacing_hz=50e9),
     ]))
     n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    for node in ("A", "B"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
     for amp_id in ("ampA1", "ampA2", "ampB1", "ampB2"):
         n.add_amplifier(Amplifier(id=amp_id, type_variety="advanced_toy",
                                   gain_db=20.0, nf_db=5.5))
@@ -36,9 +38,9 @@ def _model_two_paths() -> NetworkModel:
     n.add_fiber(Fiber(id="fiber-south", a_end="ampB1", z_end="ampB2",
                       length_km=80.0, type_variety="SSMF"))
     n.add_oms(OMS(id="oms-north", src_node_id="A", dst_node_id="B",
-                  elements=("ampA1", "fiber-north", "ampA2")))
+                  elements=("roadm_A", "ampA1", "fiber-north", "ampA2")))
     n.add_oms(OMS(id="oms-south", src_node_id="A", dst_node_id="B",
-                  elements=("ampB1", "fiber-south", "ampB2")))
+                  elements=("roadm_A", "ampB1", "fiber-south", "ampB2")))
     n.add_lightpath(Lightpath(id="lp-north", oms_sequence=("oms-north",),
                               mode_id="100G-QPSK", center_freq_hz=193.4e12))
     n.add_lightpath(Lightpath(id="lp-south", oms_sequence=("oms-south",),
@@ -103,6 +105,8 @@ def _model_parallels_plus_distinct_route(n_parallels: int) -> NetworkModel:
                         channel_spacing_hz=50e9),
     ]))
     n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    for node in ("A", "B", "C"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
     trunk_fibers = []
     for i in range(n_parallels):
         a1, a2 = f"pa{i}1", f"pa{i}2"
@@ -111,7 +115,7 @@ def _model_parallels_plus_distinct_route(n_parallels: int) -> NetworkModel:
         n.add_amplifier(Amplifier(id=a2, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
         n.add_fiber(Fiber(id=fib, a_end=a1, z_end=a2, length_km=80.0, type_variety="SSMF"))
         n.add_oms(OMS(id=f"oms-p{i}", src_node_id="A", dst_node_id="B",
-                      elements=(a1, fib, a2)))
+                      elements=("roadm_A", a1, fib, a2)))
         trunk_fibers.append(fib)
     n.add_srlg(SRLG(id="srlg-trunk", asset_ids=tuple(trunk_fibers)))
     # distinct route A->C->B (two hops), SRLG-free
@@ -119,8 +123,8 @@ def _model_parallels_plus_distinct_route(n_parallels: int) -> NetworkModel:
         n.add_amplifier(Amplifier(id=a, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
     n.add_fiber(Fiber(id="fib-AC", a_end="acA", z_end="acZ", length_km=80.0, type_variety="SSMF"))
     n.add_fiber(Fiber(id="fib-CB", a_end="cbA", z_end="cbZ", length_km=80.0, type_variety="SSMF"))
-    n.add_oms(OMS(id="oms-AC", src_node_id="A", dst_node_id="C", elements=("acA", "fib-AC", "acZ")))
-    n.add_oms(OMS(id="oms-CB", src_node_id="C", dst_node_id="B", elements=("cbA", "fib-CB", "cbZ")))
+    n.add_oms(OMS(id="oms-AC", src_node_id="A", dst_node_id="C", elements=("roadm_A", "acA", "fib-AC", "acZ")))
+    n.add_oms(OMS(id="oms-CB", src_node_id="C", dst_node_id="B", elements=("roadm_C", "cbA", "fib-CB", "cbZ")))
     return n
 
 

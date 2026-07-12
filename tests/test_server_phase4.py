@@ -6,7 +6,7 @@ import asyncio
 
 from multilayer_optical_mcp.server import build_app
 from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, Lightpath, Router, IPLink, Service, SRLG,
+    FiberType, Fiber, Amplifier, OMS, ROADM, Lightpath, Router, IPLink, Service, SRLG,
 )
 
 
@@ -31,8 +31,10 @@ def _seed_app():
                                       gain_db=20.0, nf_db=5.5))
     model.add_fiber(Fiber("fiber-north", "ampA1", "ampA2", 80.0, "SSMF"))
     model.add_fiber(Fiber("fiber-south", "ampB1", "ampB2", 80.0, "SSMF"))
-    model.add_oms(OMS("oms-north", "A", "B", ("ampA1", "fiber-north", "ampA2")))
-    model.add_oms(OMS("oms-south", "A", "B", ("ampB1", "fiber-south", "ampB2")))
+    for node in ("A", "B"):
+        model.add_roadm(ROADM(id=f"roadm_{node}"))
+    model.add_oms(OMS("oms-north", "A", "B", ("roadm_A", "ampA1", "fiber-north", "ampA2")))
+    model.add_oms(OMS("oms-south", "A", "B", ("roadm_A", "ampB1", "fiber-south", "ampB2")))
     model.add_lightpath(Lightpath("lp-north", ("oms-north",), "400G@7.1dB", 193.4e12))
     model.add_lightpath(Lightpath("lp-south", ("oms-south",), "400G@7.1dB", 193.4e12))
     model.add_router(Router("R1", "A"))

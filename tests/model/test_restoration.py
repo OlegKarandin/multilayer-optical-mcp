@@ -1,6 +1,7 @@
 # tests/model/test_restoration.py
 """compute_restoration: per-service recovery over survivors. Read-only; emits
 typed candidates (full + degraded); status solution/partial/no_solution."""
+from multilayer_optical_mcp.model.assets import ROADM
 from multilayer_optical_mcp.model.assets import (
     FiberType, Fiber, Amplifier, OMS, Lightpath, Router, IPLink, Service,
     TransceiverMode,
@@ -30,9 +31,11 @@ def _diamond() -> NetworkModel:
     n.add_fiber(Fiber("fAB", "d1", "d2", 80.0, "SSMF"))
     n.add_fiber(Fiber("fAM", "m1", "m2", 60.0, "SSMF"))
     n.add_fiber(Fiber("fMB", "n1", "n2", 60.0, "SSMF"))
-    n.add_oms(OMS("oms-AB", "A", "B", ("d1", "fAB", "d2")))
-    n.add_oms(OMS("oms-AM", "A", "M", ("m1", "fAM", "m2")))
-    n.add_oms(OMS("oms-MB", "M", "B", ("n1", "fMB", "n2")))
+    for node in ("A", "B", "M"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    n.add_oms(OMS("oms-AB", "A", "B", ("roadm_A", "d1", "fAB", "d2")))
+    n.add_oms(OMS("oms-AM", "A", "M", ("roadm_A", "m1", "fAM", "m2")))
+    n.add_oms(OMS("oms-MB", "M", "B", ("roadm_M", "n1", "fMB", "n2")))
     n.add_lightpath(Lightpath("lp-direct", ("oms-AB",), "100G", 193.4e12))
     n.add_lightpath(Lightpath("lp-AM", ("oms-AM",), "100G", 193.4e12))
     n.add_lightpath(Lightpath("lp-MB", ("oms-MB",), "100G", 193.4e12))
@@ -96,9 +99,11 @@ def _diamond_gap() -> NetworkModel:
     m.add_fiber(Fiber("fAB", "d1", "d2", 80.0, "SSMF"))
     m.add_fiber(Fiber("fAM", "m1", "m2", 60.0, "SSMF"))
     m.add_fiber(Fiber("fMB", "n1", "n2", 60.0, "SSMF"))
-    m.add_oms(OMS("oms-AB", "A", "B", ("d1", "fAB", "d2")))
-    m.add_oms(OMS("oms-AM", "A", "M", ("m1", "fAM", "m2")))
-    m.add_oms(OMS("oms-MB", "M", "B", ("n1", "fMB", "n2")))
+    for node in ("A", "B", "M"):
+        m.add_roadm(ROADM(id=f"roadm_{node}"))
+    m.add_oms(OMS("oms-AB", "A", "B", ("roadm_A", "d1", "fAB", "d2")))
+    m.add_oms(OMS("oms-AM", "A", "M", ("roadm_A", "m1", "fAM", "m2")))
+    m.add_oms(OMS("oms-MB", "M", "B", ("roadm_M", "n1", "fMB", "n2")))
     m.add_lightpath(Lightpath("lp-direct", ("oms-AB",), "100G", 193.4e12))
     m.add_lightpath(Lightpath("lp-AM", ("oms-AM",), "100G", 193.4e12))
     for lp in ("lp-direct", "lp-AM"):

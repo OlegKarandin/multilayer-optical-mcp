@@ -46,15 +46,13 @@ def _ensure_site(m: NetworkModel, node: str) -> None:
 
 
 def _one_dir(m: NetworkModel, src: str, dst: str, tag: str) -> str:
-    """One directed span: booster -> fiber -> preamp. The src/dst ROADMs are
-    registered and wired into the GNPy graph by the synthesizer (so the drop
-    penalty still applies and the path launches from roadm_<src>), but they are
-    deliberately NOT in the OMS `elements`. That keeps them out of the OMS
-    physical asset set so link-level disjointness compares SPANS, not the shared
-    endpoint ROADM nodes — two A->B paths sharing only src/dst ROADM are
-    link-disjoint, which is the normal 1:1 working/protection case. This mirrors
-    the established `test_solvers.py::_disjoint_model` convention. Returns the OMS
-    id (== tag)."""
+    """One directed span in importer shape: roadm_<src> -> booster -> fiber ->
+    preamp. Matches `topology_import._add_directed_oms` — the OMS `elements`
+    start at the source ROADM (the drop `roadm_<dst>` is omitted, recovered by
+    `terminal_roadm_id`). Link-level disjointness still compares SPANS, not the
+    shared endpoint ROADM, because `path_basis_keys` excludes each path's own
+    endpoint ROADM (see `exposure.path_endpoint_exclusions`). Returns the OMS id
+    (== tag)."""
     m.add_amplifier(Amplifier(id=f"boost_{tag}", type_variety="advanced_toy",
                               gain_db=20.0, nf_db=5.5))
     m.add_fiber(Fiber(id=f"f_{tag}", a_end=f"roadm_{src}", z_end=f"pre_{tag}",
@@ -62,7 +60,7 @@ def _one_dir(m: NetworkModel, src: str, dst: str, tag: str) -> str:
     m.add_amplifier(Amplifier(id=f"pre_{tag}", type_variety="advanced_toy",
                               gain_db=20.0, nf_db=5.5))
     m.add_oms(OMS(id=tag, src_node_id=src, dst_node_id=dst,
-                  elements=(f"boost_{tag}", f"f_{tag}", f"pre_{tag}")))
+                  elements=(f"roadm_{src}", f"boost_{tag}", f"f_{tag}", f"pre_{tag}")))
     return tag
 
 

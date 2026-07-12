@@ -65,6 +65,30 @@ def terminal_roadm_id(model: NetworkModel, oms_sequence: Tuple[str, ...]) -> "st
     return candidate if model.has_roadm(candidate) else None
 
 
+def path_endpoint_exclusions(
+    model: NetworkModel, oms_sequence: Tuple[str, ...]
+) -> "tuple[FrozenSet[str], FrozenSet[str]]":
+    """A path's own ingress/egress nodes and their ROADM uids.
+
+    Two paths between the same endpoints must share those endpoints; that sharing
+    is mandated by the demand, not a routing choice, so it is excluded from every
+    disjointness comparison (see ``path_basis_keys``). Uses the ``roadm_<node>``
+    convention already relied on by ``terminal_roadm_id`` and ``_resolve_endpoint``;
+    the ROADM set is empty for endpoints with no registered ROADM (legacy toy
+    transceiver endpoints), which makes the exclusion a safe no-op there.
+
+    Endpoint *failure*-correlation ("do they die together?") is a different
+    question and stays with ``get_exposure`` / ``service_asset_set``, not here.
+    """
+    if not oms_sequence:
+        return frozenset(), frozenset()
+    first = model.get_oms(oms_sequence[0])
+    last = model.get_oms(oms_sequence[-1])
+    nodes = {first.src_node_id, last.dst_node_id}
+    roadms = {f"roadm_{n}" for n in nodes if model.has_roadm(f"roadm_{n}")}
+    return frozenset(nodes), frozenset(roadms)
+
+
 def oms_seq_node_set(model: NetworkModel, oms_sequence: Tuple[str, ...]) -> FrozenSet[str]:
     """The optical node ids an OMS-sequence touches (each OMS endpoint). Used
     for node-level disjointness."""
@@ -121,12 +145,17 @@ def path_basis_keys(
     - basis `union`: union of physical (at the given level) + srlg + risk_group
       keys — disjoint under union means disjoint under all of them.
     """
-    phys = oms_seq_asset_set(model, oms_sequence)
+    endpoint_nodes, endpoint_roadms = path_endpoint_exclusions(model, oms_sequence)
+    # Exclude the path's own endpoints under EVERY basis: an endpoint shared by
+    # both paths is mandated by the demand, not a routing correlation, so it must
+    # not intersect for physical, srlg, risk_group, or union.
+    phys = oms_seq_asset_set(model, oms_sequence) - endpoint_roadms
     keys: set[str] = set()
 
     def add_physical() -> None:
         if level == "node":
-            keys.update(_NODE + n for n in oms_seq_node_set(model, oms_sequence))
+            nodes = oms_seq_node_set(model, oms_sequence) - endpoint_nodes
+            keys.update(_NODE + n for n in nodes)
         else:
             keys.update(_PHYS + a for a in phys)
 
