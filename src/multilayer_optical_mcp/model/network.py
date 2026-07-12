@@ -207,6 +207,24 @@ class NetworkModel:
             if link.lightpath_id == lp_id
         )
 
+    def remove_ip_link(self, link_id: str) -> None:
+        """Remove an IP link. A service still referencing it keeps the now-dangling
+        id in its working/protection path; simulate_ip_routing reports that service
+        dropped (reason 'link_removed') rather than raising. Idempotent."""
+        self._check_mutable()
+        self._ip_links.pop(link_id, None)
+
+    def remove_lightpath(self, lp_id: str) -> None:
+        """Tear a lightpath down: drop it, its recorded QoT, and unbind every IP
+        link riding it (teardown flips the bound IP link down — CLAUDE.md coupling
+        1). Removing (not sentinelling) frees the lightpath's spectrum slot and
+        stops it loading its fibers, which is what make-before-break requires."""
+        self._check_mutable()
+        for link_id in self.ip_links_for_lightpath(lp_id):
+            self._ip_links.pop(link_id, None)
+        self._lightpaths.pop(lp_id, None)
+        self._qot_state.pop(lp_id, None)
+
     # ---------------------------------------------------------------- services / risk
 
     def add_service(self, s: Service) -> None:

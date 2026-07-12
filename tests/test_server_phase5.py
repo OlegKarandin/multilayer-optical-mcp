@@ -73,7 +73,7 @@ def test_simulate_ip_routing_tool():
     app = build_app()
     _seed(app)
     d = _call(app, "simulate_ip_routing")
-    assert set(d) == {"utilizations", "congestion", "dropped"}
+    assert set(d) == {"utilizations", "congestion", "restored", "dropped"}
     assert d["congestion"] == []
 
 

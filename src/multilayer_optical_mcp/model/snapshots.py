@@ -61,23 +61,36 @@ class SnapshotStore:
             self._created_at.pop(sid, None)
         return tuple(expired)
 
+    def put(self, model: NetworkModel) -> str:
+        """Register an externally-constructed model under a fresh id (stores a
+        clone, so later mutation of the argument cannot corrupt the snapshot).
+        Phase 7 uses this to record a commit's intended end-state for reconcile."""
+        sid = uuid.uuid4().hex
+        self._store(sid, model.clone())
+        return sid
+
     def diff(self, a_id: str, b_id: str) -> dict:
-        a = self._snapshots[a_id]
-        b = self._snapshots[b_id]
-        return {
-            "fiber_types": _delta(a._fiber_types, b._fiber_types),
-            "fibers": _delta(a._fibers, b._fibers),
-            "amplifiers": _delta(a._amplifiers, b._amplifiers),
-            "oms": _delta(a._oms, b._oms),
-            "lightpaths": _delta(a._lightpaths, b._lightpaths),
-            "ip_links": _delta(a._ip_links, b._ip_links),
-            "routers": _delta(a._routers, b._routers),
-            "services": _delta(a._services, b._services),
-            "srlgs": _delta(a._srlgs, b._srlgs),
-            "risk_groups": _delta(a._risk_groups, b._risk_groups),
-            "qot_state": _delta(a._qot_state, b._qot_state),
-            "failed_assets": _delta_set(a._failed_assets, b._failed_assets),
-        }
+        return diff_models(self._snapshots[a_id], self._snapshots[b_id])
+
+
+def diff_models(a: NetworkModel, b: NetworkModel) -> dict:
+    """Structured per-registry delta between two model objects. Snapshot-agnostic
+    (a free function, not a store method) so reconcile can diff live-vs-intended
+    model objects without first registering both as snapshots."""
+    return {
+        "fiber_types": _delta(a._fiber_types, b._fiber_types),
+        "fibers": _delta(a._fibers, b._fibers),
+        "amplifiers": _delta(a._amplifiers, b._amplifiers),
+        "oms": _delta(a._oms, b._oms),
+        "lightpaths": _delta(a._lightpaths, b._lightpaths),
+        "ip_links": _delta(a._ip_links, b._ip_links),
+        "routers": _delta(a._routers, b._routers),
+        "services": _delta(a._services, b._services),
+        "srlgs": _delta(a._srlgs, b._srlgs),
+        "risk_groups": _delta(a._risk_groups, b._risk_groups),
+        "qot_state": _delta(a._qot_state, b._qot_state),
+        "failed_assets": _delta_set(a._failed_assets, b._failed_assets),
+    }
 
 
 def _delta(a: dict, b: dict) -> dict:

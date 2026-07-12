@@ -183,6 +183,16 @@ def build_app() -> FastMCP:
         solve_allocation as _solve_allocation,
     )
     from .model.ip_routing import simulate_ip_routing as _simulate_ip_routing
+    from .model.plan import (
+        plan_from_dict, ProvisionLightpath, TeardownLightpath,
+        SetModulationFormat, apply_op,
+    )
+    from .model.assets import Lightpath as _Lightpath, IPLink as _IPLink
+    from .model.validate import validate_plan as _validate_plan
+    from .model.commit import commit_plan as _commit_plan, reconcile as _reconcile
+    from .model.views import (
+        validation_report_dict, commit_result_dict, drift_report_dict,
+    )
 
     # Expose the SnapshotStore on the app so tests can reach the current model.
     app._snapshots = snapshots  # type: ignore[attr-defined]
@@ -400,6 +410,80 @@ def build_app() -> FastMCP:
         qot = make_adapter_evaluator(model, results)
         res = _compute_restoration(model, qot, service_id, avoid=avoid)
         return restoration_result_dict(res)
+
+    @app.tool()
+    def validate_plan(
+        plan: dict, basis: str = "physical", level: str = "link",
+        dropped_tolerance_gbps: float = 0.0,
+    ) -> dict:
+        """Replay a plan op-by-op on a clone and return a typed violation list,
+        checked at EVERY intermediate state (not just endpoints). Violations:
+        mode_infeasible, spectrum_clash, ip_link_overload, dropped_traffic (incl.
+        unrouted demand), disjointness_collapse, protection_not_viable,
+        protection_oversubscribed (1:1 reserved-capacity double-booking), plus
+        invalid_plan for a malformed / bad-reference / duplicate-id plan — each
+        with state_index and a `transient` flag for the make-before-break window.
+        Read-only: ground truth is never mutated. NB: QoT is quasi-static; this
+        does not certify the switching instant (the EDFA transient is out of scope)."""
+        report = _validate_plan(
+            snapshots.current(), plan_from_dict(plan), store=results,
+            basis=basis, level=level, dropped_tolerance_gbps=dropped_tolerance_gbps)
+        return validation_report_dict(report)
+
+    @app.tool()
+    def provision_lightpath(lightpath: dict, ip_link: dict | None = None) -> dict:
+        """Light a new lightpath; optionally bind+bring-up an IP link on it.
+        Mutates the current model — branch first (snapshot_branch) to explore."""
+        op = ProvisionLightpath(
+            lightpath=_Lightpath(
+                id=lightpath["id"], oms_sequence=tuple(lightpath["oms_sequence"]),
+                mode_id=lightpath["mode_id"], center_freq_hz=lightpath["center_freq_hz"]),
+            ip_link=None if ip_link is None else _IPLink(
+                id=ip_link["id"], a_router=ip_link["a_router"],
+                z_router=ip_link["z_router"], lightpath_id=lightpath["id"]))
+        apply_op(snapshots.current(), op)
+        return {"lightpath_id": op.lightpath.id,
+                "ip_link_id": op.ip_link.id if op.ip_link else None}
+
+    @app.tool()
+    def teardown_lightpath(lightpath_id: str) -> dict:
+        """Tear down a lightpath and bring down every IP link bound to it.
+        Mutates the current model — branch first to explore."""
+        apply_op(snapshots.current(), TeardownLightpath(lightpath_id=lightpath_id))
+        return {"torn_down": lightpath_id}
+
+    @app.tool()
+    def set_modulation_format(lightpath_id: str, mode_id: str) -> dict:
+        """Change a lightpath's transceiver mode; the bound IP link's capacity
+        propagates automatically (capacity = f(mode), margin-gated). Mutates the
+        current model — branch first to explore."""
+        apply_op(snapshots.current(), SetModulationFormat(
+            lightpath_id=lightpath_id, mode_id=mode_id))
+        return {"lightpath_id": lightpath_id, "mode_id": mode_id}
+
+    @app.tool()
+    def commit_plan(
+        plan: dict, dry_run: bool = True, confirm: bool = False,
+        basis: str = "physical", level: str = "link",
+        dropped_tolerance_gbps: float = 0.0,
+    ) -> dict:
+        """dry_run=True simulates on a clone and returns the would-be diff without
+        touching state. A live commit (dry_run=False) validates first, requires
+        confirm=True, then actuates; status is 'rejected' (violations),
+        'requires_approval' (unconfirmed), 'committed', or
+        'committed_with_failures' (control-plane partial failure — call reconcile)."""
+        result = _commit_plan(
+            snapshots, plan_from_dict(plan), store_results=results,
+            dry_run=dry_run, confirm=confirm, basis=basis, level=level,
+            dropped_tolerance_gbps=dropped_tolerance_gbps)
+        return commit_result_dict(result)
+
+    @app.tool()
+    def reconcile(intended_snapshot_id: str) -> dict:
+        """After a live commit, diff actual network state against the intended
+        end-state recorded at commit time. Returns typed drift[] (the ops the
+        control plane failed to actuate); in_sync=True when reality matches."""
+        return drift_report_dict(_reconcile(snapshots, intended_snapshot_id))
 
     return app
 

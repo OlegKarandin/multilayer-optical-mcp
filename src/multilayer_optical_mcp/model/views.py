@@ -205,6 +205,7 @@ def ip_routing_result_dict(res) -> Dict[str, Any]:
             for u in res.utilizations
         ],
         "congestion": list(res.congested_links),
+        "restored": list(res.restored_services),
         "dropped": {
             "services": [
                 {"service_id": d.service_id, "reason": d.reason,
@@ -266,3 +267,55 @@ def restoration_result_dict(res) -> Dict[str, Any]:
             "service_id": res.service_id,
             "demand_gbps": res.demand_gbps,
             "candidates": [_cand(c) for c in res.candidates]}
+
+
+def validation_report_dict(report) -> Dict[str, Any]:
+    """Serialize a ValidationReport: ok/num_states plus the typed violation list,
+    each violation carrying its state_index, transient flag, and remediation
+    detail (Decision 4: the detail points the agent at the right fix)."""
+    return {
+        "ok": report.ok,
+        "num_states": report.num_states,
+        "violations": [
+            {"type": v.type.value, "state_index": v.state_index,
+             "asset_id": v.asset_id, "transient": v.transient, "detail": v.detail}
+            for v in report.violations
+        ],
+    }
+
+
+def _jsonify_diff(diff):
+    """Normalize a registry diff to JSON-native lists (the per-registry deltas
+    carry tuples from snapshots._delta; JSON has no tuple). A rejection diff maps
+    a registry-shaped key to a plain string ({"error": msg}) — passed through."""
+    if diff is None:
+        return None
+    return {reg: {k: list(v) for k, v in delta.items()}
+            if isinstance(delta, dict) else delta
+            for reg, delta in diff.items()}
+
+
+def commit_result_dict(result) -> Dict[str, Any]:
+    """Serialize a CommitResult (status/applied/failed + the simulated diff for a
+    dry-run and the embedded validation report)."""
+    return {
+        "status": result.status,
+        "dry_run": result.dry_run,
+        "applied_ops": result.applied_ops,
+        "failed_ops": result.failed_ops,
+        "intended_snapshot_id": result.intended_snapshot_id,
+        "validation": validation_report_dict(result.validation)
+        if result.validation is not None else None,
+        "diff": _jsonify_diff(result.diff),
+    }
+
+
+def drift_report_dict(report) -> Dict[str, Any]:
+    """Serialize a DriftReport (in_sync + typed drift entries from reconcile)."""
+    return {
+        "in_sync": report.in_sync,
+        "drift": [
+            {"registry": d.registry, "kind": d.kind, "asset_id": d.asset_id}
+            for d in report.drift
+        ],
+    }

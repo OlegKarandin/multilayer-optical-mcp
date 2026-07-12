@@ -107,3 +107,39 @@ def test_diff_modified_lightpath_mode():
     b = store.create()
     diff = store.diff(a, b)
     assert "lp1" in diff["lightpaths"]["modified"]
+
+
+# --- Phase 7 Task 1: clone() (already landed C3), diff_models, SnapshotStore.put ---
+from multilayer_optical_mcp.model.snapshots import diff_models
+
+
+def _empty_model():
+    return NetworkModel(modes=ModeRegistry([TransceiverMode(
+        id="400G@7.1dB", bitrate_gbps=400.0, required_gsnr_db=7.1,
+        symbol_rate_baud=87.5e9, channel_spacing_hz=100e9)]))
+
+
+def test_clone_is_independent():
+    m = _empty_model()
+    c = m.clone()
+    c.define_risk_group("rg1", ("x",))
+    assert "rg1" not in m._risk_groups       # parent untouched
+    assert "rg1" in c._risk_groups
+
+
+def test_diff_models_matches_store_diff():
+    a = _empty_model()
+    b = a.clone()
+    b.define_risk_group("rg1", ("x",))
+    d = diff_models(a, b)
+    assert d["risk_groups"]["added"] == ("rg1",)
+
+
+def test_put_registers_external_model():
+    base = _empty_model()
+    store = SnapshotStore(base)
+    other = base.clone()
+    other.define_risk_group("rg9", ("y",))
+    sid = store.put(other)
+    assert store.get(sid) is not other          # stored a clone, not the live object
+    assert "rg9" in store.get(sid)._risk_groups
