@@ -85,6 +85,10 @@ def route_service(model: NetworkModel, qot, service_id: str, *, protected: bool 
                   basis: str = "physical", level: str = "link", best_effort: bool = False,
                   avoid: Optional[dict] = None, weights: Optional[dict] = None,
                   k: int = 8, top_n: int = 5) -> RouteServiceResult:
+    """`weights` here is PER-COST-TERM WEIGHTS passed through to
+    evaluate_objective's 7-term objective scalar (e.g. `{"transponders": 2.0}`);
+    it is not a per-demand priority (that's solve_allocation's `weights`, a
+    different meaning of the same parameter name)."""
     svc = model.get_service(service_id)
     src = model.get_router(svc.src_router).site
     dst = model.get_router(svc.dst_router).site

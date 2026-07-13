@@ -366,7 +366,9 @@ def build_app() -> FastMCP:
         """Greenfield heuristic: light new lightpaths from a per-site transponder
         count to serve as many weighted demands as possible. Each demand:
         {id, src, dst, demand_gbps, protected?}. Returns a typed
-        solution/partial/no_solution with placed and unplaced demands."""
+        solution/partial/no_solution with placed and unplaced demands.
+        weights: per-demand priority (demand id -> ordering weight, higher =
+        placed first); does not feed evaluate_objective's cost vector."""
         model = snapshots.current()
         qot = make_adapter_evaluator(model, results)
         return allocation_result_dict(
@@ -488,7 +490,9 @@ def build_app() -> FastMCP:
                       weights: dict | None = None) -> dict:
         """Service-level routing/restoration menu on the layered graph. avoid=None ->
         first-time routing; avoid={assets?,risk_groups?} -> restoration. protected=True
-        returns a disjoint-pair menu (best_effort -> min-overlap PARTIAL). Read-only."""
+        returns a disjoint-pair menu (best_effort -> min-overlap PARTIAL). Read-only.
+        weights: per-cost-term weights for the 7-term objective scalar (e.g.
+        {"transponders": 2.0}); not a per-demand priority."""
         model = snapshots.current()
         qot = make_adapter_evaluator(model, results)
         res = _route_service(model, qot, service_id, protected=protected, basis=basis,
@@ -498,7 +502,9 @@ def build_app() -> FastMCP:
     @app.tool()
     def evaluate_objective(state: str | None = None, weights: dict | None = None) -> dict:
         """7-term cost vector + weighted scalar for a state (snapshot id; defaults to
-        current). Terms are costs except total_margin (a benefit, subtracted)."""
+        current). Terms are costs except total_margin (a benefit, subtracted).
+        weights: per-cost-term weights (e.g. {"transponders": 2.0}); not a
+        per-demand priority."""
         model = snapshots.get(state) if state else snapshots.current()
         return objective_result_dict(_evaluate_objective(model, weights))
 

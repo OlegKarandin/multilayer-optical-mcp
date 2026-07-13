@@ -154,7 +154,8 @@ def _demand_placement(p) -> dict:
 
 
 def placement_result_dict(res) -> Dict[str, Any]:
-    """Serializer shared by solve_rsa and solve_allocation (same result shape)."""
+    """Serializer for solve_rsa results. solve_allocation now uses
+    allocation_result_dict, not this."""
     return {
         "status": res.status.value,
         "placements": [_demand_placement(p) for p in res.placements],

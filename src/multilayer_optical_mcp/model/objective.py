@@ -49,6 +49,10 @@ def _active_working_lightpaths(model, svc):
 def evaluate_objective(model: NetworkModel, weights: Optional[Dict[str, float]] = None,
                        *, spare_transponders: Optional[int] = None,
                        at_risk_threshold_db: float = 1.0) -> ObjectiveResult:
+    """`weights` here is PER-COST-TERM WEIGHTS for the 7-term objective scalar
+    (e.g. `{"transponders": 2.0}` maps a cost-vector field name to its multiplier);
+    it is not a per-demand priority (that's solve_allocation's `weights`, a
+    different meaning of the same parameter name)."""
     w = weights or {}
     grid = SpectrumGrid.default()
 
@@ -185,12 +189,20 @@ def provision_new_runs(work, placement, service, *, prefix) -> None:
 
 
 def placement_materializable(model, placement) -> bool:
-    """True iff every new run's endpoints resolve to a Router site. A run ending
-    at a router-less optical node cannot be bound to an IP link, so such a
-    placement is not a feasible service-routing candidate."""
+    """True iff (a) every new run's endpoints resolve to a Router site, and
+    (b) every reused lightpath already has a bound IP link. A run ending at a
+    router-less optical node cannot be bound to an IP link; a reused lightpath
+    with no bound IP link is a valid grooming target for _residual_gbps (a
+    lightpath with no IP link bound yields its full mode rate) but has no
+    IPLink for apply_candidate to stitch an ip_path segment from. Either case
+    is not a feasible service-routing candidate, so the placement is excluded
+    here rather than left to crash `apply_candidate` with a bare KeyError."""
     sites = {r.site for r in model.list_routers()}
-    return all(run.src_node in sites and run.dst_node in sites
-               for run in placement.new_lightpaths)
+    if not all(run.src_node in sites and run.dst_node in sites
+               for run in placement.new_lightpaths):
+        return False
+    return all(model.ip_links_for_lightpath(lp_id)
+               for lp_id in placement.reused_lightpaths)
 
 
 def score_candidate(model, placement, service, weights=None) -> ObjectiveResult:

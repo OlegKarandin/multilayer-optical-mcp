@@ -335,7 +335,12 @@ def solve_allocation(
     (costing one transponder per new-run endpoint, gated on spare inventory). A
     protected demand gets a disjoint working+protection pair under the demand's
     basis/level. Never aborts — inventory/feasibility/route misses are typed
-    `unplaced` entries yielding `partial`/`no_solution`."""
+    `unplaced` entries yielding `partial`/`no_solution`.
+
+    `weights` here is PER-DEMAND PLACEMENT PRIORITY: maps a demand id to an
+    ordering weight (higher = placed first); it does not feed
+    evaluate_objective's cost vector (that's route_service's/evaluate_objective's
+    `weights`, a different meaning of the same parameter name)."""
     work = model.clone()                 # consume on a clone; ground truth untouched
     site_to_router = {r.site: r.id for r in work.list_routers()}
     inv = dict(spare_inventory)

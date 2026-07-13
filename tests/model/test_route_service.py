@@ -186,6 +186,69 @@ def diamond_service_routerless_waypoint():
     return n, n.get_service("svc")
 
 
+def _unbound_lightpath_model() -> NetworkModel:
+    """Single OMS A->B already lit by lpAB, but with NO IP link bound to it --
+    a valid grooming target per _residual_gbps ('a lightpath with no IP link
+    bound yields its full mode rate'). place_demands's groom_or_new policy can
+    reuse lpAB directly (full mode-rate residual capacity), producing a
+    Placement whose reused_lightpaths names an IP-unbound lightpath -- the case
+    placement_materializable must exclude and apply_candidate would otherwise
+    KeyError on (lp_to_iplink has no entry for lpAB)."""
+    reg = ModeRegistry([
+        TransceiverMode(id="100G", bitrate_gbps=100.0, required_gsnr_db=10.0,
+                        symbol_rate_baud=32e9, channel_spacing_hz=50e9),
+    ])
+    n = NetworkModel(modes=reg)
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    n.add_amplifier(Amplifier(id="a1", type_variety="advanced_toy",
+                              gain_db=20.0, nf_db=5.5))
+    n.add_fiber(Fiber(id="fAB", a_end="a1", z_end="a2", length_km=80.0,
+                      type_variety="SSMF"))
+    n.add_amplifier(Amplifier(id="a2", type_variety="advanced_toy",
+                              gain_db=20.0, nf_db=5.5))
+    for node in ("A", "B"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    n.add_oms(OMS(id="omsAB", src_node_id="A", dst_node_id="B",
+                  elements=("roadm_A", "a1", "fAB", "a2")))
+    n.add_lightpath(Lightpath(id="lpAB", oms_sequence=("omsAB",),
+                              mode_id="100G", center_freq_hz=193.4e12))
+    n.set_qot_state("lpAB", QoTState(gsnr_db=15.0, osnr_db=30.0, margin_db=5.0))
+    # NOTE: deliberately no add_ip_link -- lpAB is unbound.
+    n.add_router(Router(id="RA", site="A"))
+    n.add_router(Router(id="RB", site="B"))
+    n.add_service(Service(id="svc", src_router="RA", dst_router="RB",
+                          demand_gbps=50.0, working_path=()))
+    return n
+
+
+@pytest.fixture
+def diamond_service_unbound_lightpath():
+    n = _unbound_lightpath_model()
+    return n, n.get_service("svc")
+
+
+def test_placement_materializable_excludes_unbound_reused_lightpath():
+    unbound_model = _unbound_lightpath_model()
+    reused = Placement(reused_lightpaths=("lpAB",), new_lightpaths=(),
+                       restored_gbps=50.0, shortfall_gbps=0.0)
+    assert placement_materializable(unbound_model, reused) is False
+
+    bound_model = _shrunk_model()   # lpAB IS bound to ipAB here
+    assert placement_materializable(bound_model, reused) is True
+
+
+def test_route_service_unbound_reused_lightpath_returns_typed_not_raises(
+        diamond_service_unbound_lightpath):
+    # Regression: a placement that grooms onto an IP-unbound lightpath must NOT
+    # raise KeyError in apply_candidate; route_service returns a typed result
+    # and no surviving candidate reuses the unbound lightpath.
+    model, svc = diamond_service_unbound_lightpath
+    res = route_service(model, FakeQot(), svc.id)      # must not raise
+    assert isinstance(res.status, SolverStatus)
+    for c in res.candidates:
+        assert "lpAB" not in c.reused_lightpaths
+
+
 def test_placement_materializable_predicate():
     # A new run terminating at router-less node "M" -> not materializable.
     split = Placement(reused_lightpaths=(),
