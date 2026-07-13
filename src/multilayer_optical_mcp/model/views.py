@@ -154,10 +154,41 @@ def _demand_placement(p) -> dict:
 
 
 def placement_result_dict(res) -> Dict[str, Any]:
-    """Serializer shared by solve_rsa and solve_allocation (same result shape)."""
+    """Serializer for solve_rsa results. solve_allocation now uses
+    allocation_result_dict, not this."""
     return {
         "status": res.status.value,
         "placements": [_demand_placement(p) for p in res.placements],
+        "unplaced": [{"demand_id": did, "reason": r} for did, r in res.unplaced],
+    }
+
+
+def _new_lp_run(r) -> dict:
+    """Serialize a NewLightpathRun (shared shape with restoration_result_dict)."""
+    return {"oms_sequence": list(r.oms_sequence), "lam": r.lam,
+            "mode_id": r.mode_id, "gsnr_db": r.gsnr_db,
+            "bitrate_gbps": r.bitrate_gbps}
+
+
+def _allocation_placement(p) -> dict:
+    return {
+        "demand_id": p.demand_id,
+        "lever": p.lever,
+        "reused_lightpaths": list(p.reused_lightpaths),
+        "new_lightpaths": [_new_lp_run(r) for r in p.new_lightpaths],
+        "protection_reused": list(p.protection_reused),
+        "protection_new": [_new_lp_run(r) for r in p.protection_new],
+        "restored_gbps": p.restored_gbps,
+        "shortfall_gbps": p.shortfall_gbps,
+    }
+
+
+def allocation_result_dict(res) -> Dict[str, Any]:
+    """Serializer for solve_allocation's Placement-based AllocationResult (distinct
+    from placement_result_dict, which serves solve_rsa's slot-based shape)."""
+    return {
+        "status": res.status.value,
+        "placements": [_allocation_placement(p) for p in res.placements],
         "unplaced": [{"demand_id": did, "reason": r} for did, r in res.unplaced],
     }
 
@@ -261,12 +292,47 @@ def restoration_result_dict(res) -> Dict[str, Any]:
                 "new_lightpaths": [_new_lp(r) for r in c.new_lightpaths],
                 "restored_gbps": c.restored_gbps,
                 "shortfall_gbps": c.shortfall_gbps,
-                "cost_facets": dict(c.cost_facets)}
+                "cost_vector": dict(c.cost_vector)}
 
     return {"status": res.status.value,
             "service_id": res.service_id,
             "demand_gbps": res.demand_gbps,
             "candidates": [_cand(c) for c in res.candidates]}
+
+
+def objective_result_dict(res) -> Dict[str, Any]:
+    """Serialize an ObjectiveResult: the 7-term cost vector plus the weighted
+    scalar (total_margin is the sole benefit term, already subtracted in scalar)."""
+    return {"spectrum_used": res.spectrum_used, "transponders": res.transponders,
+            "max_util": res.max_util, "dropped_traffic": res.dropped_traffic,
+            "added_latency": res.added_latency, "total_margin": res.total_margin,
+            "services_at_risk": res.services_at_risk, "scalar": res.scalar}
+
+
+def route_service_result_dict(res) -> Dict[str, Any]:
+    """Serialize a RouteServiceResult: unprotected candidate menu (`candidates`)
+    or protected disjoint-pair menu (`pairs`), whichever the request populated."""
+    def _cand(c) -> dict:
+        return {"lever": c.lever,
+                "reused_lightpaths": list(c.reused_lightpaths),
+                "new_lightpaths": [_new_lp_run(r) for r in c.new_lightpaths],
+                "restored_gbps": c.restored_gbps,
+                "shortfall_gbps": c.shortfall_gbps,
+                "cost_vector": dict(c.cost_vector)}
+
+    def _pair(p) -> dict:
+        return {"working": _cand(p.working), "protection": _cand(p.protection),
+                "disjoint": p.disjoint,
+                "shared_assets": list(p.shared_assets),
+                "shared_groups": list(p.shared_groups),
+                "cost_vector": dict(p.cost_vector)}
+
+    return {"status": res.status.value,
+            "service_id": res.service_id,
+            "demand_gbps": res.demand_gbps,
+            "protected": res.protected,
+            "candidates": [_cand(c) for c in res.candidates],
+            "pairs": [_pair(p) for p in res.pairs]}
 
 
 def validation_report_dict(report) -> Dict[str, Any]:

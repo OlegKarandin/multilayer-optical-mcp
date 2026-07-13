@@ -56,7 +56,7 @@ from .exposure import oms_seq_asset_set
 ACCESS = "access"
 WL = "wl"
 
-# Edge weights shape k-shortest DISCOVERY only (final ranking uses cost_facets).
+# Edge weights shape k-shortest DISCOVERY only (final ranking uses cost_vector).
 # New lightpaths are discouraged but reachable, so hybrids/new candidates
 # interleave into the frontier rather than ranking behind every pure-groom path
 # (which a 1000x penalty would cause). Tunable.

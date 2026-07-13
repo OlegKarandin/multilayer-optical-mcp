@@ -1,12 +1,15 @@
-"""solve_allocation: greenfield heuristic placement under scarce transponders.
+"""solve_allocation: weighted, consuming heuristic packer over the layered engine.
 
-Lights new lightpaths from a per-site transponder count; mode falls out of SNR.
-Grooming onto existing lightpaths is Step 5. Resource exhaustion is a typed
-`partial`/`no_solution`, never an exception.
+Grooms demands onto surviving lightpaths' residual capacity and lights new
+lightpaths (one transponder per new-run endpoint) otherwise. Resource exhaustion
+is a typed `partial`/`no_solution`, never an exception. These tests preserve the
+legacy intents (greenfield consumes transponders; scarce inventory -> partial; no
+inventory -> no_solution; protected consumes more and yields two disjoint legs;
+protected insufficient -> unplaced) against the new AllocationResult shape.
 """
 from multilayer_optical_mcp.model.assets import ROADM
 from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, SRLG, TransceiverMode,
+    FiberType, Fiber, Amplifier, OMS, SRLG, TransceiverMode, Router,
 )
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
@@ -43,6 +46,9 @@ def _two_routes() -> NetworkModel:
         n.add_roadm(ROADM(id=f"roadm_{node}"))
     n.add_oms(OMS("oms-north", "A", "Z", ("roadm_A", "aN1", "fN", "aN2")))
     n.add_oms(OMS("oms-south", "A", "Z", ("roadm_A", "aS1", "fS", "aS2")))
+    # The synth-service consumption path needs a router at each demand endpoint.
+    n.add_router(Router(id="r_A", site="A"))
+    n.add_router(Router(id="r_Z", site="Z"))
     return n
 
 
@@ -51,22 +57,30 @@ def _hi_qot() -> FakeQot:
 
 
 def test_greenfield_places_and_consumes_transponders():
+    # Full-mode (400G) demands fill their lightpath, so demand 2 cannot groom onto
+    # demand 1's survivor (residual 0) and must light its own new lightpath —
+    # greenfield lights two new lightpaths and consumes the inventory.
     n = _two_routes()
     res = solve_allocation(n, _hi_qot(),
-                           [{"id": "d1", "src": "A", "dst": "Z", "demand_gbps": 100.0},
-                            {"id": "d2", "src": "A", "dst": "Z", "demand_gbps": 100.0}],
+                           [{"id": "d1", "src": "A", "dst": "Z", "demand_gbps": 400.0},
+                            {"id": "d2", "src": "A", "dst": "Z", "demand_gbps": 400.0}],
                            spare_inventory={"A": 2, "Z": 2})
     assert res.status is SolverStatus.SOLUTION
     assert len(res.placements) == 2
-    assert all(p.working.mode_id == "400G" for p in res.placements)
+    assert all(p.reused_lightpaths == () for p in res.placements)   # nothing to groom onto
+    assert all(p.new_lightpaths for p in res.placements)            # each lit a lightpath
+    assert all(r.mode_id == "400G" for p in res.placements for r in p.new_lightpaths)
 
 
 def test_scarce_inventory_yields_partial_no_exception():
+    # One transponder per site: the higher-weight demand lights the only lightpath,
+    # exhausting inventory; the second (full-mode) demand cannot groom onto a filled
+    # survivor and has no transponder -> unplaced, not an exception.
     n = _two_routes()
     res = solve_allocation(
         n, _hi_qot(),
-        [{"id": "d1", "src": "A", "dst": "Z", "demand_gbps": 100.0},
-         {"id": "d2", "src": "A", "dst": "Z", "demand_gbps": 100.0}],
+        [{"id": "d1", "src": "A", "dst": "Z", "demand_gbps": 400.0},
+         {"id": "d2", "src": "A", "dst": "Z", "demand_gbps": 400.0}],
         spare_inventory={"A": 1, "Z": 1},
         weights={"d1": 10.0, "d2": 1.0},
     )
@@ -82,19 +96,24 @@ def test_no_inventory_is_no_solution():
                            spare_inventory={"A": 0, "Z": 0})
     assert res.status is SolverStatus.NO_SOLUTION
     assert res.placements == ()
+    assert res.unplaced[0] == ("d1", "insufficient transponders")
 
 
 def test_protected_consumes_four_transponders_and_two_routes():
+    # Exactly 2 per site -> enough for one protected demand (working + protection
+    # lightpaths, one transponder per new-run endpoint = 2 per site).
     n = _two_routes()
-    # Exactly 2 per site -> enough for one protected demand (2 lightpaths).
     res = solve_allocation(n, _hi_qot(),
                            [{"id": "d1", "src": "A", "dst": "Z",
                              "demand_gbps": 100.0, "protected": True}],
                            spare_inventory={"A": 2, "Z": 2})
     assert res.status is SolverStatus.SOLUTION
     p = res.placements[0]
-    assert p.protection is not None
-    assert p.working.oms_path.oms_sequence != p.protection.oms_path.oms_sequence
+    assert p.new_lightpaths          # working leg lit a lightpath
+    assert p.protection_new          # protection leg lit a lightpath
+    work_oms = {o for r in p.new_lightpaths for o in r.oms_sequence}
+    prot_oms = {o for r in p.protection_new for o in r.oms_sequence}
+    assert work_oms and prot_oms and work_oms.isdisjoint(prot_oms)   # disjoint routes
 
 
 def test_protected_insufficient_inventory_unplaced():
@@ -104,4 +123,4 @@ def test_protected_insufficient_inventory_unplaced():
                              "demand_gbps": 100.0, "protected": True}],
                            spare_inventory={"A": 1, "Z": 1})  # need 2 each
     assert res.status is SolverStatus.NO_SOLUTION
-    assert res.unplaced[0][0] == "d1"
+    assert res.unplaced[0] == ("d1", "insufficient transponders")
