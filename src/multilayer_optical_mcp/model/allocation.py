@@ -8,15 +8,20 @@ of the two directions. With a single transponder type, GSNR is mode-independent,
 so one QoT call per direction suffices.
 
 Outcomes are typed (`solution`/`partial`/`no_solution`); resource exhaustion is
-a typed result, never an exception. `solve_allocation` is greenfield only —
-grooming onto existing lightpaths is Step 5.
+a typed result, never an exception.
+
+`solve_rsa` stays on the flat OMS graph (spectrum-slot assignment). `solve_allocation`
+is rebased onto the LAYERED engine (`build_layered_graph`/`place_demands`) so it can
+groom demands onto surviving lightpaths' residual capacity, consuming across demands
+by synthesizing a Service per demand on a clone and committing it through the real
+`objective.apply_candidate` machinery.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
 
-from .assets import Direction
+from .assets import Direction, Service
 from .network import NetworkModel
 from .qot import QoTState
 from .solvers import (
@@ -25,6 +30,10 @@ from .solvers import (
 from .spectrum import (
     SpectrumGrid, build_spectrum_state, first_fit_slot, occupied_along, reserve,
 )
+from .multilayer_graph import build_layered_graph, place_demands, NewLightpathRun
+from .multilayer_disjoint import disjoint_pairs
+from .restoration import _lever
+from . import objective as _objective
 from ..gnpy_adapter.loading import Channel, LoadingState
 
 # Candidate routes considered per demand when searching for a feasible placement.
@@ -80,9 +89,31 @@ class PlacementResult:
     unplaced: Tuple[Tuple[str, str], ...] = ()  # (demand_id, reason)
 
 
-# RSA and allocation share the result shape.
+# solve_rsa's result shape (flat, slot-based).
 RSAResult = PlacementResult
-AllocationResult = PlacementResult
+
+
+# solve_allocation's result shape (layered, Placement-based). A groomed leg reuses
+# an existing lightpath (no transponder, no new spectrum); a new leg lights one.
+# The slot-based SpectrumAssignment cannot represent reuse, so allocation gets its
+# own Placement-shaped result rather than aliasing PlacementResult.
+@dataclass(frozen=True)
+class AllocationPlacement:
+    demand_id: str
+    lever: str                                     # restoration._lever(working placement)
+    reused_lightpaths: Tuple[str, ...]
+    new_lightpaths: Tuple[NewLightpathRun, ...]
+    protection_reused: Tuple[str, ...] = ()        # protected demands only
+    protection_new: Tuple[NewLightpathRun, ...] = ()
+    restored_gbps: float = 0.0
+    shortfall_gbps: float = 0.0
+
+
+@dataclass(frozen=True)
+class AllocationResult:
+    status: SolverStatus
+    placements: Tuple[AllocationPlacement, ...] = ()
+    unplaced: Tuple[Tuple[str, str], ...] = ()     # (demand_id, reason)
 
 
 def _status(n_placed: int, n_unplaced: int) -> SolverStatus:
@@ -235,56 +266,144 @@ def solve_rsa(
 
 
 # ----------------------------------------------------------------- solve_allocation
+#
+# Layered, consuming, grooming-aware. Unlike solve_rsa (flat, one-shot per demand),
+# the allocator commits each placement onto a CLONE before the next demand routes,
+# so a groomed lightpath's residual shrinks and demand N+1 sees the reduced
+# headroom demand N used — the whole grooming-consumption mechanism, obtained for
+# free by reusing objective.apply_candidate (which reroutes the synthetic service
+# and thereby registers its IP-layer load).
+
+
+def _tp_need(placement) -> Dict[str, int]:
+    """Transponders a placement consumes: one per NEW-lightpath run endpoint site.
+    Reused (groomed) legs light no lightpath and cost zero transponders — the
+    scarcity win."""
+    need: Dict[str, int] = {}
+    for run in placement.new_lightpaths:
+        need[run.src_node] = need.get(run.src_node, 0) + 1
+        need[run.dst_node] = need.get(run.dst_node, 0) + 1
+    return need
+
+
+def _inv_ok(inv: Dict[str, int], need: Dict[str, int]) -> bool:
+    return all(inv.get(s, 0) >= n for s, n in need.items())
+
+
+def _dec_inv(inv: Dict[str, int], need: Dict[str, int]) -> None:
+    for s, n in need.items():
+        inv[s] = inv.get(s, 0) - n
+
+
+def _merge_need(a: Dict[str, int], b: Dict[str, int]) -> Dict[str, int]:
+    out = dict(a)
+    for s, n in b.items():
+        out[s] = out.get(s, 0) + n
+    return out
+
+
+def _harvest_alloc(model, qot, g, src, dst, demand_gbps, k=8):
+    """The route_service harvest: groom_or_new + new_only frontiers on the CURRENT
+    (consumed) loading, deduped on the λ-free route identity, materializable only.
+    Cost order preserved — the frontier's discovery order IS 'shortest-available
+    per demand', so grooming (cheap LPE) precedes lighting new (moderate TxE)."""
+    out: List = []
+    seen: set = set()
+    for policy in ("groom_or_new", "new_only"):
+        for p in place_demands(model, g, qot, src=src, dst=dst,
+                               demand_gbps=demand_gbps, policy=policy, k=k):
+            key = (p.reused_lightpaths, tuple(r.oms_sequence for r in p.new_lightpaths))
+            if key in seen:
+                continue
+            seen.add(key)
+            if not _objective.placement_materializable(model, p):
+                continue
+            out.append(p)
+    return out
+
 
 def solve_allocation(
     model: NetworkModel, qot: QotEvaluator, demands: Sequence[dict],
     spare_inventory: Dict[str, int], objective: str = "max_placed",
     weights: Optional[Dict[str, float]] = None,
 ) -> AllocationResult:
-    """Greenfield heuristic: light new lightpaths from a per-site transponder
-    count to serve as many weighted demands as possible. Demand:
-    `{id, src, dst, demand_gbps, protected?, constraints?}`. A demand is placed
-    iff a single lightpath's best feasible mode bitrate ≥ demand_gbps and both
-    endpoint sites have a spare transponder (two lightpaths / four transponders
-    when protected). Never aborts — unplaced demands come back as a typed
-    `partial`/`no_solution`."""
-    grid = SpectrumGrid.default()
-    work = build_spectrum_state(model, grid)
-    ref_mode = model.modes.list()[0].id
+    """Weighted, consuming heuristic packer over the layered engine. Demand:
+    `{id, src, dst, demand_gbps, protected?, constraints?}` (src/dst = optical node
+    ids). Demands are placed in weight order; each demand routes over the CURRENT
+    consumed state, so it grooms onto a survivor's residual capacity when one is
+    reachable (costing no transponder) and lights a new lightpath otherwise
+    (costing one transponder per new-run endpoint, gated on spare inventory). A
+    protected demand gets a disjoint working+protection pair under the demand's
+    basis/level. Never aborts — inventory/feasibility/route misses are typed
+    `unplaced` entries yielding `partial`/`no_solution`."""
+    work = model.clone()                 # consume on a clone; ground truth untouched
+    site_to_router = {r.site: r.id for r in work.list_routers()}
     inv = dict(spare_inventory)
     weights = weights or {}
     ordered = sorted(demands, key=lambda d: (-weights.get(d["id"], 0.0), d["id"]))
 
-    placements: List[DemandPlacement] = []
+    placements: List[AllocationPlacement] = []
     unplaced: List[Tuple[str, str]] = []
 
     for d in ordered:
         did, src, dst = d["id"], d["src"], d["dst"]
         gbps = d["demand_gbps"]
         protected = d.get("protected", False)
-        n_lp = 2 if protected else 1  # lightpaths -> transponders per endpoint site
-        if inv.get(src, 0) < n_lp or inv.get(dst, 0) < n_lp:
-            unplaced.append((did, "insufficient transponders"))
+
+        if src not in site_to_router or dst not in site_to_router:
+            unplaced.append((did, "no router at endpoint"))
+            continue
+
+        # Model the demand as a Service on `work`; committing it via apply_candidate
+        # reroutes it, registering IP load so the next demand sees reduced residual.
+        svc = Service(id=did, src_router=site_to_router[src],
+                      dst_router=site_to_router[dst], demand_gbps=gbps,
+                      working_path=())
+        work.add_service(svc)
+
+        g = build_layered_graph(work)
+        cands = _harvest_alloc(work, qot, g, src, dst, gbps)
+        if not cands:
+            unplaced.append((did, "no feasible route"))
             continue
 
         if protected:
             basis, level, be = _demand_constraints(d)
-            pair = _place_protected(model, qot, src, dst, work, grid, ref_mode,
-                                    gbps, basis, level, be)
-            if pair is None:
-                unplaced.append((did, "no disjoint feasible pair meeting demand"))
+            pp = disjoint_pairs(work, cands, basis=basis, level=level,
+                                best_effort=be, top_n=1)
+            if not pp:
+                unplaced.append((did, "no disjoint feasible pair"))
                 continue
-            inv[src] -= 2
-            inv[dst] -= 2
-            placements.append(DemandPlacement(did, pair[0], pair[1]))
+            pair = pp[0]
+            need = _merge_need(_tp_need(pair.working), _tp_need(pair.protection))
+            if not _inv_ok(inv, need):
+                unplaced.append((did, "insufficient transponders"))
+                continue
+            _objective.apply_candidate(work, pair.working, svc)          # provision+seed+reroute
+            _objective.provision_new_runs(work, pair.protection, svc, prefix="prot")
+            _dec_inv(inv, need)
+            placements.append(AllocationPlacement(
+                demand_id=did, lever=_lever(pair.working),
+                reused_lightpaths=pair.working.reused_lightpaths,
+                new_lightpaths=pair.working.new_lightpaths,
+                protection_reused=pair.protection.reused_lightpaths,
+                protection_new=pair.protection.new_lightpaths,
+                restored_gbps=pair.working.restored_gbps,
+                shortfall_gbps=pair.working.shortfall_gbps))
         else:
-            sa = _place_unprotected(model, qot, src, dst, work, grid, ref_mode, gbps)
-            if sa is None:
-                unplaced.append((did, "no feasible route/slot/mode meeting demand"))
+            pick = cands[0]                       # shortest-available local pick
+            need = _tp_need(pick)
+            if not _inv_ok(inv, need):
+                unplaced.append((did, "insufficient transponders"))
                 continue
-            inv[src] -= 1
-            inv[dst] -= 1
-            placements.append(DemandPlacement(did, sa, None))
+            _objective.apply_candidate(work, pick, svc)                  # provision+seed+reroute
+            _dec_inv(inv, need)
+            placements.append(AllocationPlacement(
+                demand_id=did, lever=_lever(pick),
+                reused_lightpaths=pick.reused_lightpaths,
+                new_lightpaths=pick.new_lightpaths,
+                restored_gbps=pick.restored_gbps,
+                shortfall_gbps=pick.shortfall_gbps))
 
-    return PlacementResult(_status(len(placements), len(unplaced)),
-                           tuple(placements), tuple(unplaced))
+    return AllocationResult(_status(len(placements), len(unplaced)),
+                            tuple(placements), tuple(unplaced))

@@ -155,7 +155,7 @@ def build_app() -> FastMCP:
         topology_dict, lightpaths_dict, services_dict,
         traffic_matrix_dict, srlgs_dict, risk_groups_dict,
         routing_result_dict, disjointness_result_dict,
-        feasibility_result_dict, placement_result_dict,
+        feasibility_result_dict, placement_result_dict, allocation_result_dict,
         ip_topology_dict, grooming_map_dict, ip_routing_result_dict,
         affected_services_dict,
         margin_sweep_dict, degradation_report_dict, failure_report_dict,
@@ -366,7 +366,7 @@ def build_app() -> FastMCP:
         solution/partial/no_solution with placed and unplaced demands."""
         model = snapshots.current()
         qot = make_adapter_evaluator(model, results)
-        return placement_result_dict(
+        return allocation_result_dict(
             _solve_allocation(model, qot, demands, spare_inventory,
                               objective=objective, weights=weights))
 

@@ -7,7 +7,7 @@ import asyncio
 
 from multilayer_optical_mcp.server import build_app
 from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, ROADM, OMS, Lightpath, Transceiver,
+    FiberType, Fiber, Amplifier, ROADM, OMS, Lightpath, Transceiver, Router,
 )
 
 
@@ -36,6 +36,10 @@ def _seed_app():
     m.add_roadm(ROADM(id="roadm_Z", target_pch_out_db=-20.0))
     m.add_transceiver(Transceiver(id="trx_A", site="A"))
     m.add_transceiver(Transceiver(id="trx_Z", site="Z"))
+    # solve_allocation is now IP-aware (grooms onto lightpaths' bound IP links), so
+    # it needs a router at each demand endpoint. solve_rsa ignores routers.
+    m.add_router(Router(id="r_A", site="A"))
+    m.add_router(Router(id="r_Z", site="Z"))
     for amp in ("booster A", "east edfa in ILA", "east edfa at Z",
                 "booster Z", "west edfa in ILA", "west edfa at A"):
         m.add_amplifier(Amplifier(id=amp, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))

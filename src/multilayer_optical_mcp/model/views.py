@@ -162,6 +162,36 @@ def placement_result_dict(res) -> Dict[str, Any]:
     }
 
 
+def _new_lp_run(r) -> dict:
+    """Serialize a NewLightpathRun (shared shape with restoration_result_dict)."""
+    return {"oms_sequence": list(r.oms_sequence), "lam": r.lam,
+            "mode_id": r.mode_id, "gsnr_db": r.gsnr_db,
+            "bitrate_gbps": r.bitrate_gbps}
+
+
+def _allocation_placement(p) -> dict:
+    return {
+        "demand_id": p.demand_id,
+        "lever": p.lever,
+        "reused_lightpaths": list(p.reused_lightpaths),
+        "new_lightpaths": [_new_lp_run(r) for r in p.new_lightpaths],
+        "protection_reused": list(p.protection_reused),
+        "protection_new": [_new_lp_run(r) for r in p.protection_new],
+        "restored_gbps": p.restored_gbps,
+        "shortfall_gbps": p.shortfall_gbps,
+    }
+
+
+def allocation_result_dict(res) -> Dict[str, Any]:
+    """Serializer for solve_allocation's Placement-based AllocationResult (distinct
+    from placement_result_dict, which serves solve_rsa's slot-based shape)."""
+    return {
+        "status": res.status.value,
+        "placements": [_allocation_placement(p) for p in res.placements],
+        "unplaced": [{"demand_id": did, "reason": r} for did, r in res.unplaced],
+    }
+
+
 def ip_topology_dict(model: NetworkModel) -> Dict[str, Any]:
     load = _ipr.offered_load_per_link(model)
     links = []

@@ -170,6 +170,20 @@ def apply_candidate(work, placement, service, *, prefix="cand") -> None:
     apply_op(work, RerouteService(service_id=service.id, ip_path=ip_path))
 
 
+def provision_new_runs(work, placement, service, *, prefix) -> None:
+    """Provision each new run of `placement` as a lightpath + IP link and seed its
+    QoT, WITHOUT rerouting any service. Used for a protection leg: a 1:1 idle
+    reserve whose transponder/spectrum/margin cost must count but which carries no
+    IP load. Shared by score_pair and solve_allocation's protected commit so both
+    provision protection identically (DRY)."""
+    grid = SpectrumGrid.default()
+    site_to_router = {r.site: r.id for r in work.list_routers()}
+    for i, run in enumerate(placement.new_lightpaths):
+        lp_id = f"lp-{prefix}-{service.id}-{i}"
+        ipl_id = f"ipl-{prefix}-{service.id}-{i}"
+        _provision_and_seed_run(work, run, lp_id, ipl_id, site_to_router, grid)
+
+
 def placement_materializable(model, placement) -> bool:
     """True iff every new run's endpoints resolve to a Router site. A run ending
     at a router-less optical node cannot be bound to an IP link, so such a
@@ -192,10 +206,5 @@ def score_pair(model, working, protection, service, weights=None) -> ObjectiveRe
     work = model.clone()
     apply_candidate(work, working, service, prefix="work")
     # provision protection's new lightpaths (no reroute) so their cost is counted
-    grid = SpectrumGrid.default()
-    site_to_router = {r.site: r.id for r in work.list_routers()}
-    for i, run in enumerate(protection.new_lightpaths):
-        lp_id = f"lp-prot-{service.id}-{i}"
-        ipl_id = f"ipl-prot-{service.id}-{i}"
-        _provision_and_seed_run(work, run, lp_id, ipl_id, site_to_router, grid)
+    provision_new_runs(work, protection, service, prefix="prot")
     return evaluate_objective(work, weights)
