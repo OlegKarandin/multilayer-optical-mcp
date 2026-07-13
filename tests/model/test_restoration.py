@@ -133,11 +133,16 @@ def test_cross_bucket_dedup_ignores_wavelength(monkeypatch):
     """A candidate never commits to a wavelength, so the same physical route must
     not survive as two candidates merely because the groom_or_new and new_only
     passes picked different representative lambdas. The cross-bucket dedup key must
-    match place_demands' lambda-free intra-bucket key."""
-    from multilayer_optical_mcp.model import restoration as R
+    match place_demands' lambda-free intra-bucket key.
+
+    compute_restoration now delegates to route_service, which owns the harvest
+    (_harvest) that calls place_demands -- so the fake is installed on
+    route_service's binding of place_demands, not restoration's (restoration no
+    longer imports it directly)."""
+    from multilayer_optical_mcp.model import route_service as RS
     from multilayer_optical_mcp.model.multilayer_graph import Placement, NewLightpathRun
 
-    def _fake_place(model, g, qot, *, src, dst, demand_gbps, policy):
+    def _fake_place(model, g, qot, *, src, dst, demand_gbps, policy, k=8):
         # same physical route (oms-AB), different representative lambda per pass
         lam = 0 if policy == "groom_or_new" else 3
         run = NewLightpathRun(("oms-AB",), lam, "100G", 15.0, 100.0,
@@ -145,7 +150,7 @@ def test_cross_bucket_dedup_ignores_wavelength(monkeypatch):
         return [Placement(reused_lightpaths=(), new_lightpaths=(run,),
                           restored_gbps=demand_gbps, shortfall_gbps=0.0)]
 
-    monkeypatch.setattr(R, "place_demands", _fake_place)
+    monkeypatch.setattr(RS, "place_demands", _fake_place)
     n = _diamond()
     res = compute_restoration(n, FakeQot(15.0), "svc")
     assert len(res.candidates) == 1, [c.new_lightpaths for c in res.candidates]

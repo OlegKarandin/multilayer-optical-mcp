@@ -261,7 +261,7 @@ def restoration_result_dict(res) -> Dict[str, Any]:
                 "new_lightpaths": [_new_lp(r) for r in c.new_lightpaths],
                 "restored_gbps": c.restored_gbps,
                 "shortfall_gbps": c.shortfall_gbps,
-                "cost_facets": dict(c.cost_facets)}
+                "cost_vector": dict(c.cost_vector)}
 
     return {"status": res.status.value,
             "service_id": res.service_id,

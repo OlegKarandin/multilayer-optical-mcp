@@ -15,12 +15,12 @@ def test_restoration_result_dict_shape():
             RestorationCandidate(
                 lever="ip_reroute", reused_lightpaths=("lp-AM", "lp-MB"),
                 new_lightpaths=(), restored_gbps=20.0, shortfall_gbps=30.0,
-                cost_facets={"transponders": 0.0, "new_lightpaths": 0.0, "hops": 2.0}),
+                cost_vector={"transponders": 0.0, "new_lightpaths": 0.0, "hops": 2.0}),
             RestorationCandidate(
                 lever="optical_reroute", reused_lightpaths=(),
                 new_lightpaths=(NewLightpathRun(("oms-AB",), 0, "100G", 15.0, 100.0),),
                 restored_gbps=50.0, shortfall_gbps=0.0,
-                cost_facets={"transponders": 2.0, "new_lightpaths": 1.0, "hops": 1.0}),
+                cost_vector={"transponders": 2.0, "new_lightpaths": 1.0, "hops": 1.0}),
         ),
     )
     d = restoration_result_dict(res)

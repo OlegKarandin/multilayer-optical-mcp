@@ -10,11 +10,14 @@ provision_lightpath) is Phase 7; this tool only enumerates.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, List, Optional, Tuple
+from typing import Dict, FrozenSet, Optional, Tuple
 
 from .network import NetworkModel
 from .solvers import SolverStatus
-from .multilayer_graph import build_layered_graph, place_demands, NewLightpathRun, Placement
+from .multilayer_graph import NewLightpathRun, Placement
+# route_service imports _forbidden_assets/_lever from this module, so the
+# dependency is inverted here (compute_restoration -> route_service) via a
+# deferred import inside the function to avoid a circular import at load time.
 
 
 @dataclass(frozen=True)
@@ -24,7 +27,7 @@ class RestorationCandidate:
     new_lightpaths: Tuple[NewLightpathRun, ...]
     restored_gbps: float
     shortfall_gbps: float
-    cost_facets: Dict[str, float]           # transponders, new_lightpaths, hops
+    cost_vector: Dict[str, float]           # route_service's 7-term objective + "scalar"
 
 
 @dataclass(frozen=True)
@@ -58,66 +61,38 @@ def _lever(p: Placement) -> str:
     return "ip_reroute"
 
 
-def _candidate(model: NetworkModel, p: Placement) -> RestorationCandidate:
-    lever = _lever(p)
-    # S7-11: cost_facets are PROXIES, not the named physical quantity. "hops"
-    # is reused-plus-new LIGHTPATH count, not fiber/span hops; "transponders"
-    # assumes every new lightpath needs exactly 2 (one per end) and ignores
-    # any already-spare transponder inventory. compute_restoration sorts
-    # candidates on these proxies (shortfall, transponders, hops) until
-    # evaluate_objective's richer cost vector (CLAUDE.md) lands as the ranking
-    # function instead.
-    cost = {
-        "transponders": 2.0 * len(p.new_lightpaths),
-        "new_lightpaths": float(len(p.new_lightpaths)),
-        "hops": float(len(p.reused_lightpaths) + len(p.new_lightpaths)),
-    }
-    return RestorationCandidate(
-        lever=lever,
-        reused_lightpaths=p.reused_lightpaths,
-        new_lightpaths=p.new_lightpaths,
-        restored_gbps=p.restored_gbps,
-        shortfall_gbps=p.shortfall_gbps,
-        cost_facets=cost,
-    )
-
-
 def compute_restoration(
     model: NetworkModel, qot, service_id: str, avoid: Optional[dict] = None,
 ) -> RestorationResult:
     """Enumerate recovery candidates for a service over survivors. `avoid` is
-    `{assets?: [...], risk_groups?: [...]}` (typically inject_failure's set)."""
-    svc = model.get_service(service_id)
-    src = model.get_router(svc.src_router).site
-    dst = model.get_router(svc.dst_router).site
-    forbidden = _forbidden_assets(model, avoid)
-    g = build_layered_graph(model, forbidden_assets=forbidden)
+    `{assets?: [...], risk_groups?: [...]}` (typically inject_failure's set).
 
-    # groom_or_new harvests the cost-ordered frontier (groom + hybrid + cheap new);
-    # new_only guarantees the pure-optical fallback even when many groom variants
-    # would otherwise starve the budget. Dedup across both buckets.
-    candidates: List[RestorationCandidate] = []
-    seen: set = set()
-    for policy in ("groom_or_new", "new_only"):
-        for p in place_demands(model, g, qot, src=src, dst=dst,
-                               demand_gbps=svc.demand_gbps, policy=policy):
-            # Dedup on the LAMBDA-FREE route identity, matching place_demands'
-            # intra-bucket key: a candidate does not commit to a wavelength, so
-            # the same physical route picked with a different representative lambda
-            # in the two policy passes must not escape as two candidates.
-            key = (p.reused_lightpaths,
-                   tuple(r.oms_sequence for r in p.new_lightpaths))
-            if key in seen:
-                continue
-            seen.add(key)
-            candidates.append(_candidate(model, p))
+    Thin wrapper over route_service's single-candidate (unprotected) menu: the
+    harvest, dedup, and materializability filtering all live there now. Ranking
+    is re-sorted here on (shortfall_gbps, cost_vector["scalar"]) rather than
+    route_service's plain scalar order, because restoration must still surface a
+    FULLY-restoring candidate ahead of a cheaper-but-partial one.
+    """
+    from .route_service import route_service  # deferred: avoids circular import
 
-    candidates.sort(key=lambda c: (c.shortfall_gbps, c.cost_facets["transponders"],
-                                   c.cost_facets["hops"]))
+    rs = route_service(model, qot, service_id, protected=False, avoid=avoid)
+    candidates = tuple(
+        RestorationCandidate(
+            lever=c.lever,
+            reused_lightpaths=c.reused_lightpaths,
+            new_lightpaths=c.new_lightpaths,
+            restored_gbps=c.restored_gbps,
+            shortfall_gbps=c.shortfall_gbps,
+            cost_vector=c.cost_vector,
+        )
+        for c in rs.candidates
+    )
+    candidates = tuple(sorted(candidates,
+                              key=lambda c: (c.shortfall_gbps, c.cost_vector["scalar"])))
     if not candidates:
         status = SolverStatus.NO_SOLUTION
     elif any(c.shortfall_gbps == 0.0 for c in candidates):
         status = SolverStatus.SOLUTION
     else:
         status = SolverStatus.PARTIAL
-    return RestorationResult(status, service_id, svc.demand_gbps, tuple(candidates))
+    return RestorationResult(status, service_id, rs.demand_gbps, candidates)
