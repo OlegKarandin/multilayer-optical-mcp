@@ -8,7 +8,7 @@ Read-only: every score is computed on a throwaway clone.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from .network import NetworkModel
@@ -16,7 +16,7 @@ from .solvers import SolverStatus
 from .multilayer_graph import build_layered_graph, place_demands, NewLightpathRun
 from .restoration import _forbidden_assets, _lever
 from .multilayer_disjoint import disjoint_pairs
-from .objective import score_candidate, score_pair
+from .objective import score_candidate, score_pair, placement_materializable
 
 
 @dataclass(frozen=True)
@@ -90,6 +90,13 @@ def route_service(model: NetworkModel, qot, service_id: str, *, protected: bool 
     dst = model.get_router(svc.dst_router).site
     g = build_layered_graph(model, forbidden_assets=_forbidden_assets(model, avoid))
     placements = _harvest(model, qot, g, src, dst, svc.demand_gbps, k)
+    # A placement whose new run terminates at a router-less optical node cannot be
+    # bound to an IP link (score_candidate/score_pair would KeyError provisioning
+    # it). Such a placement is an INFEASIBLE service-routing candidate: exclude it
+    # so the typed contract holds (empty -> NO_SOLUTION via _status/empty pairs),
+    # never crash. build_layered_graph creates TxE/RxE at EVERY optical node, so a
+    # split placement through a pass-through ROADM is a normal, reachable case.
+    placements = [p for p in placements if placement_materializable(model, p)]
 
     if not protected:
         cands = [RouteServiceCandidate(

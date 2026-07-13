@@ -12,6 +12,8 @@ from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model.solvers import SolverStatus
+from multilayer_optical_mcp.model.multilayer_graph import Placement, NewLightpathRun
+from multilayer_optical_mcp.model.objective import placement_materializable
 from multilayer_optical_mcp.model.route_service import route_service
 
 
@@ -145,8 +147,79 @@ def diamond_service_shrunk():
     return n, n.get_service("svc")
 
 
+def _routerless_waypoint_model() -> NetworkModel:
+    """Empty net, linear A-M-B over two OMS, with NO router at the pass-through
+    ROADM M (routers only at A and B). place_demands can realize A->B as ONE
+    continuous run (endpoints A,B -> materializable) AND as a SPLIT pair of runs
+    A->M then M->B (an IP hop at M -> endpoint M has no router -> NOT
+    materializable). The split candidate must be excluded, not crashed on."""
+    reg = ModeRegistry([
+        TransceiverMode(id="100G", bitrate_gbps=100.0, required_gsnr_db=10.0,
+                        symbol_rate_baud=32e9, channel_spacing_hz=50e9),
+    ])
+    n = NetworkModel(modes=reg)
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    for a in ("aAMa", "aAMb", "aMBa", "aMBb"):
+        n.add_amplifier(Amplifier(id=a, type_variety="advanced_toy",
+                                  gain_db=20.0, nf_db=5.5))
+    n.add_fiber(Fiber(id="fAM", a_end="aAMa", z_end="aAMb", length_km=60.0,
+                      type_variety="SSMF"))
+    n.add_fiber(Fiber(id="fMB", a_end="aMBa", z_end="aMBb", length_km=60.0,
+                      type_variety="SSMF"))
+    for node in ("A", "M", "B"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    n.add_oms(OMS(id="omsAM", src_node_id="A", dst_node_id="M",
+                  elements=("roadm_A", "aAMa", "fAM", "aAMb")))
+    n.add_oms(OMS(id="omsMB", src_node_id="M", dst_node_id="B",
+                  elements=("roadm_M", "aMBa", "fMB", "aMBb")))
+    # Routers only at A and B -- M is a router-less pass-through ROADM.
+    n.add_router(Router(id="RA", site="A"))
+    n.add_router(Router(id="RB", site="B"))
+    n.add_service(Service(id="svc", src_router="RA", dst_router="RB",
+                          demand_gbps=100.0, working_path=()))
+    return n
+
+
+@pytest.fixture
+def diamond_service_routerless_waypoint():
+    n = _routerless_waypoint_model()
+    return n, n.get_service("svc")
+
+
+def test_placement_materializable_predicate():
+    # A new run terminating at router-less node "M" -> not materializable.
+    split = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAM",), 0, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="M"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+    # A run whose endpoints are both router sites -> materializable.
+    whole = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAM", "omsMB"), 0, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+    model = _routerless_waypoint_model()
+    assert placement_materializable(model, split) is False
+    assert placement_materializable(model, whole) is True
+
+
+def test_routerless_waypoint_returns_typed_not_raises(diamond_service_routerless_waypoint):
+    # Regression: a split placement through a router-less pass-through ROADM must
+    # NOT raise KeyError; route_service returns a typed result and every surviving
+    # candidate's new-run endpoints are all router sites.
+    model, svc = diamond_service_routerless_waypoint
+    res = route_service(model, FakeQot(), svc.id)      # must not raise
+    assert isinstance(res.status, SolverStatus)
+    router_sites = {r.site for r in model.list_routers()}
+    for c in res.candidates:
+        for run in c.new_lightpaths:
+            assert run.src_node in router_sites and run.dst_node in router_sites
+
+
 def test_unprotected_first_time_routing_menu(diamond_service):
     model, svc = diamond_service   # empty net
+    # Lock the read-only / no-consume contract: ground truth untouched.
+    lps_before = len(model.list_lightpaths())
+    ipl_before = len(model.list_ip_links())
     res = route_service(model, FakeQot(), svc.id)     # avoid=None -> first-time
     assert res.status in (SolverStatus.SOLUTION, SolverStatus.PARTIAL)
     assert res.candidates                              # a menu of candidates
@@ -154,6 +227,8 @@ def test_unprotected_first_time_routing_menu(diamond_service):
     # sorted ascending by scalar:
     assert res.candidates == tuple(sorted(res.candidates,
         key=lambda c: c.cost_vector["scalar"]))
+    assert len(model.list_lightpaths()) == lps_before   # no-consume
+    assert len(model.list_ip_links()) == ipl_before
 
 
 def test_protected_returns_disjoint_pair_menu(diamond_service_two_routes):

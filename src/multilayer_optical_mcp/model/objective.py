@@ -170,6 +170,15 @@ def apply_candidate(work, placement, service, *, prefix="cand") -> None:
     apply_op(work, RerouteService(service_id=service.id, ip_path=ip_path))
 
 
+def placement_materializable(model, placement) -> bool:
+    """True iff every new run's endpoints resolve to a Router site. A run ending
+    at a router-less optical node cannot be bound to an IP link, so such a
+    placement is not a feasible service-routing candidate."""
+    sites = {r.site for r in model.list_routers()}
+    return all(run.src_node in sites and run.dst_node in sites
+               for run in placement.new_lightpaths)
+
+
 def score_candidate(model, placement, service, weights=None) -> ObjectiveResult:
     work = model.clone()
     apply_candidate(work, placement, service)
