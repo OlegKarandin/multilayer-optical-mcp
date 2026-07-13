@@ -6,6 +6,13 @@ from multilayer_optical_mcp.model.restoration import (
 from multilayer_optical_mcp.model.solvers import SolverStatus
 from multilayer_optical_mcp.model.multilayer_graph import NewLightpathRun
 from multilayer_optical_mcp.model.views import restoration_result_dict
+from multilayer_optical_mcp.model.route_service import (
+    RouteServiceResult, RouteServiceCandidate, RoutePair,
+)
+from multilayer_optical_mcp.model.objective import ObjectiveResult
+from multilayer_optical_mcp.model.assets import FiberType, Router, Service
+from multilayer_optical_mcp.server import build_app
+from tests.phase7_topology import add_bidir_span
 
 
 def test_restoration_result_dict_shape():
@@ -35,3 +42,74 @@ def test_restoration_result_dict_shape():
     assert c1["new_lightpaths"][0]["oms_sequence"] == ["oms-AB"]
     assert c1["new_lightpaths"][0]["lam"] == 0
     assert c1["new_lightpaths"][0]["bitrate_gbps"] == 100.0
+
+
+def _call(app, name, **kwargs):
+    return app._tool_manager._tools[name].fn(**kwargs)
+
+
+def _seed(app):
+    """Register a synthesizable bidirectional span A<->B plus a routed service,
+    so route_service (real GNPy via make_adapter_evaluator) and evaluate_objective
+    have something to route/score."""
+    n = app._snapshots.current()
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    add_bidir_span(n, "A", "B", "omsAB")
+    n.add_router(Router(id="RA", site="A"))
+    n.add_router(Router(id="RB", site="B"))
+    n.add_service(Service(id="svc1", src_router="RA", dst_router="RB",
+                          demand_gbps=100.0, working_path=()))
+    return n
+
+
+def test_evaluate_objective_result_dict_shape():
+    from multilayer_optical_mcp.model.views import objective_result_dict
+    obj = ObjectiveResult(
+        spectrum_used=4, transponders=2.0, max_util=0.5, dropped_traffic=0.0,
+        added_latency=1.2, total_margin=15.0, services_at_risk=0, scalar=-10.0,
+    )
+    d = objective_result_dict(obj)
+    assert set(d) >= {"spectrum_used", "transponders", "max_util", "dropped_traffic",
+                      "added_latency", "total_margin", "services_at_risk", "scalar"}
+    assert d["scalar"] == -10.0
+    assert d["transponders"] == 2.0
+
+
+def test_route_service_result_dict_shape():
+    from multilayer_optical_mcp.model.views import route_service_result_dict
+    cand = RouteServiceCandidate(
+        lever="new_lightpath", reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 0, "100G", 15.0, 100.0),),
+        restored_gbps=100.0, shortfall_gbps=0.0,
+        cost_vector={"transponders": 2.0, "scalar": -5.0})
+    res = RouteServiceResult(
+        status=SolverStatus.SOLUTION, service_id="svc1", demand_gbps=100.0,
+        protected=False, candidates=(cand,), pairs=())
+    d = route_service_result_dict(res)
+    assert d["status"] == "solution"
+    assert d["service_id"] == "svc1"
+    assert "candidates" in d
+    assert d["candidates"][0]["cost_vector"] == {"transponders": 2.0, "scalar": -5.0}
+    assert d["candidates"][0]["new_lightpaths"][0]["oms_sequence"] == ["omsAB"]
+
+    pair_res = RouteServiceResult(
+        status=SolverStatus.PARTIAL, service_id="svc1", demand_gbps=100.0,
+        protected=True, candidates=(),
+        pairs=(RoutePair(working=cand, protection=cand, disjoint=False,
+                         shared_assets=("f_omsAB",), shared_groups=(),
+                         cost_vector={"scalar": -3.0}),))
+    d2 = route_service_result_dict(pair_res)
+    assert d2["pairs"][0]["disjoint"] is False
+    assert d2["pairs"][0]["shared_assets"] == ["f_omsAB"]
+    assert d2["pairs"][0]["cost_vector"] == {"scalar": -3.0}
+
+
+def test_route_service_and_evaluate_objective_tools_registered():
+    app = build_app()
+    _seed(app)
+    out = _call(app, "evaluate_objective")
+    assert "scalar" in out
+
+    menu = _call(app, "route_service", service_id="svc1")
+    assert menu["status"] in ("solution", "partial", "no_solution")
+    assert menu["service_id"] == "svc1"

@@ -299,6 +299,41 @@ def restoration_result_dict(res) -> Dict[str, Any]:
             "candidates": [_cand(c) for c in res.candidates]}
 
 
+def objective_result_dict(res) -> Dict[str, Any]:
+    """Serialize an ObjectiveResult: the 7-term cost vector plus the weighted
+    scalar (total_margin is the sole benefit term, already subtracted in scalar)."""
+    return {"spectrum_used": res.spectrum_used, "transponders": res.transponders,
+            "max_util": res.max_util, "dropped_traffic": res.dropped_traffic,
+            "added_latency": res.added_latency, "total_margin": res.total_margin,
+            "services_at_risk": res.services_at_risk, "scalar": res.scalar}
+
+
+def route_service_result_dict(res) -> Dict[str, Any]:
+    """Serialize a RouteServiceResult: unprotected candidate menu (`candidates`)
+    or protected disjoint-pair menu (`pairs`), whichever the request populated."""
+    def _cand(c) -> dict:
+        return {"lever": c.lever,
+                "reused_lightpaths": list(c.reused_lightpaths),
+                "new_lightpaths": [_new_lp_run(r) for r in c.new_lightpaths],
+                "restored_gbps": c.restored_gbps,
+                "shortfall_gbps": c.shortfall_gbps,
+                "cost_vector": dict(c.cost_vector)}
+
+    def _pair(p) -> dict:
+        return {"working": _cand(p.working), "protection": _cand(p.protection),
+                "disjoint": p.disjoint,
+                "shared_assets": list(p.shared_assets),
+                "shared_groups": list(p.shared_groups),
+                "cost_vector": dict(p.cost_vector)}
+
+    return {"status": res.status.value,
+            "service_id": res.service_id,
+            "demand_gbps": res.demand_gbps,
+            "protected": res.protected,
+            "candidates": [_cand(c) for c in res.candidates],
+            "pairs": [_pair(p) for p in res.pairs]}
+
+
 def validation_report_dict(report) -> Dict[str, Any]:
     """Serialize a ValidationReport: ok/num_states plus the typed violation list,
     each violation carrying its state_index, transient flag, and remediation

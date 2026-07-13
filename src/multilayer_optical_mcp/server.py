@@ -192,7 +192,10 @@ def build_app() -> FastMCP:
     from .model.commit import commit_plan as _commit_plan, reconcile as _reconcile
     from .model.views import (
         validation_report_dict, commit_result_dict, drift_report_dict,
+        objective_result_dict, route_service_result_dict,
     )
+    from .model.route_service import route_service as _route_service
+    from .model.objective import evaluate_objective as _evaluate_objective
 
     # Expose the SnapshotStore on the app so tests can reach the current model.
     app._snapshots = snapshots  # type: ignore[attr-defined]
@@ -477,6 +480,27 @@ def build_app() -> FastMCP:
             dry_run=dry_run, confirm=confirm, basis=basis, level=level,
             dropped_tolerance_gbps=dropped_tolerance_gbps)
         return commit_result_dict(result)
+
+    @app.tool()
+    def route_service(service_id: str, protected: bool = False,
+                      basis: str = "physical", level: str = "link",
+                      best_effort: bool = False, avoid: dict | None = None,
+                      weights: dict | None = None) -> dict:
+        """Service-level routing/restoration menu on the layered graph. avoid=None ->
+        first-time routing; avoid={assets?,risk_groups?} -> restoration. protected=True
+        returns a disjoint-pair menu (best_effort -> min-overlap PARTIAL). Read-only."""
+        model = snapshots.current()
+        qot = make_adapter_evaluator(model, results)
+        res = _route_service(model, qot, service_id, protected=protected, basis=basis,
+                             level=level, best_effort=best_effort, avoid=avoid, weights=weights)
+        return route_service_result_dict(res)
+
+    @app.tool()
+    def evaluate_objective(state: str | None = None, weights: dict | None = None) -> dict:
+        """7-term cost vector + weighted scalar for a state (snapshot id; defaults to
+        current). Terms are costs except total_margin (a benefit, subtracted)."""
+        model = snapshots.get(state) if state else snapshots.current()
+        return objective_result_dict(_evaluate_objective(model, weights))
 
     @app.tool()
     def reconcile(intended_snapshot_id: str) -> dict:
