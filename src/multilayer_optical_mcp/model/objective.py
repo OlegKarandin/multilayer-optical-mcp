@@ -8,6 +8,9 @@ from .network import NetworkModel
 from .spectrum import SpectrumGrid, build_spectrum_state
 from .ip_routing import simulate_ip_routing
 from .whatif import margin_threshold_sweep
+from .plan import apply_op, ProvisionLightpath, RerouteService
+from .assets import Lightpath, IPLink
+from .qot import QoTState
 
 _PROP_MS_PER_KM = 0.005   # ~5 us/km one-way fiber propagation
 
@@ -101,3 +104,89 @@ def evaluate_objective(model: NetworkModel, weights: Optional[Dict[str, float]] 
 
     return ObjectiveResult(spectrum_used, tp, max_util, dropped_traffic,
                            added_latency, total_margin, services_at_risk, scalar)
+
+
+# ---------------------------------------------------------------------------
+# Candidate materialization: turn a routing-engine Placement into a scored
+# state by provisioning it through the REAL apply_op machinery on a clone, so
+# scoring and a real commit can never numerically drift apart.
+
+
+def _stitch_ip_path(segments, src_router, dst_router):
+    """Order (a_router, z_router, ip_id) segments into a contiguous walk
+    src_router -> dst_router. Each segment usable in either orientation."""
+    remaining = list(segments)
+    path = []
+    node = src_router
+    while node != dst_router and remaining:
+        for k, (a, z, ip_id) in enumerate(remaining):
+            if a == node:
+                path.append(ip_id); node = z; remaining.pop(k); break
+            if z == node:
+                path.append(ip_id); node = a; remaining.pop(k); break
+        else:
+            break     # no segment continues the walk (should not happen for a real placement)
+    return tuple(path)
+
+
+def _provision_and_seed_run(work, run, lp_id, ipl_id, site_to_router, grid):
+    """Provision one NewLightpathRun as a lightpath+IP link via the real
+    apply_op path, then SEED its QoT from the run's gsnr_db (real provision does
+    not seed QoT; real commit reaches the same numbers via a post-commit
+    recompute). Shared by apply_candidate (working leg) and score_pair
+    (protection leg) so both go through identical provisioning logic. Returns
+    (a_router, z_router) for the caller to build IP-path segments from."""
+    a = site_to_router[run.src_node]
+    z = site_to_router[run.dst_node]
+    apply_op(work, ProvisionLightpath(
+        lightpath=Lightpath(id=lp_id, oms_sequence=run.oms_sequence,
+                            mode_id=run.mode_id, center_freq_hz=grid.freq(run.lam)),
+        ip_link=IPLink(id=ipl_id, a_router=a, z_router=z, lightpath_id=lp_id)))
+    req = work.modes.get(run.mode_id).required_gsnr_db
+    work.set_qot_state(lp_id, QoTState(gsnr_db=run.gsnr_db, osnr_db=run.gsnr_db,
+                                       margin_db=run.gsnr_db - req))
+    return a, z
+
+
+def apply_candidate(work, placement, service, *, prefix="cand") -> None:
+    """Materialize a Placement on `work` (a clone): provision each new run as a
+    lightpath+IP link, seed QoT from the run's gsnr_db, then reroute the
+    service's working path onto the placement."""
+    grid = SpectrumGrid.default()
+    site_to_router = {r.site: r.id for r in work.list_routers()}
+    lp_to_iplink = {l.lightpath_id: l for l in work.list_ip_links()}
+    segments = []
+    # reused legs: reuse their existing IP link binding
+    for lp_id in placement.reused_lightpaths:
+        link = lp_to_iplink[lp_id]
+        segments.append((link.a_router, link.z_router, link.id))
+    # new legs: provision lightpath + IP link, seed QoT
+    for i, run in enumerate(placement.new_lightpaths):
+        lp_id = f"lp-{prefix}-{service.id}-{i}"
+        ipl_id = f"ipl-{prefix}-{service.id}-{i}"
+        a, z = _provision_and_seed_run(work, run, lp_id, ipl_id, site_to_router, grid)
+        segments.append((a, z, ipl_id))
+    ip_path = _stitch_ip_path(segments, service.src_router, service.dst_router)
+    apply_op(work, RerouteService(service_id=service.id, ip_path=ip_path))
+
+
+def score_candidate(model, placement, service, weights=None) -> ObjectiveResult:
+    work = model.clone()
+    apply_candidate(work, placement, service)
+    return evaluate_objective(work, weights)
+
+
+def score_pair(model, working, protection, service, weights=None) -> ObjectiveResult:
+    """Provision BOTH legs (protection's transponders/spectrum/total_margin count),
+    route the working leg. Protection is 1:1 reserved and idle -> not loaded, so it
+    contributes no IP load; its cost surfaces via provisioned lightpaths."""
+    work = model.clone()
+    apply_candidate(work, working, service, prefix="work")
+    # provision protection's new lightpaths (no reroute) so their cost is counted
+    grid = SpectrumGrid.default()
+    site_to_router = {r.site: r.id for r in work.list_routers()}
+    for i, run in enumerate(protection.new_lightpaths):
+        lp_id = f"lp-prot-{service.id}-{i}"
+        ipl_id = f"ipl-prot-{service.id}-{i}"
+        _provision_and_seed_run(work, run, lp_id, ipl_id, site_to_router, grid)
+    return evaluate_objective(work, weights)

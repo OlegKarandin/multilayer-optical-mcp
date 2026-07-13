@@ -187,6 +187,9 @@ class NetworkModel:
     def get_router(self, rid: str) -> Router:
         return self._routers[rid]
 
+    def list_routers(self) -> Tuple[Router, ...]:
+        return tuple(self._routers.values())
+
     def add_ip_link(self, link: IPLink) -> None:
         self._check_mutable()
         if link.lightpath_id not in self._lightpaths:
