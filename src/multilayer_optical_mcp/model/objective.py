@@ -83,9 +83,13 @@ def evaluate_objective(model: NetworkModel, weights: Optional[Dict[str, float]] 
 
     at_risk_lps = {row.lightpath_id
                    for row in margin_threshold_sweep(model, at_risk_threshold_db)}
+    # Skip services already dropped: they are down, not "at risk", and a dropped
+    # service's working_path may reference a removed IP link (a valid model state
+    # per remove_ip_link) whose lightpath lookup would otherwise KeyError here.
     services_at_risk = sum(
         1 for svc in model.list_services()
-        if set(_active_working_lightpaths(model, svc)) & at_risk_lps)
+        if svc.id not in dropped_ids
+        and set(_active_working_lightpaths(model, svc)) & at_risk_lps)
 
     scalar = (w.get("spectrum_used", 1.0) * spectrum_used
               + w.get("transponders", 1.0) * tp

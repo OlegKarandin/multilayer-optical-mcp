@@ -70,3 +70,18 @@ def test_margin_negative_lightpath_scores_as_dropped_not_nominal(down_model):
     # a lightpath seeded margin<0 -> its IP link capacity 0 -> its service dropped
     r = evaluate_objective(down_model)
     assert r.dropped_traffic > 0.0
+
+
+def test_removed_ip_link_in_working_path_does_not_raise():
+    # remove_ip_link leaves the dangling link id in the service's working_path (a
+    # documented valid state; simulate_ip_routing drops the service, reason
+    # "link_removed", and never raises). evaluate_objective must not KeyError on
+    # the services_at_risk lookup -- it must return a typed result, with the
+    # dropped service counted in dropped_traffic, not services_at_risk.
+    n = _base_model()
+    n.set_qot_state("lpAB", QoTState(gsnr_db=22.0, osnr_db=24.0, margin_db=3.5))
+    n.remove_ip_link("ipAB")   # dangling "ipAB" remains in svc-AB.working_path
+    r = evaluate_objective(n)  # must not raise
+    assert isinstance(r, ObjectiveResult)
+    assert r.dropped_traffic >= 80.0     # svc-AB demand counted as dropped
+    assert r.services_at_risk == 0       # a dropped service is not "at risk"
