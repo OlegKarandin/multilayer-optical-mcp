@@ -1,0 +1,160 @@
+{
+  "seed": 0,
+  "scale": 5000,
+  "demands": [
+    {
+      "id": "d0000",
+      "src": "1",
+      "dst": "7",
+      "demand_gbps": 100.0,
+      "protected": true
+    },
+    {
+      "id": "d0001",
+      "src": "12",
+      "dst": "13",
+      "demand_gbps": 100.0,
+      "protected": false
+    },
+    {
+      "id": "d0002",
+      "src": "13",
+      "dst": "12",
+      "demand_gbps": 100.0,
+      "protected": false
+    },
+    {
+      "id": "d0003",
+      "src": "2",
+      "dst": "3",
+      "demand_gbps": 100.0,
+      "protected": true
+    },
+    {
+      "id": "d0004",
+      "src": "2",
+      "dst": "4",
+      "demand_gbps": 100.0,
+      "protected": false
+    },
+    {
+      "id": "d0005",
+      "src": "2",
+      "dst": "5",
+      "demand_gbps": 100.0,
+      "protected": false
+    },
+    {
+      "id": "d0006",
+      "src": "3",
+      "dst": "2",
+      "demand_gbps": 100.0,
+      "protected": true
+    },
+    {
+      "id": "d0007",
+      "src": "3",
+      "dst": "4",
+      "demand_gbps": 100.0,
+      "protected": false
+    },
+    {
+      "id": "d0008",
+      "src": "3",
+      "dst": "5",
+      "demand_gbps": 100.0,
+      "protected": true
+    },
+    {
+      "id": "d0009",
+      "src": "3",
+      "dst": "7",
+      "demand_gbps": 100.0,
+      "protected": false
+    },
+    {
+      "id": "d0010",
+      "src": "4",
+      "dst": "2",
+      "demand_gbps": 100.0,
+      "protected": false
+    },
+    {
+      "id": "d0011",
+      "src": "4",
+      "dst": "3",
+      "demand_gbps": 100.0,
+      "protected": false
+    },
+    {
+      "id": "d0012",
+      "src": "4",
+      "dst": "5",
+      "demand_gbps": 100.0,
+      "protected": true
+    },
+    {
+      "id": "d0013",
+      "src": "5",
+      "dst": "2",
+      "demand_gbps": 100.0,
+      "protected": false
+    },
+    {
+      "id": "d0014",
+      "src": "5",
+      "dst": "3",
+      "demand_gbps": 100.0,
+      "protected": true
+    },
+    {
+      "id": "d0015",
+      "src": "5",
+      "dst": "4",
+      "demand_gbps": 100.0,
+      "protected": false
+    },
+    {
+      "id": "d0016",
+      "src": "6",
+      "dst": "7",
+      "demand_gbps": 100.0,
+      "protected": false
+    },
+    {
+      "id": "d0017",
+      "src": "7",
+      "dst": "1",
+      "demand_gbps": 100.0,
+      "protected": true
+    },
+    {
+      "id": "d0018",
+      "src": "7",
+      "dst": "3",
+      "demand_gbps": 100.0,
+      "protected": false
+    },
+    {
+      "id": "d0019",
+      "src": "7",
+      "dst": "6",
+      "demand_gbps": 100.0,
+      "protected": false
+    },
+    {
+      "id": "d0020",
+      "src": "7",
+      "dst": "9",
+      "demand_gbps": 100.0,
+      "protected": false
+    },
+    {
+      "id": "d0021",
+      "src": "9",
+      "dst": "7",
+      "demand_gbps": 100.0,
+      "protected": false
+    }
+  ]
+}

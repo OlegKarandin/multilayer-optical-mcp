@@ -341,6 +341,32 @@ def solve_allocation(
     ordering weight (higher = placed first); it does not feed
     evaluate_objective's cost vector (that's route_service's/evaluate_objective's
     `weights`, a different meaning of the same parameter name)."""
+    return _pack(model, qot, demands, spare_inventory, weights)[0]
+
+
+def solve_allocation_model(
+    model: NetworkModel, qot: QotEvaluator, demands: Sequence[dict],
+    spare_inventory: Dict[str, int],
+    weights: Optional[Dict[str, float]] = None,
+) -> Tuple[AllocationResult, NetworkModel]:
+    """As `solve_allocation`, but also returns the fully-loaded `work` clone the
+    packer built — lightpaths lit, IP links bound, services carrying load. `work`
+    is provisioned through the canonical `apply_op(ProvisionLightpath)` path (via
+    `objective.apply_candidate`), so it is byte-for-byte the state a real commit of
+    the same placements would produce; ground truth (`model`) is untouched. This is
+    the materialization the operating-network builder (`model/scenario.py`)
+    consumes instead of re-provisioning from the result."""
+    return _pack(model, qot, demands, spare_inventory, weights)
+
+
+def _pack(
+    model: NetworkModel, qot: QotEvaluator, demands: Sequence[dict],
+    spare_inventory: Dict[str, int],
+    weights: Optional[Dict[str, float]],
+) -> Tuple[AllocationResult, NetworkModel]:
+    """Shared packing core: consume demands on a clone, returning both the typed
+    `AllocationResult` and the loaded clone. `solve_allocation` drops the clone;
+    `solve_allocation_model` keeps it."""
     work = model.clone()                 # consume on a clone; ground truth untouched
     site_to_router = {r.site: r.id for r in work.list_routers()}
     inv = dict(spare_inventory)
@@ -410,5 +436,5 @@ def solve_allocation(
                 restored_gbps=pick.restored_gbps,
                 shortfall_gbps=pick.shortfall_gbps))
 
-    return AllocationResult(_status(len(placements), len(unplaced)),
-                            tuple(placements), tuple(unplaced))
+    return (AllocationResult(_status(len(placements), len(unplaced)),
+                             tuple(placements), tuple(unplaced)), work)

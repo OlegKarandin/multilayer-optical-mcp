@@ -9,3 +9,4 @@ htmlcov/
 .ruff_cache/
 build/
 dist/
+*.pdf

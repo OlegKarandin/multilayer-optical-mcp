@@ -9,8 +9,47 @@ from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model.spectrum import SpectrumGrid
 from multilayer_optical_mcp.model.multilayer_graph import (
-    build_layered_graph, ACCESS, WL, lpe_edges, wle_count_on_layer,
+    build_layered_graph, ACCESS, WL, lpe_edges, wle_count_on_layer, place_demands,
 )
+from multilayer_optical_mcp.model.topology_import import model_from_abstract_graph
+
+
+class _ConstQot:
+    def __call__(self, *, oms_sequence, direction, mode_id, loading):
+        return QoTState(gsnr_db=16.0, osnr_db=30.0, margin_db=0.0)
+
+
+def _line3() -> NetworkModel:
+    """Importer-built 0-1-2 line: both directed OMS per fiber, so a 0->2 demand
+    routes 0->1->2 and its new lightpath must chain oms_0_1 then oms_1_2."""
+    graph = {
+        "nodes": [{"id": i} for i in range(3)],
+        "edges": [
+            {"src": 0, "dst": 1, "length_km": 80.0},
+            {"src": 1, "dst": 2, "length_km": 80.0},
+        ],
+    }
+    return model_from_abstract_graph(graph, modes=ModeRegistry([
+        TransceiverMode(id="400G", bitrate_gbps=400.0, required_gsnr_db=7.1,
+                        symbol_rate_baud=87.5e9, channel_spacing_hz=100e9)]))
+
+
+def test_new_runs_are_direction_contiguous_through_intermediate_node():
+    """Regression: place_demands must not emit a new lightpath whose oms_sequence
+    walks OMS against their travel direction (multilayer_graph:174 added each OMS
+    in BOTH directions, so a 0->2 route could pick oms_1_0 for the 0->1 hop)."""
+    m = _line3()
+    g = build_layered_graph(m)
+    cands = place_demands(m, g, _ConstQot(), src="0", dst="2",
+                          demand_gbps=100.0, policy="new_only", k=8)
+    assert cands
+    for p in cands:
+        for run in p.new_lightpaths:
+            seq = [m.get_oms(o) for o in run.oms_sequence]
+            assert seq[0].src_node_id == run.src_node
+            assert seq[-1].dst_node_id == run.dst_node
+            for x, y in zip(seq, seq[1:]):
+                assert x.dst_node_id == y.src_node_id, run.oms_sequence
 
 
 def _one_lightpath_model(margin_db: float = 3.0) -> NetworkModel:
@@ -56,8 +95,8 @@ def test_wle_present_only_on_free_slots():
     g = build_layered_graph(n)
     # slot 20 is occupied by lp-AB on oms-AB -> no WLE on layer 20
     assert wle_count_on_layer(g, "oms-AB", 20) == 0
-    # slot 0 is free -> a WLE exists on layer 0 for oms-AB (both directions)
-    assert wle_count_on_layer(g, "oms-AB", 0) == 2
+    # slot 0 is free -> one WLE on layer 0 for oms-AB (its A->B direction only)
+    assert wle_count_on_layer(g, "oms-AB", 0) == 1
 
 
 def test_forbidden_asset_drops_lpe_and_wle():
@@ -108,11 +147,12 @@ def test_groom_only_degrades_to_bottleneck_residual():
     assert res[0].shortfall_gbps == 10.0
 
 
-def test_new_only_lights_new_lightpath_when_no_existing_path():
+def test_new_only_lights_new_lightpath_ignoring_existing():
     n = _one_lightpath_model()
-    # Demand B->A: no existing lightpath that direction, must light a new one.
+    # new_only drops LPE (grooming) edges, so the A->B demand cannot reuse lp-AB
+    # and must light a FRESH A->B lightpath on a free slot.
     g = build_layered_graph(n)
-    res = place_demands(n, g, FakeQot(15.0), src="B", dst="A",
+    res = place_demands(n, g, FakeQot(15.0), src="A", dst="B",
                         demand_gbps=100.0, policy="new_only")
     assert res
     assert res[0].reused_lightpaths == ()
@@ -121,17 +161,32 @@ def test_new_only_lights_new_lightpath_when_no_existing_path():
     assert res[0].restored_gbps == 100.0
 
 
-def test_new_run_records_travel_direction_not_physical_oms_order():
-    """A B->A run realized over the physically-A->B oms-AB must record the actual
-    travel endpoints (B->A), so provisioning does not derive a reversed lightpath
-    from oms_sequence's physical-OMS order."""
-    n = _one_lightpath_model()
+def _symmetric_two_node() -> NetworkModel:
+    """A<->B with BOTH directed OMS, as a real importer builds — so a B->A demand
+    routes over the B->A OMS rather than traversing an A->B OMS backwards."""
+    n = NetworkModel(modes=ModeRegistry([_TM_helper()]))
+    n.register_fiber_type(_FT("SSMF", 0.2))
+    for a in ("s1", "s2", "s3", "s4"):
+        n.add_amplifier(_A(a, "advanced_toy", 20.0, 5.5))
+    n.add_fiber(_F("fAB", "s1", "s2", 80.0, "SSMF"))
+    n.add_fiber(_F("fBA", "s3", "s4", 80.0, "SSMF"))
+    for node in ("A", "B"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    n.add_oms(_O("oms-AB", "A", "B", ("roadm_A", "s1", "fAB", "s2")))
+    n.add_oms(_O("oms-BA", "B", "A", ("roadm_B", "s3", "fBA", "s4")))
+    return n
+
+
+def test_new_run_records_travel_endpoints():
+    """A new run records its travel endpoints (src_node/dst_node), which drive
+    provisioning. A B->A demand lights a lightpath over the B->A OMS."""
+    n = _symmetric_two_node()
     g = build_layered_graph(n)
     res = place_demands(n, g, FakeQot(15.0), src="B", dst="A",
                         demand_gbps=100.0, policy="new_only")
     run = res[0].new_lightpaths[0]
-    assert run.oms_sequence == ("oms-AB",)     # physical-OMS order (unchanged)
-    assert run.src_node == "B"                 # travel direction
+    assert run.oms_sequence == ("oms-BA",)     # travels the B->A OMS
+    assert run.src_node == "B"
     assert run.dst_node == "A"
 
 
@@ -230,12 +285,12 @@ def test_parallel_oms_both_routes_enumerable():
 
 
 def test_wle_count_counts_parallel_oms_per_layer():
-    """Each parallel OMS contributes its own WLE edges per free slot (2 dirs);
-    the DiGraph overwrite would report a single OMS's count."""
+    """Each parallel OMS contributes its own WLE edge per free slot (one, in its
+    A->B direction); the DiGraph overwrite would collapse them to a single edge."""
     n = _two_parallel_oms_model()
     g = build_layered_graph(n)
-    assert wle_count_on_layer(g, "oms-AB-1", 0) == 2
-    assert wle_count_on_layer(g, "oms-AB-2", 0) == 2
+    assert wle_count_on_layer(g, "oms-AB-1", 0) == 1
+    assert wle_count_on_layer(g, "oms-AB-2", 0) == 1
 
 
 # ---------------------------------------------------------------------------

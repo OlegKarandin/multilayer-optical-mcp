@@ -171,17 +171,21 @@ def build_layered_graph(
         for lam in range(grid.num_slots):
             if (occ >> lam) & 1:
                 continue   # slot lit -> no WLE
-            for a, b in ((u, v), (v, u)):
-                # key=oms.id keeps each parallel OMS a distinct WLE edge on the
-                # ordered (WL,a,lam)->(WL,b,lam) pair (the S7-13 fix); TxE/RxE use
-                # a constant key so multiple OMS at the same node/slot collapse to
-                # one launch/terminate edge rather than accumulating duplicates.
-                g.add_edge((WL, a, lam), (WL, b, lam), key=oms.id,
-                           kind="WLE", oms_id=oms.id, lam=lam, weight=_W_WLE)
-                g.add_edge((ACCESS, a), (WL, a, lam), key="TxE",
-                           kind="TxE", lam=lam, weight=_W_NEW_LP)
-                g.add_edge((WL, b, lam), (ACCESS, b), key="RxE",
-                           kind="RxE", lam=lam, weight=_W_RXE)
+            # An OMS carries traffic src->dst ONLY (mirrors build_oms_graph's
+            # directionality invariant): add the WLE in the OMS's own direction and
+            # NOT the reverse. The reverse hop is served by the reverse OMS, which
+            # a physical topology always provides (topology_import adds both). Adding
+            # (v,u) here made a return-direction OMS traversable against its flow, so
+            # _parse_paths could stitch a new lightpath from wrong-direction OMS
+            # (e.g. oms_1_0 for a 0->1 hop) -> a non-contiguous oms_sequence that
+            # add_lightpath rejects. key=oms.id keeps parallel OMS on the same
+            # ordered (WL,u,lam)->(WL,v,lam) pair distinct (the S7-13 fix).
+            g.add_edge((WL, u, lam), (WL, v, lam), key=oms.id,
+                       kind="WLE", oms_id=oms.id, lam=lam, weight=_W_WLE)
+            g.add_edge((ACCESS, u), (WL, u, lam), key="TxE",
+                       kind="TxE", lam=lam, weight=_W_NEW_LP)
+            g.add_edge((WL, v, lam), (ACCESS, v), key="RxE",
+                       kind="RxE", lam=lam, weight=_W_RXE)
     return g
 
 
@@ -191,8 +195,10 @@ def lpe_edges(g: nx.MultiDiGraph) -> List[Tuple]:
 
 
 def wle_count_on_layer(g: nx.MultiDiGraph, oms_id: str, lam: int) -> int:
-    """Number of WLE edges for an OMS on a given wavelength layer (0 or 2:
-    one per direction)."""
+    """Number of WLE edges for an OMS on a given wavelength layer (0 when the slot
+    is lit/forbidden, else 1: an OMS carries traffic in its own direction only, so
+    it contributes a single WLE per free slot — the reverse hop belongs to the
+    reverse OMS)."""
     return sum(1 for _, _, d in g.edges(data=True)
                if d.get("kind") == "WLE" and d.get("oms_id") == oms_id and d.get("lam") == lam)
 
