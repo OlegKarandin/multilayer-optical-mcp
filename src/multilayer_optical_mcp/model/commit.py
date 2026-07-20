@@ -15,7 +15,7 @@ from .network import NetworkModel
 from .plan import Plan, apply_op
 from .qot_results import QoTResultStore
 from .snapshots import SnapshotStore, diff_models
-from .validate import ValidationReport, validate_plan
+from .validate import ValidationReport, recompute_if_possible, validate_plan
 
 # An actuator applies one op to the live model and reports success. Raising or
 # returning False both count as a failed op (the op is not applied).
@@ -89,6 +89,7 @@ def commit_plan(
     dry_run: bool = True,
     confirm: bool = False,
     actuator: Actuator = full_actuator,
+    recompute: Callable[[NetworkModel, QoTResultStore], None] = recompute_if_possible,
     basis: str = "physical",
     level: str = "link",
     dropped_tolerance_gbps: float = 0.0,
@@ -148,6 +149,20 @@ def commit_plan(
     intended_id = store.put(intended)
 
     applied, failed = actuate(current, plan, actuator)
+
+    # Post-actuation recompute: seed QoT for freshly-lit lightpaths on the LIVE
+    # model, so a just-committed lightpath reports derived capacity instead of
+    # reading dark via ip_link_capacity_gbps's LookupError path. This is the live
+    # twin of the recompute validate_plan runs on its discarded clone, and of
+    # scenario.settle. Best-effort: a recompute failure must not un-report a
+    # successful actuation (live state is already mutated and the intended
+    # snapshot recorded), so swallow it and leave QoT unseeded — today's behavior
+    # — rather than raise out of a committed plan (CLAUDE.md: typed, never raises).
+    try:
+        recompute(current, store_results)
+    except Exception:
+        pass
+
     status = "committed" if failed == 0 else "committed_with_failures"
     return CommitResult(status=status, dry_run=False, applied_ops=applied,
                         failed_ops=failed, intended_snapshot_id=intended_id,
