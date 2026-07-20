@@ -124,3 +124,69 @@ def test_generate_demands_reproduces_frozen_german_17_fixture():
 
     got = generate_demands(model, seed=fix["seed"], scale=fix["scale"])
     assert got == fix["demands"]
+
+
+# --------------------------------------------------------------- pair_density
+
+def test_pair_density_same_seed_identical():
+    n = _star_model()
+    a = generate_demands(n, seed=0, scale=3000.0, pair_density=0.3)
+    b = generate_demands(n, seed=0, scale=3000.0, pair_density=0.3)
+    assert a == b
+
+
+def test_pair_density_different_seeds_reproducible_variety():
+    n = _star_model()
+    a = generate_demands(n, seed=0, scale=3000.0, pair_density=0.3)
+    b = generate_demands(n, seed=1, scale=3000.0, pair_density=0.3)
+    assert a != b
+    assert a == generate_demands(n, seed=0, scale=3000.0, pair_density=0.3)
+
+
+def test_pair_density_weighted_inclusion_favors_hub_pairs():
+    """At low density, hub-incident pairs (higher gravity weight) should survive
+    the per-pair Bernoulli filter more often than a peripheral leaf-leaf pair,
+    across many seeds. mass_jitter=0.0 holds weights fixed so only the Bernoulli
+    draw varies between seeds."""
+    n = _star_model()
+    hub_survivals = 0
+    periph_survivals = 0
+    n_seeds = 50
+    for s in range(n_seeds):
+        agg = _pair_gbps(generate_demands(
+            n, seed=s, scale=3000.0, pair_density=0.15, mass_jitter=0.0))
+        if agg.get(frozenset(("H", "A")), 0.0) > 0.0:
+            hub_survivals += 1
+        if agg.get(frozenset(("A", "B")), 0.0) > 0.0:
+            periph_survivals += 1
+    assert hub_survivals > periph_survivals
+
+
+def test_pair_density_preserves_total_offered_volume():
+    """total_w is renormalized over surviving pairs only, so total offered
+    volume across all demands stays close to `scale` regardless of density,
+    rather than shrinking as pairs drop. Each surviving pair rounds its own
+    share to the nearest unit_gbps independently, so the aggregate tolerance
+    must scale with how many distinct pairs survived (worst case: each off by
+    up to half a unit), not a flat one-unit bound."""
+    n = _star_model()
+    scale = 3000.0
+    unit_gbps = 100.0
+    for density in (0.2, 0.5, 1.0):
+        for s in range(5):
+            demands = generate_demands(
+                n, seed=s, scale=scale, pair_density=density, unit_gbps=unit_gbps)
+            total = sum(d["demand_gbps"] for d in demands)
+            if total == 0.0:
+                continue      # degenerate all-dropped draw; covered separately
+            n_pairs = len({(d["src"], d["dst"]) for d in demands})
+            assert abs(total - scale) <= unit_gbps * 0.5 * n_pairs
+
+
+def test_pair_density_degenerate_all_dropped_returns_empty_list():
+    """A vanishingly small pair_density must, for at least one seed, drop every
+    pair and return [] rather than raising."""
+    n = _star_model()
+    results = [generate_demands(n, seed=s, scale=3000.0, pair_density=1e-6)
+              for s in range(20)]
+    assert any(r == [] for r in results)

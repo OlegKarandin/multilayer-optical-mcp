@@ -25,6 +25,7 @@ from multilayer_optical_mcp.model.allocation import (
 )
 from multilayer_optical_mcp.model.topology_import import model_from_abstract_graph
 from multilayer_optical_mcp.model.ip_routing import simulate_ip_routing
+from multilayer_optical_mcp.model import scenario
 from multilayer_optical_mcp.model.scenario import build_operating_network
 
 
@@ -146,6 +147,45 @@ def test_materialized_baseline_has_no_drops(built):
     assert ipr.dropped_services == ()
     for u in ipr.utilizations:                            # every link capacity known
         assert u.capacity_gbps is not None and u.capacity_gbps > 0.0
+
+
+# ---------------------------------------------------- pair_density forwarding
+
+def _spy_generate_demands(monkeypatch, recorder):
+    """Replace scenario.generate_demands with a spy that records the
+    `pair_density` it was called with and returns one trivial demand, so the
+    convergence driver stays cheap (a real gravity build is ~minutes — see
+    test_converges_within_caps). Proves forwarding without exercising the packer
+    at scale."""
+    def spy(model, *, seed, scale, pair_density=None, **kw):
+        recorder.append(pair_density)
+        return [{"id": "d1", "src": "A", "dst": "Z", "demand_gbps": 100.0}]
+    monkeypatch.setattr(scenario, "generate_demands", spy)
+
+
+def test_pair_density_forwarded_to_generate_demands(monkeypatch):
+    """The explicit `pair_density` value reaches `generate_demands` on every
+    convergence sample — it is not silently dropped by the builder."""
+    seen: list = []
+    _spy_generate_demands(monkeypatch, seen)
+    build_operating_network(
+        _two_routes_with_routers(), seed=0, qot=_hi_qot(),
+        target_mean_util=0.5, max_util_cap=0.95, pair_density=0.2,
+        settle=lambda w: None)
+    assert seen                              # the driver sampled at least once
+    assert all(pd == 0.2 for pd in seen)     # and always with the forwarded value
+
+
+def test_pair_density_defaults_to_none(monkeypatch):
+    """Omitting the kwarg forwards `None` — today's full-matrix behavior is
+    preserved for existing callers."""
+    seen: list = []
+    _spy_generate_demands(monkeypatch, seen)
+    build_operating_network(
+        _two_routes_with_routers(), seed=0, qot=_hi_qot(),
+        target_mean_util=0.5, max_util_cap=0.95, settle=lambda w: None)
+    assert seen
+    assert all(pd is None for pd in seen)
 
 
 # ------------------------------------------------ real-adapter end-to-end (opt-in)

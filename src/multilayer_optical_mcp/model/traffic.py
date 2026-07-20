@@ -36,6 +36,7 @@ def generate_demands(
     protected_fraction: float = 0.3,
     node_mass: Optional[Dict[str, float]] = None,
     mass_jitter: float = 0.15,
+    pair_density: Optional[float] = None,
 ) -> List[dict]:
     """Emit a gravity-weighted demand list totalling ~`scale` Gbps of offered load.
 
@@ -50,6 +51,14 @@ def generate_demands(
             `protected` — protection lands on the busiest, hub-incident corridors.
         node_mass: optional per-node mass override; default is OMS-graph degree.
         mass_jitter: fractional half-width of the per-node multiplicative jitter.
+        pair_density: optional sparsity knob. If ``None`` (default), every
+            reachable pair is considered (today's full-matrix behavior,
+            unchanged). If set, each pair survives an independent weighted
+            Bernoulli draw whose probability scales with the pair's gravity
+            weight relative to the mean — above-mean pairs are likely (or, past
+            a threshold, certain) to survive, below-mean pairs are the first to
+            drop as pair_density shrinks. `scale`'s "total offered volume"
+            contract is preserved by renormalizing over survivors only.
 
     Deterministic given (model, seed, all params). Disconnected pairs are skipped.
     """
@@ -91,6 +100,15 @@ def generate_demands(
                 continue
             pair_w.append((u, v, w))
             total_w += w
+
+    if pair_density is not None:
+        mean_w = total_w / len(pair_w) if pair_w else 0.0
+        kept: List[tuple] = []
+        for u, v, w in pair_w:
+            p_active = min(1.0, pair_density * w / mean_w) if mean_w > 0.0 else 0.0
+            if rng.random() < p_active:
+                kept.append((u, v, w))
+        pair_w, total_w = kept, sum(w for _, _, w in kept)
 
     # Expand each pair's offered volume into unit-sized demand records (emission
     # order = sorted pairs, then unit index) carrying their gravity weight.
