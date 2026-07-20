@@ -260,6 +260,13 @@ def margin_sweep_dict(rows) -> dict:
          "gsnr_db": r.gsnr_db, "mode_feasible": r.mode_feasible} for r in rows]}
 
 
+def max_feasible_mode_dict(rows) -> List[dict]:
+    return [
+        {"lightpath_id": r.lightpath_id, "current_mode": r.current_mode,
+         "max_feasible_mode": r.max_feasible_mode, "direction": r.direction}
+        for r in rows]
+
+
 def degradation_report_dict(report) -> dict:
     return {
         "asset_id": report.asset_id,

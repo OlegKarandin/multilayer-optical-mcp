@@ -393,12 +393,19 @@ def place_demands(
     model: NetworkModel, g: nx.MultiDiGraph, qot, *,
     src: str, dst: str, demand_gbps: float, policy: str,
     k: int = _DEFAULT_K, grid: Optional[SpectrumGrid] = None,
+    fill_policy: "FillPolicy" = None,
 ) -> List[Placement]:
     """IGABAG for one demand, returning up to `k` DISTINCT feasible placements
     (the cost-ordered frontier under the policy), each possibly degraded. A
     placement may reuse existing lightpaths (LPE), light new ones (TxE->WLEs->
-    RxE), or BOTH (a hybrid). Empty list when no feasible path exists."""
+    RxE), or BOTH (a hybrid). Empty list when no feasible path exists.
+
+    `fill_policy` selects the acceptance-probe reference loading passed to
+    `_build_loading` (defaults to ACTUAL — today's behavior)."""
     from .allocation import _build_loading, _best_feasible_mode
+    from .spectrum import FillPolicy
+    if fill_policy is None:
+        fill_policy = FillPolicy.ACTUAL
     grid = grid or SpectrumGrid.default()
     h = _policy_graph(g, policy)
     simple = _collapse_to_simple(h)
@@ -453,7 +460,8 @@ def place_demands(
             # run in this same placement would light on a shared OMS. See the
             # module docstring's Stage 7 assumptions (OMS-disjoint runs).
             for oms_seq, lam, run_src, run_dst in new_runs:
-                loading = _build_loading(grid, spectrum, oms_seq, lam, ref_mode)
+                loading = _build_loading(grid, spectrum, oms_seq, lam, ref_mode,
+                                         fill_policy)
                 mode, gsnr = _best_feasible_mode(model, qot, oms_seq, loading, ref_mode)
                 if mode is None:
                     feasible = False

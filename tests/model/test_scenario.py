@@ -200,14 +200,18 @@ def test_german_17_end_to_end_real_adapter():
     """Full build against the real GNPy adapter: gravity demands → packer →
     materialized clone → QoT settle. Opt-in (slow)."""
     from multilayer_optical_mcp.model.modes import load_modulation_formats
-    from multilayer_optical_mcp.model.qot_results import QoTResultStore
+    from multilayer_optical_mcp.model.qot_results import QoTResultStore, QoTCache
     from multilayer_optical_mcp.model.allocation import make_adapter_evaluator
 
     graph = json.loads((_REPO / "topologies/german_17.json").read_text(encoding="utf-8"))
     modes = load_modulation_formats(_REPO / "modulation_formats.yaml")
     model = model_from_abstract_graph(graph, modes=modes)
     store = QoTResultStore()
-    qot = make_adapter_evaluator(model, store)
+    # Share one content-addressed cache across the whole convergence loop: the
+    # packer re-probes the same OMS routes every iteration, so repeated
+    # (path, direction, loading) tuples are served without re-propagating.
+    cache = QoTCache()
+    qot = make_adapter_evaluator(model, store, cache=cache)
 
     res = build_operating_network(
         model, seed=0, qot=qot, target_mean_util=0.4, max_util_cap=0.95,
@@ -216,3 +220,7 @@ def test_german_17_end_to_end_real_adapter():
     assert res.model.list_lightpaths()                    # a loaded operating network
     assert res.report.status in (SolverStatus.SOLUTION, SolverStatus.PARTIAL)
     assert simulate_ip_routing(res.model).dropped_services == ()
+    assert cache.hits > 0                                 # the cache actually served probes
+    total = cache.hits + cache.misses
+    print(f"\n[qot-cache] hits={cache.hits} misses={cache.misses} "
+          f"hit_rate={cache.hits / total:.1%}")

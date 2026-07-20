@@ -2,8 +2,8 @@ from __future__ import annotations
 import time
 import uuid
 from collections import OrderedDict
-from typing import Dict, Optional, Tuple
-from .qot import QoTBreakdown
+from typing import Any, Dict, Optional, Tuple
+from .qot import QoTBreakdown, QoTState
 
 
 class QoTResultStore:
@@ -38,3 +38,37 @@ class QoTResultStore:
             self._items.pop(r, None)
             self._created_at.pop(r, None)
         return tuple(expired)
+
+
+class QoTCache:
+    """Content-addressed memo of ``compute_qot`` results, keyed by a fingerprint
+    of every GSNR input (see ``adapter._cache_key``). Off-model and injected like
+    ``QoTResultStore`` — it holds no clone/diff/freeze surface.
+
+    There is deliberately NO invalidation: a mutated span (e.g. an
+    ``inject_degradation`` NF delta) yields a different key, so a stale entry is
+    simply never hit again and ages out via the bounded LRU. The one correctness
+    invariant is fingerprint completeness — if the key omits a GSNR input, a hit
+    returns a confident wrong number.
+    """
+
+    def __init__(self, maxsize: int = 4096) -> None:
+        self._d: "OrderedDict[Any, Tuple[QoTState, QoTBreakdown]]" = OrderedDict()
+        self._max = maxsize
+        self.hits = 0
+        self.misses = 0
+
+    def get(self, key: Any) -> Optional[Tuple[QoTState, QoTBreakdown]]:
+        hit = self._d.get(key)
+        if hit is None:
+            self.misses += 1
+            return None
+        self._d.move_to_end(key)          # LRU: mark most-recently used
+        self.hits += 1
+        return hit
+
+    def put(self, key: Any, value: Tuple[QoTState, QoTBreakdown]) -> None:
+        self._d[key] = value
+        self._d.move_to_end(key)
+        while len(self._d) > self._max:
+            self._d.popitem(last=False)   # evict least-recently used

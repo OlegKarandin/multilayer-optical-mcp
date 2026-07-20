@@ -74,6 +74,50 @@ def margin_threshold_sweep(model: NetworkModel, threshold_db: float) -> List[Mar
     return rows
 
 
+@dataclass(frozen=True)
+class MaxFeasibleModeRow:
+    lightpath_id: str
+    current_mode: str
+    max_feasible_mode: str | None      # None => GSNR below every mode's threshold
+    direction: str                     # "headroom" | "downshift" | "match" | "infeasible"
+
+
+def max_feasible_mode_view(model: NetworkModel) -> List[MaxFeasibleModeRow]:
+    """Advisory read: per-lightpath current mode vs. highest GSNR-feasible mode.
+
+    Reads the lightpath's *recorded* GSNR (no GNPy call) and maps it to the
+    highest-bitrate mode whose required GSNR it meets. `direction` classifies that
+    ceiling against the frozen current mode: `headroom` (could upshift), `downshift`
+    (current mode no longer feasible; a lower mode is), `match` (already at the
+    ceiling), or `infeasible` (GSNR below every mode). Lightpaths with no recorded
+    QoT are omitted, never defaulted (same discipline as `margin_threshold_sweep`).
+
+    This never mutates and never gates — mode stays a configured input. The
+    `downshift`/`infeasible` rows overlap `validate_plan`'s MODE_INFEASIBLE finding
+    by design; this view informs, validation gates."""
+    rows: List[MaxFeasibleModeRow] = []
+    for lp in model.list_lightpaths():
+        try:
+            st = model.get_qot_state(lp.id)
+        except LookupError:
+            continue
+        feasible = [m for m in model.modes.list()
+                    if m.required_gsnr_db <= st.gsnr_db]
+        if not feasible:
+            rows.append(MaxFeasibleModeRow(lp.id, lp.mode_id, None, "infeasible"))
+            continue
+        best = max(feasible, key=lambda m: m.bitrate_gbps)
+        current_bitrate = model.modes.get(lp.mode_id).bitrate_gbps
+        if best.bitrate_gbps > current_bitrate:
+            direction = "headroom"
+        elif best.bitrate_gbps < current_bitrate:
+            direction = "downshift"
+        else:
+            direction = "match"
+        rows.append(MaxFeasibleModeRow(lp.id, lp.mode_id, best.id, direction))
+    return rows
+
+
 _FAILED_SENTINEL = QoTState(
     gsnr_db=float("-inf"),
     osnr_db=float("-inf"),

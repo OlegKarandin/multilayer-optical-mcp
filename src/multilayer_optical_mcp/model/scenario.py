@@ -31,6 +31,7 @@ from .allocation import QotEvaluator, solve_allocation_model, AllocationResult
 from .ip_routing import simulate_ip_routing
 from .network import NetworkModel
 from .solvers import SolverStatus
+from .spectrum import FillPolicy
 from .traffic import generate_demands
 
 
@@ -93,6 +94,7 @@ def build_operating_network(
     store=None,
     settle: Optional[Callable[[NetworkModel], None]] = None,
     tol: float = 0.02,
+    fill_policy: FillPolicy = FillPolicy.ACTUAL,
 ) -> ScenarioResult:
     """Build a loaded operating `NetworkModel` at ~`target_mean_util` mean IP-link
     utilization under a `max_util_cap` ceiling. See module docstring.
@@ -123,7 +125,7 @@ def build_operating_network(
         if not demands:
             return _Sample(scale, [], None, model.clone(), 0.0, 0.0)
         result, work = solve_allocation_model(
-            model, qot, demands, dict(spare_inventory))
+            model, qot, demands, dict(spare_inventory), fill_policy=fill_policy)
         us = [u.utilization for u in simulate_ip_routing(work).utilizations
               if u.utilization is not None]
         return _Sample(scale, demands, result, work,

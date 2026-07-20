@@ -14,9 +14,25 @@ copy so in-progress reservations don't clash with each other.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Dict, Optional, Tuple
 
 from .network import NetworkModel
+
+
+class FillPolicy(Enum):
+    """Acceptance-probe reference-loading policy (acceptance time only).
+
+    ACTUAL — probe against the channels lit at probe time (a subset of the
+      eventual load). Today's behavior; order-dependent, optimistic.
+    FULL — probe against a fully-loaded comb (every non-probe slot lit). The
+      delivered mode is chosen to stay feasible as the network fills:
+      order-independent and margin-stable. By GSNR monotonicity in interferer
+      count, a FULL-accepted mode remains feasible under any lighter real load,
+      so the operating recompute stays ACTUAL and is not gated by this policy.
+    """
+    ACTUAL = "actual"
+    FULL = "full"
 
 # Default C-band grid: 48 channels @ 100 GHz (modulation_formats.yaml). Anchored
 # at 191.4 THz so every slot (191.4–196.1 THz) lies inside gnpy's C-band and the

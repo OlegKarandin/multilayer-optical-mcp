@@ -159,11 +159,12 @@ def build_app() -> FastMCP:
         ip_topology_dict, grooming_map_dict, ip_routing_result_dict,
         affected_services_dict,
         margin_sweep_dict, degradation_report_dict, failure_report_dict,
-        restoration_result_dict,
+        restoration_result_dict, max_feasible_mode_dict,
     )
     from .model.restoration import compute_restoration as _compute_restoration
     from .model.whatif import (
         margin_threshold_sweep as _margin_sweep,
+        max_feasible_mode_view as _max_feasible_mode_view,
         inject_degradation as _inject_degradation,
         inject_failure as _inject_failure,
         loading_from_model,
@@ -382,6 +383,15 @@ def build_app() -> FastMCP:
         Models no degradation; makes no causal claim. Read-only."""
         rows = _margin_sweep(snapshots.current(), threshold_db)
         return margin_sweep_dict(rows)
+
+    @app.tool()
+    def whatif_max_feasible_mode() -> list[dict]:
+        """Advisory read: per-lightpath current mode vs. the highest mode its
+        recorded GSNR could carry, with direction (headroom/downshift/match/
+        infeasible). Never mutates and never gates — validate_plan stays the
+        commit gate for mode feasibility. Read-only."""
+        rows = _max_feasible_mode_view(snapshots.current())
+        return max_feasible_mode_dict(rows)
 
     @app.tool()
     def inject_degradation(

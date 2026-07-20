@@ -27,7 +27,7 @@ from typing import Optional, Tuple
 from ..model.assets import Direction
 from ..model.network import NetworkModel
 from ..model.qot import ElementSnapshot, QoTBreakdown, QoTState
-from ..model.qot_results import QoTResultStore
+from ..model.qot_results import QoTResultStore, QoTCache
 from .bands import SI_BAND
 from .loading import Channel, LoadingState
 from .translate import (
@@ -165,6 +165,62 @@ def _roadm_successor(network, node):
     return None
 
 
+def _path_physical_fingerprint(
+    model: NetworkModel, oms_sequence: Tuple[str, ...], direction: Direction,
+) -> tuple:
+    """Fingerprint every GSNR-relevant physical input on the resolved path.
+
+    The asset dataclasses (Amplifier/Fiber/FiberType/ROADM) are frozen and
+    hashable, so each element object is embedded whole — any field change (an
+    ``inject_degradation`` NF/loss delta, a different length or gain) flips the
+    fingerprint. Path-scoped, so a degradation on a disjoint OMS leaves this
+    path's key unchanged (content-addressing, no explicit invalidation)."""
+    if direction == Direction.BACKWARD:
+        seq = reverse_oms_sequence(model, oms_sequence)
+        if seq is None:                      # unpaired reverse OMS: compute_qot raises later
+            seq = oms_sequence
+    else:
+        seq = oms_sequence
+    parts: list = []
+    for oms_id in seq:
+        oms = model.get_oms(oms_id)          # KeyError => caller handles as a miss
+        parts.append(("oms", oms_id, oms.src_node_id, oms.dst_node_id))
+        for el_id in oms.elements:
+            if el_id in model._amplifiers:
+                parts.append(model._amplifiers[el_id])
+            elif el_id in model._fibers:
+                f = model._fibers[el_id]
+                parts.append(f)
+                parts.append(model.get_fiber_type(f.type_variety))
+            elif el_id in model._roadms:
+                parts.append(model._roadms[el_id])
+            else:
+                parts.append(("el", el_id))
+    # S4-4 terminal drop ROADM (appended in compute_qot; constant params, embedded
+    # for completeness so a differing drop ROADM keys distinctly).
+    if seq:
+        drop_id = f"roadm_{model.get_oms(seq[-1]).dst_node_id}"
+        if drop_id in model._roadms:
+            parts.append(model._roadms[drop_id])
+    return tuple(parts)
+
+
+def _cache_key(
+    model: NetworkModel, oms_sequence: Tuple[str, ...], direction: Direction,
+    mode_id: str, loading: LoadingState, center_freq_hz: Optional[float],
+) -> tuple:
+    """Full content-addressed key: path physical params + loading + direction +
+    mode + probe frequency — every input that determines the returned GSNR."""
+    return (
+        tuple(oms_sequence),
+        direction.value,
+        mode_id,
+        center_freq_hz,
+        loading.channels,                    # frozen Channels: freq/width/mode/baud
+        _path_physical_fingerprint(model, oms_sequence, direction),
+    )
+
+
 def compute_qot(
     *,
     model: NetworkModel,
@@ -176,6 +232,7 @@ def compute_qot(
     center_freq_hz: Optional[float] = None,
     topo_path: Optional[Path] = None,
     eqpt_path: Optional[Path] = None,
+    cache: Optional[QoTCache] = None,
 ) -> Tuple[QoTState, str]:
     """Propagate *loading* through the gnpy toy network and return QoT.
 
@@ -211,6 +268,24 @@ def compute_qot(
     KeyError
         If any OMS id or element uid cannot be resolved.
     """
+    # ------------------------------------------------------------------ cache
+    # Content-addressed lookup, only on the model-driven path (a topo/eqpt-file
+    # run is not fingerprinted by the model, so it is never cached). A key-build
+    # failure degrades silently to an uncached compute — the cache never changes
+    # results or error behavior.
+    key = None
+    if cache is not None and topo_path is None and eqpt_path is None:
+        try:
+            key = _cache_key(model, oms_sequence, direction, mode_id, loading,
+                             center_freq_hz)
+        except Exception:
+            key = None
+        if key is not None:
+            hit = cache.get(key)
+            if hit is not None:
+                state, breakdown = hit
+                return state, store.put(breakdown)   # fresh result_id per call
+
     # ------------------------------------------------------------------ setup
     from .synthesize import build_gnpy_network, gnpy_design_network
     if topo_path is not None or eqpt_path is not None:
@@ -407,6 +482,9 @@ def compute_qot(
         limiting_element_id=limiting_element_id,
     )
 
+    if key is not None:
+        cache.put(key, (state, breakdown))
+
     return state, result_id
 
 
@@ -418,18 +496,19 @@ def gated_qot(
     mode_id: str,
     loading: LoadingState,
     center_freq_hz: Optional[float] = None,
+    cache: Optional[QoTCache] = None,
 ) -> Tuple[QoTState, str]:
     """Return the worse of forward/backward QoT, along with its breakdown id."""
     fwd_state, fwd_rid = compute_qot(model=model, store=store,
                                      oms_sequence=oms_sequence,
                                      direction=Direction.FORWARD,
                                      mode_id=mode_id, loading=loading,
-                                     center_freq_hz=center_freq_hz)
+                                     center_freq_hz=center_freq_hz, cache=cache)
     bwd_state, bwd_rid = compute_qot(model=model, store=store,
                                      oms_sequence=oms_sequence,
                                      direction=Direction.BACKWARD,
                                      mode_id=mode_id, loading=loading,
-                                     center_freq_hz=center_freq_hz)
+                                     center_freq_hz=center_freq_hz, cache=cache)
     if fwd_state.gsnr_db <= bwd_state.gsnr_db:
         return fwd_state, fwd_rid
     return bwd_state, bwd_rid
@@ -455,6 +534,7 @@ def _per_path_loading(grid, occ_mask: int, probe_slot: int, mode_id: str) -> Loa
 
 def recompute_qot_under_loading(
     *, model: NetworkModel, store: QoTResultStore, loading: LoadingState,
+    cache: Optional[QoTCache] = None,
 ) -> dict[str, Tuple[QoTState, str]]:
     """Compute gated QoT for every lightpath in model under *loading*.
 
@@ -503,7 +583,7 @@ def recompute_qot_under_loading(
         state, rid = gated_qot(model=model, store=store,
                                oms_sequence=lp.oms_sequence,
                                mode_id=lp.mode_id, loading=per_path,
-                               center_freq_hz=grid.freq(probe_slot))
+                               center_freq_hz=grid.freq(probe_slot), cache=cache)
         model.set_qot_state(lp.id, state)
         results[lp.id] = (state, rid)
     return results
