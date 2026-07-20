@@ -4,23 +4,31 @@ layers, no wavelength conversion) + IGABAG single-demand placement.
 
 Vertices:
   (ACCESS, node)        access/IP layer port for an optical node
-  (WL, node, lam)       wavelength-layer port for node on slot `lam`
+  (WLIN, node, lam)     wavelength-layer arrival port (a WLE lands here)
+  (WLOUT, node, lam)    wavelength-layer departure port (a WLE leaves here)
+
+The WLin/WLout split (rather than one (WL,node,lam) vertex) lets a segmented
+placement terminate at WLin and re-originate at WLout on the SAME wavelength; a
+single shared vertex forbade that because a simple path can't revisit it.
 
 Edges (directed; every edge carries a 'weight'):
   LPE  access(u) -> access(v)   one per existing lightpath u->v.
         Carries lightpath_id + residual_gbps; absent when margin<0, residual 0,
         or the lightpath crosses a forbidden asset. Low weight (reuse).
-  WLE  (WL,u,lam) -> (WL,v,lam)  one per free slot `lam` on an OMS u->v (both
-        directions); carries oms_id + lam. Low weight.
-  TxE  access(u) -> (WL,u,lam)   originate a new lightpath on slot lam. MODERATE
+  WLE  (WLout,u,lam) -> (WLin,v,lam)  one per free slot `lam` on an OMS u->v;
+        carries oms_id + lam. Low weight.
+  TxE  access(u) -> (WLout,u,lam)   originate a new lightpath on slot lam. MODERATE
         weight (a few groom-hops' worth) so new segments are discouraged but still
         reachable by k-shortest within budget — letting hybrids interleave into
         the frontier instead of ranking behind every pure-groom path.
-  RxE  (WL,v,lam) -> access(v)   terminate a new lightpath. Zero weight.
+  RxE  (WLin,v,lam) -> access(v)   terminate a new lightpath. Zero weight.
+  EXPRESS (WLin,n,lam) -> (WLout,n,lam)  optical pass-through at n on one lam. Zero
+        weight; present only where n both receives and forwards on that slot.
 
 A path access(src) -> access(dst) that stays on existing lightpaths uses only
-LPE edges (grooming). A path that dips via TxE -> WLEs (one lam) -> RxE realizes
-a new lightpath on that wavelength. No CvtE: wavelength continuity is structural.
+LPE edges (grooming). A path that dips via TxE -> WLEs (bypassing pass-through
+nodes on EXPRESS) -> RxE realizes a new lightpath on one wavelength. No CvtE:
+wavelength continuity is structural (EXPRESS never crosses lam).
 
 Stage 7 assumptions (recorded explicitly, from the inspection roadmap):
 - `Router.site == optical-node id` is the src/dst -> optical-node resolution
@@ -54,7 +62,13 @@ from .spectrum import SpectrumGrid, build_spectrum_state
 from .exposure import oms_seq_asset_set
 
 ACCESS = "access"
-WL = "wl"
+# Node-split wavelength ports: a WLE lands on WLin and departs from WLout, joined
+# by an EXPRESS edge for optical pass-through. Splitting the old single (WL,n,lam)
+# vertex lets a segmented placement terminate at (WLin,n,lam) and re-originate at
+# (WLout,n,lam) on the SAME wavelength — a simple path could not revisit one shared
+# vertex, which spuriously forced the two runs onto different slots.
+WLIN = "wlin"
+WLOUT = "wlout"
 
 # Edge weights shape k-shortest DISCOVERY only (final ranking uses cost_vector).
 # New lightpaths are discouraged but reachable, so hybrids/new candidates
@@ -64,6 +78,7 @@ _W_LPE = 1.0       # reuse an existing lightpath (one virtual hop)
 _W_WLE = 0.1       # traverse one OMS on a new lightpath's wavelength
 _W_NEW_LP = 5.0    # originate a new lightpath (TxE): a few groom-hops' worth
 _W_RXE = 0.0
+_W_EXPRESS = 0.0   # optical pass-through at a node (WLin->WLout, same lam)
 
 
 def _lightpath_endpoints(model: NetworkModel, lp) -> Tuple[str, str]:
@@ -124,8 +139,8 @@ def build_layered_graph(
 
     A MultiDiGraph (not a plain DiGraph) so parallel OMS between the same ordered
     node pair stay distinct per wavelength: on a DiGraph the second WLE
-    ``(WL,a,lam)->(WL,b,lam)`` overwrites the first, silently collapsing parallel
-    fibers to one route per slot (S7-13). Mirrors the flat OMS solver's
+    ``(WLout,a,lam)->(WLin,b,lam)`` overwrites the first, silently collapsing
+    parallel fibers to one route per slot (S7-13). Mirrors the flat OMS solver's
     MultiDiGraph (S6-4). Parallel lightpaths on the same access hop stay distinct
     for the same reason."""
     from .ip_routing import offered_load_per_link
@@ -162,13 +177,43 @@ def build_layered_graph(
                    kind="LPE", lightpath_id=lp.id, residual_gbps=residual,
                    weight=_W_LPE)
 
-    # WLE + TxE/RxE per wavelength layer
-    for oms in model.list_oms():
-        if _oms_forbidden(oms):
-            continue
+    # WLE + TxE/RxE per wavelength layer, capped at the FIRST GLOBALLY-free slot.
+    # A slot free on EVERY OMS is available to any route, so every slot above it is
+    # redundant for enumeration: no route ever needs a higher one. Building layers
+    # 0..k (k = first globally-free slot) instead of 0..num_slots collapses the
+    # wavelength-variant explosion that otherwise makes Yen's `shortest_simple_paths`
+    # regenerate one near-duplicate path per free slot (all deduped away by
+    # place_demands' lam-ignoring key). Slots below k are kept — a route may find
+    # them free on its own hops though occupied elsewhere. With NO globally-free
+    # slot (full saturation) this degrades to the old all-layers behavior.
+    #
+    # ONE free layer suffices because of the node-split below: each optical node has
+    # a WLin and a WLout port per wavelength layer,
+    #   WLE      (WLout,u,lam) -> (WLin,v,lam)   traverse OMS u->v on slot lam
+    #   TxE      access(u)      -> (WLout,u,lam)  originate a new lightpath
+    #   RxE      (WLin,v,lam)   -> access(v)      terminate a new lightpath
+    #   EXPRESS  (WLin,n,lam)   -> (WLout,n,lam)  optical pass-through on one lam
+    # A through-lightpath bypasses node n via EXPRESS (one wavelength, continuity
+    # structural). A SEGMENTED placement terminates at (WLin,n,lam) and re-originates
+    # at (WLout,n,lam) — DISTINCT vertices — so its two runs may share one wavelength.
+    # The old single (WL,n,lam) vertex forbade that (a simple path can't revisit it),
+    # which spuriously forced segmented runs onto different slots and needed a 2nd
+    # free layer just to enumerate them.
+    non_forbidden = [oms for oms in model.list_oms() if not _oms_forbidden(oms)]
+    union_occ = 0
+    for oms in non_forbidden:
+        union_occ |= spectrum.get(oms.id, 0)
+    cap = grid.num_slots
+    for lam in range(grid.num_slots):
+        if not ((union_occ >> lam) & 1):        # first slot free on every OMS
+            cap = lam + 1
+            break
+    wl_in: set = set()      # (node, lam) reached by an incoming WLE
+    wl_out: set = set()     # (node, lam) left by an outgoing WLE
+    for oms in non_forbidden:
         occ = spectrum.get(oms.id, 0)
         u, v = oms.src_node_id, oms.dst_node_id
-        for lam in range(grid.num_slots):
+        for lam in range(cap):
             if (occ >> lam) & 1:
                 continue   # slot lit -> no WLE
             # An OMS carries traffic src->dst ONLY (mirrors build_oms_graph's
@@ -179,13 +224,20 @@ def build_layered_graph(
             # _parse_paths could stitch a new lightpath from wrong-direction OMS
             # (e.g. oms_1_0 for a 0->1 hop) -> a non-contiguous oms_sequence that
             # add_lightpath rejects. key=oms.id keeps parallel OMS on the same
-            # ordered (WL,u,lam)->(WL,v,lam) pair distinct (the S7-13 fix).
-            g.add_edge((WL, u, lam), (WL, v, lam), key=oms.id,
+            # ordered (WLout,u,lam)->(WLin,v,lam) pair distinct (the S7-13 fix).
+            g.add_edge((WLOUT, u, lam), (WLIN, v, lam), key=oms.id,
                        kind="WLE", oms_id=oms.id, lam=lam, weight=_W_WLE)
-            g.add_edge((ACCESS, u), (WL, u, lam), key="TxE",
+            g.add_edge((ACCESS, u), (WLOUT, u, lam), key="TxE",
                        kind="TxE", lam=lam, weight=_W_NEW_LP)
-            g.add_edge((WL, v, lam), (ACCESS, v), key="RxE",
+            g.add_edge((WLIN, v, lam), (ACCESS, v), key="RxE",
                        kind="RxE", lam=lam, weight=_W_RXE)
+            wl_out.add((u, lam))
+            wl_in.add((v, lam))
+    # EXPRESS: optical pass-through where a node both receives and forwards on a lam
+    # (so a through-lightpath continues on one wavelength without dropping to access).
+    for n, lam in wl_in & wl_out:
+        g.add_edge((WLIN, n, lam), (WLOUT, n, lam), key="EXPRESS",
+                   kind="EXPRESS", lam=lam, weight=_W_EXPRESS)
     return g
 
 
@@ -292,9 +344,10 @@ def _parse_paths(
     choice is re-expanded here (mirrors the flat solver's `itertools.product`).
 
     Each new_run is (oms_sequence, lam, src_node, dst_node); the travel endpoints
-    come from the WL-vertex node components ((WL, node, lam)), so a return-direction
-    run over a physically-forward OMS records its true direction rather than the
-    OMS's physical orientation."""
+    come from the WL-vertex node components ((WLout/WLin, node, lam)), so a return-
+    direction run over a physically-forward OMS records its true direction rather
+    than the OMS's physical orientation. EXPRESS hops (optical pass-through at a
+    node on one wavelength) continue the current run without touching access."""
     hops = list(zip(path, path[1:]))
     # per hop: the list of parallel edge-data dicts (MultiDiGraph get_edge_data
     # returns {key: data}); a plain node path collapses these into one choice.
@@ -320,7 +373,10 @@ def _parse_paths(
                 if cur_oms:
                     new_runs.append((tuple(cur_oms), cur_lam, cur_src, cur_dst))
                     cur_oms, cur_lam, cur_src, cur_dst = [], None, None, None
-            # TxE: entry into a wl layer; nothing to record
+            # TxE: entry into a wl layer; nothing to record.
+            # EXPRESS: optical pass-through (WLin,n,lam)->(WLout,n,lam) — the run
+            # continues on the same wavelength; nothing to record (the next WLE
+            # extends cur_oms/cur_dst).
         yield reused, new_runs
 
 

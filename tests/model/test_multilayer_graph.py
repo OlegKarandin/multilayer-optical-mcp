@@ -9,7 +9,7 @@ from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model.spectrum import SpectrumGrid
 from multilayer_optical_mcp.model.multilayer_graph import (
-    build_layered_graph, ACCESS, WL, lpe_edges, wle_count_on_layer, place_demands,
+    build_layered_graph, ACCESS, WLIN, WLOUT, lpe_edges, wle_count_on_layer, place_demands,
 )
 from multilayer_optical_mcp.model.topology_import import model_from_abstract_graph
 
@@ -291,6 +291,101 @@ def test_wle_count_counts_parallel_oms_per_layer():
     g = build_layered_graph(n)
     assert wle_count_on_layer(g, "oms-AB-1", 0) == 1
     assert wle_count_on_layer(g, "oms-AB-2", 0) == 1
+
+
+# ---------------------------------------------------------------------------
+# Node-split + wavelength-layer cap. Each optical node has a WLin/WLout port pair
+# per layer joined by an EXPRESS edge, so a segmented placement terminates at
+# (WLin,n,lam) and re-originates at (WLout,n,lam) — distinct vertices — and can
+# ride ONE wavelength (a single reused (WL,n,lam) vertex forbade that: a simple
+# path can't revisit it). That removes the spurious wavelength coupling, so the
+# layer loop caps at the FIRST globally-free slot (one layer suffices), killing
+# the lambda-variant explosion that dominated Yen's path enumeration.
+# ---------------------------------------------------------------------------
+
+def _wle_lams(g):
+    return sorted({d["lam"] for _, _, d in g.edges(data=True) if d.get("kind") == "WLE"})
+
+
+def test_wle_layers_capped_at_first_globally_free_slot():
+    """Empty network: slot 0 is free on every OMS, so only layer 0 is built — not
+    one layer per grid slot. One free layer is enough now that segmented
+    placements share a single wavelength (see the segmented test)."""
+    n = _two_parallel_oms_model()
+    g = build_layered_graph(n)
+    assert _wle_lams(g) == [0]
+
+
+def test_wle_cap_keeps_lower_slots_where_free_on_other_oms():
+    """Slot 0 occupied on oms-AB-1 only -> slot 0 is not globally free; the first
+    globally-free slot is 1. The cap builds layers 0..1: slot 0 stays on the
+    unoccupied oms-AB-2 (a route over it can still use it), slot 1 is on both
+    (globally free), and nothing above 1 is built."""
+    n = _two_parallel_oms_model()
+    n.add_lightpath(_L("lp0", ("oms-AB-1",), "100G", 191.4e12))     # slot 0
+    n.set_qot_state("lp0", QoTState(gsnr_db=15.0, osnr_db=30.0, margin_db=3.0))
+    g = build_layered_graph(n)
+    assert _wle_lams(g) == [0, 1]
+    assert wle_count_on_layer(g, "oms-AB-1", 0) == 0     # occupied
+    assert wle_count_on_layer(g, "oms-AB-2", 0) == 1     # free, retained
+    assert wle_count_on_layer(g, "oms-AB-1", 1) == 1     # globally-free slot
+    assert wle_count_on_layer(g, "oms-AB-2", 1) == 1
+
+
+def test_pass_through_node_has_express_edge():
+    """Node-split: a node that both receives and forwards on a layer (a pass-through
+    like C on the A->C->B route) gets an EXPRESS edge (WLin,C,0)->(WLout,C,0). Pure
+    endpoints (A source-only, B sink-only) get none."""
+    grid = SpectrumGrid(anchor_hz=191.4e12, spacing_hz=100e9, num_slots=80)
+    n = _cheap_route_plus_distinct_route()
+    g = build_layered_graph(n, grid=grid)
+    assert g.has_edge((WLIN, "C", 0), (WLOUT, "C", 0))     # pass-through C
+    assert not g.has_edge((WLIN, "A", 0), (WLOUT, "A", 0))  # source-only
+    assert not g.has_edge((WLIN, "B", 0), (WLOUT, "B", 0))  # sink-only
+
+
+def test_through_lightpath_is_single_run_across_two_oms():
+    """Continuity via EXPRESS: an A->B demand can be one through-lightpath spanning
+    (oms-AC, oms-CB) on a single wavelength — a single run, C optically bypassed."""
+    grid = SpectrumGrid(anchor_hz=191.4e12, spacing_hz=100e9, num_slots=80)
+    n = _cheap_route_plus_distinct_route()
+    g = build_layered_graph(n, grid=grid)
+    res = place_demands(n, g, FakeQot(15.0), src="A", dst="B",
+                        demand_gbps=100.0, policy="new_only", grid=grid)
+    single = {p.new_lightpaths[0].oms_sequence
+              for p in res if len(p.new_lightpaths) == 1}
+    assert ("oms-AC", "oms-CB") in single
+
+
+def test_segmented_two_run_placement_shares_one_wavelength():
+    """The node-split's payoff: a demand served by TWO separate lightpaths meeting
+    at a regen node (A->C then C->B) is now enumerable on a SINGLE wavelength. The
+    terminate routes through (WLin,C,0) and the re-originate through (WLout,C,0) —
+    distinct vertices — so the two runs need not take different slots. On a pristine
+    graph (only layer 0 built) the segmented placement still forms, both runs lam 0."""
+    grid = SpectrumGrid(anchor_hz=191.4e12, spacing_hz=100e9, num_slots=80)
+    n = _cheap_route_plus_distinct_route()
+    g = build_layered_graph(n, grid=grid)
+    assert _wle_lams(g) == [0]                          # only one layer on empty
+    res = place_demands(n, g, FakeQot(15.0), src="A", dst="B",
+                        demand_gbps=100.0, policy="new_only", grid=grid)
+    two_run = [p for p in res if len(p.new_lightpaths) == 2]
+    assert two_run, "expected a segmented A->C + C->B placement on one wavelength"
+    assert {r.lam for r in two_run[0].new_lightpaths} == {0}
+
+
+def test_demand_still_placeable_under_cap():
+    """Completeness: with slot 0 occupied on one A->B fiber, an A->B demand still
+    places on both fibers — the parallel fiber at slot 0, and oms-AB-1 at the
+    first-free slot 1. The cap must not lose either route."""
+    n = _two_parallel_oms_model()
+    n.add_lightpath(_L("lp0", ("oms-AB-1",), "100G", 191.4e12))     # slot 0
+    n.set_qot_state("lp0", QoTState(gsnr_db=15.0, osnr_db=30.0, margin_db=3.0))
+    g = build_layered_graph(n)
+    res = place_demands(n, g, FakeQot(15.0), src="A", dst="B",
+                        demand_gbps=100.0, policy="new_only")
+    routes = {p.new_lightpaths[0].oms_sequence for p in res if p.new_lightpaths}
+    assert ("oms-AB-1",) in routes and ("oms-AB-2",) in routes, routes
 
 
 # ---------------------------------------------------------------------------
