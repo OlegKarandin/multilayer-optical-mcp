@@ -142,10 +142,18 @@ def commit_plan(
                             validation=report, diff=None)
 
     # Record the intended end-state (all ops applied on a clone) before actuating,
-    # so reconcile has a target even if the control plane partially fails.
+    # so reconcile has a target even if the control plane partially fails. The
+    # intended snapshot also gets the same post-op recompute as the live model
+    # (below) so reconcile compares like-for-like: qot_state is derived state,
+    # not part of the plan's ops, so it must be seeded on both sides of the
+    # diff or a successful actuation still reads as drift.
     intended = current.clone()
     for op in plan.ops:
         apply_op(intended, op)
+    try:
+        recompute(intended, store_results)
+    except Exception:
+        pass
     intended_id = store.put(intended)
 
     applied, failed = actuate(current, plan, actuator)
