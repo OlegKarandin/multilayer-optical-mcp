@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import NamedTuple, Optional, Tuple
 
 from ..model.assets import Direction
 from ..model.network import NetworkModel
@@ -221,71 +221,35 @@ def _cache_key(
     )
 
 
-def compute_qot(
-    *,
+class _PropResult(NamedTuple):
+    """Result of propagating a loading state through every path element.
+
+    Shared shape returned by ``_propagate_loading``, consumed by ``compute_qot``
+    (one probe) and, later, ``harvest_qot`` (all slots in one pass)."""
+    si: object
+    uids_list: list
+    elements: list
+    roadm_propagated: set
+    baud_rate: float
+    snapshots: list
+    final_gsnr_db: float
+    final_osnr_db: float
+
+
+def _propagate_loading(
     model: NetworkModel,
-    store: QoTResultStore,
     oms_sequence: Tuple[str, ...],
     direction: Direction,
-    mode_id: str,
-    loading: LoadingState,
-    center_freq_hz: Optional[float] = None,
+    loading_for_gnpy: LoadingState,
+    mode,
+    probe_idx: int,
+    *,
     topo_path: Optional[Path] = None,
     eqpt_path: Optional[Path] = None,
-    cache: Optional[QoTCache] = None,
-) -> Tuple[QoTState, str]:
-    """Propagate *loading* through the gnpy toy network and return QoT.
-
-    Parameters
-    ----------
-    model:
-        The NetworkModel that owns the OMS and mode definitions.
-    store:
-        QoTResultStore that will hold the per-element breakdown.
-    oms_sequence:
-        Ordered OMS ids that define the end-to-end optical path.
-    direction:
-        ``FORWARD`` or ``BACKWARD``.  When ``BACKWARD``, the element order is
-        reversed so per-direction asymmetric degradation can be evaluated.
-    mode_id:
-        Transceiver mode for the probe channel.
-    loading:
-        Arbitrary constructed channel set.  Must contain at least one channel
-        whose ``mode_id`` matches *mode_id*.  Additional channels model WDM
-        neighbors (including make-before-break overlap sets).
-
-    Returns
-    -------
-    (QoTState, result_id)
-        ``QoTState`` holds the final GSNR, OSNR, margin, and whether the mode
-        is feasible (margin ≥ 0).  ``result_id`` is the key into *store* for
-        the full ``QoTBreakdown`` with per-element snapshots.
-
-    Raises
-    ------
-    ValueError
-        If *loading* contains no channel with the given *mode_id*.
-    KeyError
-        If any OMS id or element uid cannot be resolved.
-    """
-    # ------------------------------------------------------------------ cache
-    # Content-addressed lookup, only on the model-driven path (a topo/eqpt-file
-    # run is not fingerprinted by the model, so it is never cached). A key-build
-    # failure degrades silently to an uncached compute — the cache never changes
-    # results or error behavior.
-    key = None
-    if cache is not None and topo_path is None and eqpt_path is None:
-        try:
-            key = _cache_key(model, oms_sequence, direction, mode_id, loading,
-                             center_freq_hz)
-        except Exception:
-            key = None
-        if key is not None:
-            hit = cache.get(key)
-            if hit is not None:
-                state, breakdown = hit
-                return state, store.put(breakdown)   # fresh result_id per call
-
+) -> "_PropResult":
+    """Resolve the path, build the SI from *loading_for_gnpy*, propagate through
+    every element, and return the final SI plus per-element snapshots taken at
+    *probe_idx*. Shared by compute_qot (one probe) and harvest_qot (all slots)."""
     # ------------------------------------------------------------------ setup
     from .synthesize import build_gnpy_network, gnpy_design_network
     if topo_path is not None or eqpt_path is not None:
@@ -323,33 +287,7 @@ def compute_qot(
         uids = uids + (drop_roadm.uid,)
         elements = elements + [drop_roadm]
 
-    # ------------------------------------------------------------------ probe channel
-    # Prefer selecting the probe by frequency: in a WDM load with several
-    # same-mode channels, mode_id alone is ambiguous and every same-mode
-    # lightpath would be evaluated at the first match's frequency (S4-5). Fall
-    # back to mode_id only when no frequency is given (single-channel/legacy).
-    if center_freq_hz is not None:
-        probe = next(
-            (c for c in loading.channels if c.center_freq_hz == center_freq_hz), None
-        )
-        if probe is None:
-            raise ValueError(
-                f"loading has no channel at center_freq {center_freq_hz:.6e} Hz"
-            )
-    else:
-        probe = next((c for c in loading.channels if c.mode_id == mode_id), None)
-        if probe is None:
-            raise ValueError(
-                f"loading does not include a channel for mode {mode_id!r}"
-            )
-
-    mode = model.modes.get(mode_id)  # raises KeyError if unknown
-
     # ------------------------------------------------------------------ SI construction
-    # Ensure at least 2 channels so gnpy EDFAs can interpolate slot_width.
-    loading_for_gnpy = _ensure_min_two_channels(loading, probe.center_freq_hz)
-    probe_idx = _find_probe_index(loading_for_gnpy, probe.center_freq_hz)
-
     si = build_si_for_loading(
         loading_for_gnpy,
         baud_rate=mode.symbol_rate_baud,
@@ -430,26 +368,136 @@ def compute_qot(
     final_gsnr_db = prev_gsnr_db if math.isfinite(prev_gsnr_db) else math.inf
     final_osnr_db = snapshots[-1].osnr_db_after if snapshots else math.inf
 
-    # ------------------------------------------------------------------ post-propagation penalties
+    return _PropResult(si, uids_list, elements, _roadm_propagated,
+                       mode.symbol_rate_baud, snapshots, final_gsnr_db, final_osnr_db)
+
+
+def _apply_penalties(si, idx, uids_list, elements, roadm_propagated, baud_rate,
+                     gsnr_db, osnr_db) -> tuple[float, float]:
+    """Apply add_drop_osnr (per propagated ROADM) + tx_osnr (per carrier idx),
+    normalised from 12.5 GHz to baud_rate via gnpy's snr_sum. Mirrors the block
+    formerly inline in compute_qot."""
     # gnpy does not apply add_drop_osnr or tx_osnr to si.ase during bare element propagation;
     # they are metadata consumed only by request.py's Transceiver.update_snr(). We apply them
     # here using gnpy's own snr_sum, which normalises each penalty from 12.5 GHz to baud_rate.
+    from gnpy.core.elements import Roadm as _GnpyRoadm
     from gnpy.core.utils import snr_sum as _snr_sum, lin2db as _lin2db, db2lin as _db2lin
-
-    baud_rate = mode.symbol_rate_baud
 
     penalties_noise_lin = 0.0
     for _uid, _el in zip(uids_list, elements):
-        if isinstance(_el, _GnpyRoadm) and _uid in _roadm_propagated:
+        if isinstance(_el, _GnpyRoadm) and _uid in roadm_propagated:
             penalties_noise_lin += _db2lin(-_el.params.add_drop_osnr)
 
-    tx_osnr_db = float(si.tx_osnr[probe_idx])  # at 12.5 GHz ref BW
+    tx_osnr_db = float(si.tx_osnr[idx])  # at 12.5 GHz ref BW
     penalties_noise_lin += _db2lin(-tx_osnr_db)
 
     if penalties_noise_lin > 0.0:
         combined_penalty_db = -_lin2db(penalties_noise_lin)
-        final_gsnr_db = float(_snr_sum(final_gsnr_db, baud_rate, combined_penalty_db))
-        final_osnr_db = float(_snr_sum(final_osnr_db, baud_rate, combined_penalty_db))
+        gsnr_db = float(_snr_sum(gsnr_db, baud_rate, combined_penalty_db))
+        osnr_db = float(_snr_sum(osnr_db, baud_rate, combined_penalty_db))
+
+    return gsnr_db, osnr_db
+
+
+def compute_qot(
+    *,
+    model: NetworkModel,
+    store: QoTResultStore,
+    oms_sequence: Tuple[str, ...],
+    direction: Direction,
+    mode_id: str,
+    loading: LoadingState,
+    center_freq_hz: Optional[float] = None,
+    topo_path: Optional[Path] = None,
+    eqpt_path: Optional[Path] = None,
+    cache: Optional[QoTCache] = None,
+) -> Tuple[QoTState, str]:
+    """Propagate *loading* through the gnpy toy network and return QoT.
+
+    Parameters
+    ----------
+    model:
+        The NetworkModel that owns the OMS and mode definitions.
+    store:
+        QoTResultStore that will hold the per-element breakdown.
+    oms_sequence:
+        Ordered OMS ids that define the end-to-end optical path.
+    direction:
+        ``FORWARD`` or ``BACKWARD``.  When ``BACKWARD``, the element order is
+        reversed so per-direction asymmetric degradation can be evaluated.
+    mode_id:
+        Transceiver mode for the probe channel.
+    loading:
+        Arbitrary constructed channel set.  Must contain at least one channel
+        whose ``mode_id`` matches *mode_id*.  Additional channels model WDM
+        neighbors (including make-before-break overlap sets).
+
+    Returns
+    -------
+    (QoTState, result_id)
+        ``QoTState`` holds the final GSNR, OSNR, margin, and whether the mode
+        is feasible (margin ≥ 0).  ``result_id`` is the key into *store* for
+        the full ``QoTBreakdown`` with per-element snapshots.
+
+    Raises
+    ------
+    ValueError
+        If *loading* contains no channel with the given *mode_id*.
+    KeyError
+        If any OMS id or element uid cannot be resolved.
+    """
+    # ------------------------------------------------------------------ cache
+    # Content-addressed lookup, only on the model-driven path (a topo/eqpt-file
+    # run is not fingerprinted by the model, so it is never cached). A key-build
+    # failure degrades silently to an uncached compute — the cache never changes
+    # results or error behavior.
+    key = None
+    if cache is not None and topo_path is None and eqpt_path is None:
+        try:
+            key = _cache_key(model, oms_sequence, direction, mode_id, loading,
+                             center_freq_hz)
+        except Exception:
+            key = None
+        if key is not None:
+            hit = cache.get(key)
+            if hit is not None:
+                state, breakdown = hit
+                return state, store.put(breakdown)   # fresh result_id per call
+
+    # ------------------------------------------------------------------ probe channel
+    # Prefer selecting the probe by frequency: in a WDM load with several
+    # same-mode channels, mode_id alone is ambiguous and every same-mode
+    # lightpath would be evaluated at the first match's frequency (S4-5). Fall
+    # back to mode_id only when no frequency is given (single-channel/legacy).
+    if center_freq_hz is not None:
+        probe = next(
+            (c for c in loading.channels if c.center_freq_hz == center_freq_hz), None
+        )
+        if probe is None:
+            raise ValueError(
+                f"loading has no channel at center_freq {center_freq_hz:.6e} Hz"
+            )
+    else:
+        probe = next((c for c in loading.channels if c.mode_id == mode_id), None)
+        if probe is None:
+            raise ValueError(
+                f"loading does not include a channel for mode {mode_id!r}"
+            )
+
+    mode = model.modes.get(mode_id)  # raises KeyError if unknown
+
+    # ------------------------------------------------------------------ SI construction
+    # Ensure at least 2 channels so gnpy EDFAs can interpolate slot_width.
+    loading_for_gnpy = _ensure_min_two_channels(loading, probe.center_freq_hz)
+    probe_idx = _find_probe_index(loading_for_gnpy, probe.center_freq_hz)
+
+    pr = _propagate_loading(model, oms_sequence, direction, loading_for_gnpy, mode,
+                            probe_idx, topo_path=topo_path, eqpt_path=eqpt_path)
+
+    # ------------------------------------------------------------------ post-propagation penalties
+    final_gsnr_db, final_osnr_db = _apply_penalties(
+        pr.si, probe_idx, pr.uids_list, pr.elements, pr.roadm_propagated,
+        pr.baud_rate, pr.final_gsnr_db, pr.final_osnr_db)
 
     margin_db = final_gsnr_db - mode.required_gsnr_db
 
@@ -463,14 +511,14 @@ def compute_qot(
     # NaN) are likewise skipped. If no finite delta exists, there is none.
     limiting_element_id: str | None = None
     min_delta = math.inf
-    for snap in snapshots:
+    for snap in pr.snapshots:
         if math.isfinite(snap.gsnr_delta_db) and snap.gsnr_delta_db < min_delta:
             min_delta = snap.gsnr_delta_db
             limiting_element_id = snap.element_id
 
     # ------------------------------------------------------------------ store
     breakdown = QoTBreakdown(
-        snapshots=tuple(snapshots),
+        snapshots=tuple(pr.snapshots),
         limiting_element_id=limiting_element_id,
     )
     result_id = store.put(breakdown)
