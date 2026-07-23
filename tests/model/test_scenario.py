@@ -7,6 +7,7 @@ the real adapter.
 """
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -213,9 +214,12 @@ def test_german_17_end_to_end_real_adapter():
     cache = QoTCache()
     qot = make_adapter_evaluator(model, store, cache=cache)
 
+    t0 = time.perf_counter()
     res = build_operating_network(
         model, seed=0, qot=qot, target_mean_util=0.4, max_util_cap=0.95,
         max_iters=10, store=store)
+    elapsed = time.perf_counter() - t0
+    print(f"\n[german_17 FULL build] {elapsed:.1f}s")
 
     assert res.model.list_lightpaths()                    # a loaded operating network
     assert res.report.status in (SolverStatus.SOLUTION, SolverStatus.PARTIAL)

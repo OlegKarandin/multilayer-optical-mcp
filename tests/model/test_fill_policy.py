@@ -91,6 +91,17 @@ def test_solve_rsa_full_downshifts_relative_to_actual():
     assert full.placements[0].working.mode_id == "100G"
 
 
+def test_solve_rsa_defaults_to_full_downshift():
+    """With the flipped default, solve_rsa (no fill_policy) now behaves as FULL:
+    the dense comb forces the margin-stable lower mode, matching an explicit FULL."""
+    qot = ChannelCountQot()
+    demand = [{"id": "d1", "src": "A", "dst": "Z"}]
+    default = solve_rsa(_one_route(), qot, demand)                       # no policy arg
+    explicit_full = solve_rsa(_one_route(), qot, demand, fill_policy=FillPolicy.FULL)
+    assert default.placements[0].working.mode_id == explicit_full.placements[0].working.mode_id
+    assert default.placements[0].working.mode_id == "100G"
+
+
 def test_solve_allocation_full_is_order_independent():
     """FULL's canonical loading makes the delivered mode independent of placement
     order: every demand probes against the same full comb."""
