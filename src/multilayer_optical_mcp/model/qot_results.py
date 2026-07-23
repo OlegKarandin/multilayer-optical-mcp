@@ -72,3 +72,26 @@ class QoTCache:
         self._d.move_to_end(key)
         while len(self._d) > self._max:
             self._d.popitem(last=False)   # evict least-recently used
+
+
+class HarvestCache:
+    """Bounded LRU of full-comb harvest vectors, keyed by adapter.harvest_cache_key
+    (path fingerprint + direction + mode — no probe frequency). Off-model, injected
+    like QoTCache. Content-addressed: a changed physical input flips the key, so
+    there is no invalidation logic."""
+
+    def __init__(self, maxsize: int = 4096) -> None:
+        self._store: "OrderedDict[Any, Dict[int, Any]]" = OrderedDict()
+        self._maxsize = maxsize
+
+    def get(self, key: Any) -> Optional[Dict[int, Any]]:
+        if key not in self._store:
+            return None
+        self._store.move_to_end(key)
+        return self._store[key]
+
+    def put(self, key: Any, value: Dict[int, Any]) -> None:
+        self._store[key] = value
+        self._store.move_to_end(key)
+        while len(self._store) > self._maxsize:
+            self._store.popitem(last=False)
