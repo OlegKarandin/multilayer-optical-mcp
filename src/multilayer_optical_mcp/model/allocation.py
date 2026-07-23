@@ -36,6 +36,7 @@ from .multilayer_disjoint import disjoint_pairs
 from .restoration import _lever
 from . import objective as _objective
 from ..gnpy_adapter.loading import Channel, LoadingState
+from ..gnpy_adapter.adapter import compute_qot, harvest_qot, harvest_cache_key
 
 # Candidate routes considered per demand when searching for a feasible placement.
 _ROUTE_CAP = 8
@@ -52,13 +53,48 @@ class QotEvaluator(Protocol):
 
 
 def make_adapter_evaluator(model, store, *, topo_path=None, eqpt_path=None,
-                           cache=None) -> QotEvaluator:
+                           cache=None, harvest_cache=None) -> QotEvaluator:
     """A QotEvaluator bound to the real GNPy adapter + a results store. An optional
     `cache` (QoTCache) memoizes propagation across calls — content-addressed, so it
-    is safe to share one cache across a whole solve/settle run."""
-    from ..gnpy_adapter.adapter import compute_qot  # lazy: avoids import cycle
+    is safe to share one cache across a whole solve/settle run.
+
+    An optional `harvest_cache` (HarvestCache) additionally detects FULL-policy's
+    full-grid probe loading (every grid slot lit) and routes it through
+    `harvest_qot` instead of `compute_qot`: one propagation harvests every
+    carrier's GSNR, so the many probe-slot calls FillPolicy.FULL makes across a
+    solve/settle run collapse into one propagation per (path, direction, mode,
+    physical-fingerprint) instead of one per probe. Any non-full (subset/ACTUAL)
+    loading, or a topo/eqpt-file run (not model-fingerprintable), falls through to
+    today's per-call `compute_qot` path unchanged."""
+    grid = SpectrumGrid.default()
 
     def _eval(*, oms_sequence, direction, mode_id, loading):
+        if harvest_cache is not None and topo_path is None and eqpt_path is None:
+            try:
+                slots = {grid.slot_of(c.center_freq_hz) for c in loading.channels}
+            except ValueError:
+                slots = None                      # off-grid channel -> normal path
+            if slots is not None and len(slots) == grid.num_slots:
+                key = harvest_cache_key(model, tuple(oms_sequence), direction, mode_id)
+                vec = harvest_cache.get(key)
+                if vec is None:
+                    vec = harvest_qot(model, tuple(oms_sequence), direction,
+                                      mode_id, loading)
+                    harvest_cache.put(key, vec)
+                # probe = the channel compute_qot would pick when no center_freq_hz
+                # is given (first mode_id match = channels[0] under FULL, which
+                # prepends the probe) -- same selection rule as compute_qot's.
+                probe = next(c for c in loading.channels if c.mode_id == mode_id)
+                probe_slot = grid.slot_of(probe.center_freq_hz)
+                if probe_slot in vec:
+                    return vec[probe_slot]
+                # The probe's own slot is one an amp/ROADM band-edge filter demuxed
+                # out of the harvest (harvest_qot's dict is not guaranteed complete
+                # -- e.g. this repo's grid/amp-band config always drops the topmost
+                # slot). Fall back to compute_qot for this one call rather than
+                # raising a KeyError; compute_qot has this same underlying
+                # band-edge limitation for such a probe, so this does not
+                # introduce new incorrect behavior.
         state, _ = compute_qot(
             model=model, store=store, oms_sequence=tuple(oms_sequence),
             direction=direction, mode_id=mode_id, loading=loading,
