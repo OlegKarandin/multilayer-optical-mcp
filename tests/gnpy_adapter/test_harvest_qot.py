@@ -39,3 +39,7 @@ def test_harvest_matches_per_slot_compute_qot(direction):
             center_freq_hz=GRID.freq(slot))
         assert math.isclose(vec[slot].gsnr_db, state.gsnr_db, rel_tol=1e-9, abs_tol=1e-9)
         assert math.isclose(vec[slot].osnr_db, state.osnr_db, rel_tol=1e-9, abs_tol=1e-9)
+    # Top slot is always demuxed out: AMP_BAND.f_max sits only 25 GHz above
+    # SI_BAND.f_max, less than half a 100 GHz channel width, so slot 47's
+    # upper edge always exceeds every amp's passband.
+    assert (GRID.num_slots - 1) not in vec

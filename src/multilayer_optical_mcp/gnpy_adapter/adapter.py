@@ -565,6 +565,12 @@ def harvest_qot(
     No store writes (no per-slot breakdown persisted) and no per-element
     snapshots kept; callers that need the full breakdown for one slot should use
     ``compute_qot`` for that slot instead.
+
+    The returned dict may be missing entries for slots an amplifier or ROADM's
+    passband edge filters demux out (e.g. under this repo's grid/amp-band
+    config, the topmost grid slot is always dropped) — callers must check
+    membership (``slot in vec``) rather than assume every requested slot comes
+    back.
     """
     from ..model.spectrum import SpectrumGrid
 
