@@ -536,6 +536,71 @@ def compute_qot(
     return state, result_id
 
 
+def harvest_cache_key(
+    model: NetworkModel, oms_sequence: Tuple[str, ...], direction: Direction,
+    mode_id: str,
+) -> tuple:
+    """Content-addressed key for a full-comb harvest: path + direction + mode +
+    physical fingerprint — deliberately no probe frequency, because one harvest
+    answers every slot at once (unlike ``_cache_key``, which is one probe)."""
+    return (
+        tuple(oms_sequence),
+        direction.value,
+        mode_id,
+        _path_physical_fingerprint(model, oms_sequence, direction),
+    )
+
+
+def harvest_qot(
+    model: NetworkModel,
+    oms_sequence: Tuple[str, ...],
+    direction: Direction,
+    mode_id: str,
+    full_comb: LoadingState,
+) -> dict[int, QoTState]:
+    """Propagate a full-grid *full_comb* loading once and harvest every carrier's
+    GSNR/OSNR, keyed by grid slot — the mechanism that makes ``FillPolicy.FULL``
+    cheap: one propagation instead of one per candidate probe frequency.
+
+    No store writes (no per-slot breakdown persisted) and no per-element
+    snapshots kept; callers that need the full breakdown for one slot should use
+    ``compute_qot`` for that slot instead.
+    """
+    from ..model.spectrum import SpectrumGrid
+
+    grid = SpectrumGrid.default()
+    mode = model.modes.get(mode_id)  # raises KeyError if unknown
+
+    # Frequency-sort so the SI carrier index aligns with gnpy's ascending-
+    # frequency SI arrays (mirrors the convention in _per_path_loading).
+    sorted_channels = tuple(sorted(full_comb.channels, key=lambda c: c.center_freq_hz))
+    loading_sorted = LoadingState(channels=sorted_channels)
+
+    pr = _propagate_loading(model, oms_sequence, direction, loading_sorted, mode,
+                            probe_idx=0)  # probe_idx only feeds discarded snapshots
+
+    # Read carrier positions back from the *propagated* SI rather than trusting
+    # positional alignment with sorted_channels: a carrier can be dropped along
+    # the path (e.g. an amp/ROADM band-edge filter demuxes out a channel whose
+    # slot edge falls outside its passband), which shrinks and reindexes the SI.
+    # Matching by the SI's own post-propagation frequency is correct regardless
+    # of whether/where a channel was dropped.
+    out: dict[int, QoTState] = {}
+    for i, freq_hz in enumerate(pr.si.frequency):
+        gsnr_db, osnr_db = _extract_gsnr_osnr(pr.si, i)
+        gsnr_db, osnr_db = _apply_penalties(
+            pr.si, i, pr.uids_list, pr.elements, pr.roadm_propagated,
+            pr.baud_rate, gsnr_db, osnr_db)
+        slot = grid.slot_of(float(freq_hz))
+        out[slot] = QoTState(
+            gsnr_db=gsnr_db,
+            osnr_db=osnr_db,
+            margin_db=gsnr_db - mode.required_gsnr_db,
+            limiting_element_id=None,
+        )
+    return out
+
+
 def gated_qot(
     *,
     model: NetworkModel,
