@@ -401,11 +401,11 @@ def place_demands(
     RxE), or BOTH (a hybrid). Empty list when no feasible path exists.
 
     `fill_policy` selects the acceptance-probe reference loading passed to
-    `_build_loading` (defaults to ACTUAL — today's behavior)."""
+    `_build_loading` (defaults to FULL — see FillPolicy)."""
     from .allocation import _build_loading, _best_feasible_mode
     from .spectrum import FillPolicy
     if fill_policy is None:
-        fill_policy = FillPolicy.ACTUAL
+        fill_policy = FillPolicy.FULL
     grid = grid or SpectrumGrid.default()
     h = _policy_graph(g, policy)
     simple = _collapse_to_simple(h)

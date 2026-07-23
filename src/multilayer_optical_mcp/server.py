@@ -18,7 +18,7 @@ from mcp.server.fastmcp import FastMCP
 from .model.assets import Direction
 from .model.modes import load_modulation_formats
 from .model.network import NetworkModel
-from .model.qot_results import QoTResultStore
+from .model.qot_results import QoTResultStore, HarvestCache
 from .model.snapshots import SnapshotStore
 from .gnpy_adapter.loading import Channel, LoadingState
 from .gnpy_adapter.adapter import (
@@ -355,7 +355,7 @@ def build_app() -> FastMCP:
         {id, src, dst, protected?, required_gbps?, constraints?}. Mode falls out
         of the GNPy GSNR on the chosen route (highest feasible bitrate)."""
         model = snapshots.current()
-        qot = make_adapter_evaluator(model, results)
+        qot = make_adapter_evaluator(model, results, harvest_cache=HarvestCache())
         return placement_result_dict(
             _solve_rsa(model, qot, demands, objective=objective, constraints=constraints))
 
@@ -371,7 +371,7 @@ def build_app() -> FastMCP:
         weights: per-demand priority (demand id -> ordering weight, higher =
         placed first); does not feed evaluate_objective's cost vector."""
         model = snapshots.current()
-        qot = make_adapter_evaluator(model, results)
+        qot = make_adapter_evaluator(model, results, harvest_cache=HarvestCache())
         return allocation_result_dict(
             _solve_allocation(model, qot, demands, spare_inventory,
                               objective=objective, weights=weights))
@@ -422,7 +422,7 @@ def build_app() -> FastMCP:
         Read-only: returns typed candidates (full + degraded) with status
         solution/partial/no_solution. Does not mutate or commit anything."""
         model = snapshots.current()
-        qot = make_adapter_evaluator(model, results)
+        qot = make_adapter_evaluator(model, results, harvest_cache=HarvestCache())
         res = _compute_restoration(model, qot, service_id, avoid=avoid)
         return restoration_result_dict(res)
 
@@ -504,7 +504,7 @@ def build_app() -> FastMCP:
         weights: per-cost-term weights for the 7-term objective scalar (e.g.
         {"transponders": 2.0}); not a per-demand priority."""
         model = snapshots.current()
-        qot = make_adapter_evaluator(model, results)
+        qot = make_adapter_evaluator(model, results, harvest_cache=HarvestCache())
         res = _route_service(model, qot, service_id, protected=protected, basis=basis,
                              level=level, best_effort=best_effort, avoid=avoid, weights=weights)
         return route_service_result_dict(res)

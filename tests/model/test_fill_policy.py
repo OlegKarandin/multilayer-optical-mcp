@@ -1,9 +1,9 @@
 """FillPolicy: the acceptance-probe reference-loading policy.
 
-ACTUAL (default) probes against the channels lit at probe time — today's
-behavior, order-dependent. FULL probes against a fully-loaded comb so the
-delivered mode is chosen to stay feasible as the network fills: order-independent
-and margin-stable. FULL is acceptance-time only; the operating recompute is
+ACTUAL probes against the channels lit at probe time — order-dependent,
+optimistic. FULL (default) probes against a fully-loaded comb so the delivered
+mode is chosen to stay feasible as the network fills: order-independent and
+margin-stable. FULL is acceptance-time only; the operating recompute is
 untouched (see the plan's acceptance-only decision).
 """
 from multilayer_optical_mcp.model.assets import (
@@ -25,7 +25,8 @@ def test_build_loading_actual_includes_only_occupied_neighbors():
     """ACTUAL: probe + exactly the slots already lit on the path's OMS."""
     grid = SpectrumGrid.default()
     state = {"oms1": (1 << 5) | (1 << 7)}          # slots 5 and 7 lit
-    ls = _build_loading(grid, state, ("oms1",), probe_slot=10, ref_mode_id="ref")
+    ls = _build_loading(grid, state, ("oms1",), probe_slot=10, ref_mode_id="ref",
+                        fill_policy=FillPolicy.ACTUAL)
     slots = sorted(grid.slot_of(c.center_freq_hz) for c in ls.channels)
     assert slots == [5, 7, 10]                     # probe + 2 occupied neighbors
 
@@ -82,7 +83,8 @@ def test_solve_rsa_full_downshifts_relative_to_actual():
     qot = ChannelCountQot()
     demand = [{"id": "d1", "src": "A", "dst": "Z"}]
 
-    actual = solve_rsa(_one_route(), qot, demand)              # default ACTUAL
+    actual = solve_rsa(_one_route(), qot, demand,
+                      fill_policy=FillPolicy.ACTUAL)          # pinned: ACTUAL-specific
     full = solve_rsa(_one_route(), qot, demand, fill_policy=FillPolicy.FULL)
 
     assert actual.placements[0].working.mode_id == "400G"

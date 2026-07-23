@@ -94,7 +94,7 @@ def build_operating_network(
     store=None,
     settle: Optional[Callable[[NetworkModel], None]] = None,
     tol: float = 0.02,
-    fill_policy: FillPolicy = FillPolicy.ACTUAL,
+    fill_policy: FillPolicy = FillPolicy.FULL,
 ) -> ScenarioResult:
     """Build a loaded operating `NetworkModel` at ~`target_mean_util` mean IP-link
     utilization under a `max_util_cap` ceiling. See module docstring.

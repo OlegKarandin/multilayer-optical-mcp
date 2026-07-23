@@ -169,7 +169,7 @@ def _status(n_placed: int, n_unplaced: int) -> SolverStatus:
 def _build_loading(
     grid: SpectrumGrid, state: Dict[str, int], oms_sequence: Tuple[str, ...],
     probe_slot: int, ref_mode_id: str,
-    fill_policy: FillPolicy = FillPolicy.ACTUAL,
+    fill_policy: FillPolicy = FillPolicy.FULL,
 ) -> LoadingState:
     """Probe channel at *probe_slot* plus its WDM neighbors (which set NLI). Probe
     goes first so the adapter identifies it.
@@ -212,7 +212,7 @@ def _assign_on_route(
     model: NetworkModel, qot: QotEvaluator, route: OmsPath,
     state: Dict[str, int], grid: SpectrumGrid, ref_mode_id: str,
     require_gbps: Optional[float],
-    fill_policy: FillPolicy = FillPolicy.ACTUAL,
+    fill_policy: FillPolicy = FillPolicy.FULL,
 ) -> Optional[SpectrumAssignment]:
     """First-fit slot on *route* + the best feasible mode meeting *require_gbps*
     (if any). Does not mutate *state*."""
@@ -234,7 +234,7 @@ def _assign_on_route(
 
 def _place_unprotected(
     model, qot, src, dst, state, grid, ref_mode_id, require_gbps,
-    fill_policy: FillPolicy = FillPolicy.ACTUAL,
+    fill_policy: FillPolicy = FillPolicy.FULL,
 ) -> Optional[SpectrumAssignment]:
     """Among the candidate routes (length-ordered), choose the feasible
     assignment with the lowest slot index — spreading demands across disjoint
@@ -256,7 +256,7 @@ def _place_unprotected(
 def _place_protected(
     model, qot, src, dst, state, grid, ref_mode_id, require_gbps,
     basis, level, best_effort,
-    fill_policy: FillPolicy = FillPolicy.ACTUAL,
+    fill_policy: FillPolicy = FillPolicy.FULL,
 ) -> Optional[Tuple[SpectrumAssignment, SpectrumAssignment]]:
     dr = compute_disjoint_paths(model, src, dst, basis, level, best_effort,
                                 weight="length")
@@ -288,15 +288,16 @@ def _demand_constraints(d: dict) -> Tuple[str, str, bool]:
 def solve_rsa(
     model: NetworkModel, qot: QotEvaluator, demands: Sequence[dict],
     objective: str = "shortest", constraints: Optional[dict] = None,
-    fill_policy: FillPolicy = FillPolicy.ACTUAL,
+    fill_policy: FillPolicy = FillPolicy.FULL,
 ) -> RSAResult:
     """Route + spectrum-assign each demand. Demand:
     `{id, src, dst, protected?, required_gbps?, constraints?}` (src/dst = optical
     node ids). Protected demands get a disjoint working+protection pair under the
     demand's basis/level (default physical/link).
 
-    `fill_policy` picks the acceptance-probe reference loading (ACTUAL default;
-    FULL for margin-stable, order-independent mode selection — see FillPolicy)."""
+    `fill_policy` picks the acceptance-probe reference loading (FULL default, for
+    margin-stable, order-independent mode selection; ACTUAL is available for
+    order-dependent probing against only what's actually lit — see FillPolicy)."""
     grid = SpectrumGrid.default()
     work = build_spectrum_state(model, grid)
     ref_mode = model.modes.list()[0].id
@@ -364,7 +365,7 @@ def _merge_need(a: Dict[str, int], b: Dict[str, int]) -> Dict[str, int]:
 
 
 def _harvest_alloc(model, qot, g, src, dst, demand_gbps, k=8,
-                   fill_policy: FillPolicy = FillPolicy.ACTUAL):
+                   fill_policy: FillPolicy = FillPolicy.FULL):
     """The route_service harvest: groom_or_new + new_only frontiers on the CURRENT
     (consumed) loading, deduped on the λ-free route identity, materializable only.
     Cost order preserved — the frontier's discovery order IS 'shortest-available
@@ -389,7 +390,7 @@ def solve_allocation(
     model: NetworkModel, qot: QotEvaluator, demands: Sequence[dict],
     spare_inventory: Dict[str, int], objective: str = "max_placed",
     weights: Optional[Dict[str, float]] = None,
-    fill_policy: FillPolicy = FillPolicy.ACTUAL,
+    fill_policy: FillPolicy = FillPolicy.FULL,
 ) -> AllocationResult:
     """Weighted, consuming heuristic packer over the layered engine. Demand:
     `{id, src, dst, demand_gbps, protected?, constraints?}` (src/dst = optical node
@@ -412,7 +413,7 @@ def solve_allocation_model(
     model: NetworkModel, qot: QotEvaluator, demands: Sequence[dict],
     spare_inventory: Dict[str, int],
     weights: Optional[Dict[str, float]] = None,
-    fill_policy: FillPolicy = FillPolicy.ACTUAL,
+    fill_policy: FillPolicy = FillPolicy.FULL,
 ) -> Tuple[AllocationResult, NetworkModel]:
     """As `solve_allocation`, but also returns the fully-loaded `work` clone the
     packer built — lightpaths lit, IP links bound, services carrying load. `work`
@@ -428,7 +429,7 @@ def _pack(
     model: NetworkModel, qot: QotEvaluator, demands: Sequence[dict],
     spare_inventory: Dict[str, int],
     weights: Optional[Dict[str, float]],
-    fill_policy: FillPolicy = FillPolicy.ACTUAL,
+    fill_policy: FillPolicy = FillPolicy.FULL,
 ) -> Tuple[AllocationResult, NetworkModel]:
     """Shared packing core: consume demands on a clone, returning both the typed
     `AllocationResult` and the loaded clone. `solve_allocation` drops the clone;
