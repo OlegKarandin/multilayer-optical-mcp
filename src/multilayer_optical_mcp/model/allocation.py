@@ -84,7 +84,11 @@ def make_adapter_evaluator(model, store, *, topo_path=None, eqpt_path=None,
                 # probe = the channel compute_qot would pick when no center_freq_hz
                 # is given (first mode_id match = channels[0] under FULL, which
                 # prepends the probe) -- same selection rule as compute_qot's.
-                probe = next(c for c in loading.channels if c.mode_id == mode_id)
+                probe = next((c for c in loading.channels if c.mode_id == mode_id), None)
+                if probe is None:
+                    raise ValueError(
+                        f"loading does not include a channel for mode {mode_id!r}"
+                    )
                 probe_slot = grid.slot_of(probe.center_freq_hz)
                 if probe_slot in vec:
                     return vec[probe_slot]

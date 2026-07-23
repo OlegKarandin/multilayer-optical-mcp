@@ -30,7 +30,7 @@ def _full_comb(probe_slot):
 @pytest.mark.parametrize("direction", [Direction.FORWARD, Direction.BACKWARD])
 def test_harvest_matches_per_slot_compute_qot(direction):
     n = _toy_model()
-    oms = ("oms-AZ",) if direction == Direction.FORWARD else ("oms-AZ",)
+    oms = ("oms-AZ",)
     vec = harvest_qot(n, oms, direction, MODE, _full_comb(20))
     for slot in (10, 20, 30):
         state, _ = compute_qot(
