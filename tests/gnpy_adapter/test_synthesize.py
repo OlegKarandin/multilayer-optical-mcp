@@ -98,6 +98,17 @@ def test_roadm_target_pch_out_db_is_per_instance():
     assert roadm["params"]["target_pch_out_db"] == -17.0
 
 
+def test_roadm_add_drop_osnr_is_per_instance():
+    """S3-2 follow-up: ROADM.add_drop_osnr_db must reach the topology element,
+    not the hardcoded global 33.0."""
+    model = _model_with(roadm=ROADM(id="roadm_A", add_drop_osnr_db=38.0),
+                        amp=Amplifier(id="amp_x", type_variety="advanced_toy",
+                                      gain_db=20.0, nf_db=5.5))
+    topo = model_to_gnpy_topology(model)
+    roadm = next(e for e in topo["elements"] if e["uid"] == "roadm_A")
+    assert roadm["params"]["add_drop_osnr"] == 38.0
+
+
 def test_equipment_emits_one_fiber_entry_per_registered_type():
     """S3-1: every registered FiberType must produce its own equipment Fiber entry
     with its dispersion/effective_area/pmd, not just a single hardcoded SSMF."""

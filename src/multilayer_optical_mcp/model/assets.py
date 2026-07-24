@@ -42,6 +42,9 @@ class Amplifier:
 class ROADM:
     id: str
     target_pch_out_db: float = -20.0
+    # S3-2 follow-up: per-instance add/drop OSNR penalty. Default matches the
+    # historical ROADM_ADD_DROP_OSNR module constant in synthesize.py.
+    add_drop_osnr_db: float = 33.0
 
 
 @dataclass(frozen=True)

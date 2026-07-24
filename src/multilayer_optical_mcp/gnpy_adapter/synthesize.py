@@ -11,13 +11,12 @@ from ..model.network import NetworkModel
 from .bands import AMP_BAND, SI_BAND, TRANSCEIVER_BAND
 
 ROADM_TARGET_PCH_OUT_DB = -20.0
-# S3-2: every synthesized ROADM gets this add/drop OSNR penalty regardless of
-# hardware — there is no per-instance field on the `ROADM` dataclass to source
-# a different value from (unlike target_pch_out_db, which IS per-instance;
-# see S3-5 and model_to_gnpy_topology). A vendor ROADM with a genuinely
-# different add/drop floor is not representable without adding that field to
-# `ROADM` and threading it through synthesis the same way S3-5 did for
-# target_pch_out_db.
+# S3-2 follow-up: ROADM.add_drop_osnr_db is now per-instance (see model/assets.py)
+# and threaded through synthesis below the same way S3-5 did for
+# target_pch_out_db. This constant remains only as the equipment-library-level
+# default (required by gnpy's Roadm equipment entry), matching ROADM's own
+# dataclass default so a ROADM that doesn't override it behaves identically to
+# before.
 ROADM_ADD_DROP_OSNR = 33.0
 # Transponder launch power (dBm) — the TX-OSNR noise-floor reference. Distinct
 # from the design reference channel power (pch) and the ROADM target_pch_out.
@@ -54,7 +53,7 @@ def _physical_fingerprint(model: NetworkModel) -> tuple:
         (a.id, a.type_variety, a.gain_db, a.nf_db, a.tilt_db)
         for a in model._amplifiers.values()))
     roadms = tuple(sorted(
-        (r.id, r.target_pch_out_db) for r in model._roadms.values()))
+        (r.id, r.target_pch_out_db, r.add_drop_osnr_db) for r in model._roadms.values()))
     transceivers = tuple(sorted(
         (t.id, t.site) for t in model._transceivers.values()))
     fibers = tuple(sorted(
@@ -192,9 +191,11 @@ def model_to_gnpy_topology(model: NetworkModel) -> Dict[str, Any]:
     for r in model._roadms.values():
         # S3-5: emit the per-instance target_pch_out_db so a ROADM configured with
         # a non-default per-channel output power is honoured instead of silently
-        # overridden by the global equipment Roadm entry.
+        # overridden by the global equipment Roadm entry. S3-2 follow-up: same
+        # treatment for add_drop_osnr.
         elements.append({"uid": r.id, "type": "Roadm",
-                         "params": {"target_pch_out_db": r.target_pch_out_db}})
+                         "params": {"target_pch_out_db": r.target_pch_out_db,
+                                    "add_drop_osnr": r.add_drop_osnr_db}})
     for t in model._transceivers.values():
         elements.append({"uid": t.id, "type": "Transceiver"})
     for a in model._amplifiers.values():
