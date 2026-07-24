@@ -158,7 +158,7 @@ From `docs/superpowers/plans/2026-07-13-followups-and-next-steps.md` §3–4:
 
 **RESOLVED (2026-07-24), all of "DRY / layering polish"**
 (`docs/superpowers/plans/2026-07-23-section4-cleanup-batch.md`, commits
-`adfb4c7`..`0de53d0`, Tasks 1-5):
+`adfb4c7`..`3c832a1`, Tasks 1-5):
 - Harvest + λ-free dedup logic duplicated between `route_service._harvest` and
   `allocation._harvest_alloc` — folded into `placement_common._harvest_placements`
   (Task 3, commit `9424a19`); both callers now delegate to it.
