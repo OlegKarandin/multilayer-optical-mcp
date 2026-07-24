@@ -307,25 +307,40 @@ re-derived from source by a task reviewer, not just re-run):
 
 ## 6. Known, low-priority model simplifications (deliberately left as documented limitations, not bugs)
 
-- `TransceiverMode` still has no `roll_off` field — the QoT probe's spectral shape
-  uses a hardcoded 0.15 scalar regardless of mode (Stage 2 residual, confirmed
-  still true in current `assets.py`).
-- **Stage 7 finding 9, reconfirmed live:** `allocation._build_loading`/`place_demands`
-  probe QoT only at a fixed `ref_mode`, assuming GSNR is mode-independent given a
-  fixed probe shape — true today only because baud/roll-off isn't threaded from
-  the delivered mode into the probe.
+- **`TransceiverMode.roll_off` — RESOLVED (2026-07-24, commit `6118e6b`).**
+  The hardcoded 0.15 scalar was replaced with per-mode values. However, the residual
+  assumption remains: allocation's probe doesn't re-probe per delivered mode, so it
+  still assumes GSNR is mode-independent across the whole feasible-mode set (see
+  Stage 7 finding 9 below).
+- **Stage 7 finding 9, ref_mode probe — PARTIAL fix (2026-07-24, commit `6118e6b`).**
+  `allocation._build_loading`/`place_demands` probe QoT only at a fixed `ref_mode`,
+  assuming GSNR is mode-independent given a fixed probe shape. Task 1 fixed the
+  hardcoded roll-off (see roll_off item above), but the probe still doesn't re-probe
+  per delivered mode — the residual assumption remains open/untouched.
 - A long tail of "resolved as documented limitation" items from the inspection
-  roadmap (hardcoded 33dB ROADM add/drop penalty, flat NF polynomial in the
-  advanced amp model, decorative/unused `Fiber.a_end`/`z_end`, unread
-  `edge["num_spans"]`, approximate length-weighted k-shortest paths, `risk_groups`
-  avoid-key naming overlap with SRLG ids, best-effort disjoint overlap minimizing
-  shared-key *count* rather than severity, per-direction IP-capacity modeling
-  boundary, `overflow_gbps`/dropped-demand summing caveat, the OMS-disjoint-within-
-  one-placement assumption in hybrid placements, two independent `build_spectrum_state`
-  calls that could drift). None of these are flagged as broken — they're conscious
+  roadmap. Five were fixed in this cycle; the rest remain conscious simplifications:
+  - **33dB ROADM add/drop penalty — RESOLVED (2026-07-24, commit `0a0136f`).**
+    Per-instance add/drop OSNR now implemented.
+  - Flat NF polynomial in the advanced amp model (out of scope).
+  - **`Fiber.a_end`/`z_end` decorative/unused — RESOLVED (2026-07-24, commit
+    `d85220c`).** Fiber span 0 now correctly addresses a_end.
+  - **`edge["num_spans"]` unread — RESOLVED (2026-07-24, commit `5da6d88`).**
+    Num_spans cross-check on import now implemented.
+  - Approximate length-weighted k-shortest paths (out of scope).
+  - `risk_groups` avoid-key naming overlap with SRLG ids (confirmed-intentional design decision).
+  - Best-effort disjoint overlap minimizing shared-key *count* rather than severity
+    (confirmed-intentional design decision).
+  - Per-direction IP-capacity modeling boundary (out of scope).
+  - **`overflow_gbps`/dropped-demand summing caveat — already safe (commit
+    `8326ca7`, verified 2026-07-24).** No code fix required; confirmed double-count-safe in practice.
+  - OMS-disjoint-within-one-placement assumption in hybrid placements (out of scope).
+  - **Two independent `build_spectrum_state` calls — RESOLVED (2026-07-24, commit
+    `7a2299f`).** Unified via shared grid.
+
+  None of the original items were flagged as broken — they're conscious
   simplifications recorded so a future change doesn't reintroduce the underlying
-  assumption unknowingly. **All 11 items in this bundle reconfirmed STILL TRUE
-  against current source (2026-07-24 verification pass, HEAD `5555fc8`) — no drift.**
+  assumption unknowingly. **All items reconfirmed against current source (2026-07-24
+  verification pass, HEAD `5555fc8`) — no drift.**
 - **New (2026-07-23): amp band-edge always drops the top grid slot.** On this
   repo's `SpectrumGrid`/amp-band configuration, the topmost spectrum slot's
   occupied band (±50 GHz around center, for a 100 GHz-spaced grid) exceeds
