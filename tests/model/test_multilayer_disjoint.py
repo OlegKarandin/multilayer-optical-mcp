@@ -106,3 +106,32 @@ def test_no_disjoint_no_best_effort_returns_empty(diamond):
                    restored_gbps=100.0, shortfall_gbps=0.0)
     assert disjoint_pairs(model, [pA, pB], basis="physical", level="link",
                           best_effort=False, top_n=5) == []
+
+
+def test_top_n_truncates_disjoint_pairs_in_generation_order(diamond):
+    # Three mutually fiber/vertex-disjoint routes A->B (the direct span lpAB,
+    # and the M1/M2 detours): all three pairwise combinations are fully
+    # disjoint, so the pairwise scan (i,j) with i<j over [pA, pB, pC] produces
+    # exactly 3 pairs in generation order (0,1),(0,2),(1,2) before any
+    # truncation.
+    model = diamond
+    pA = Placement(reused_lightpaths=("lpAB",), new_lightpaths=(),
+                   restored_gbps=100.0, shortfall_gbps=0.0)
+    pB = Placement(reused_lightpaths=(),
+                   new_lightpaths=(NewLightpathRun(("omsAM1", "omsM1B"), 0, "100G",
+                                                   15.0, 100.0, src_node="A", dst_node="B"),),
+                   restored_gbps=100.0, shortfall_gbps=0.0)
+    pC = Placement(reused_lightpaths=(),
+                   new_lightpaths=(NewLightpathRun(("omsAM2", "omsM2B"), 1, "100G",
+                                                   15.0, 100.0, src_node="A", dst_node="B"),),
+                   restored_gbps=100.0, shortfall_gbps=0.0)
+
+    full = disjoint_pairs(model, [pA, pB, pC], basis="physical", level="link",
+                          best_effort=False, top_n=10)
+    assert len(full) == 3
+
+    truncated = disjoint_pairs(model, [pA, pB, pC], basis="physical", level="link",
+                               best_effort=False, top_n=2)
+    assert len(truncated) == 2
+    assert truncated[0].working is pA and truncated[0].protection is pB
+    assert truncated[1].working is pA and truncated[1].protection is pC
