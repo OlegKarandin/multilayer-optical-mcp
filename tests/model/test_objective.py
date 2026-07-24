@@ -58,12 +58,22 @@ def down_model():
 def test_objective_vector_on_seeded_state(loaded_model):
     r = evaluate_objective(loaded_model)
     assert isinstance(r, ObjectiveResult)
+    # Ground truth for the single-OMS/single-lightpath/single-service fixture:
+    # one occupied grid slot, one 80/200 Gbps IP link, nothing dropped, 80 km of
+    # propagation latency on the one active lightpath, margin (3.5) above the
+    # default 1.0 dB at-risk threshold.
+    assert r.spectrum_used == 1
     assert r.transponders == 2.0 * len(loaded_model.list_lightpaths())
-    assert r.max_util >= 0.0
+    assert r.max_util == pytest.approx(80.0 / 200.0)
+    assert r.dropped_traffic == 0.0
+    assert r.added_latency == pytest.approx(0.005 * 80.0)
+    assert r.services_at_risk == 0
+    assert r.total_margin == pytest.approx(3.5)
     # default weights = 1.0, total_margin subtracted:
-    assert r.scalar == (r.spectrum_used + r.transponders + r.max_util
-                        + r.dropped_traffic + r.added_latency
-                        + r.services_at_risk - r.total_margin)
+    assert r.scalar == pytest.approx(
+        r.spectrum_used + r.transponders + r.max_util
+        + r.dropped_traffic + r.added_latency
+        + r.services_at_risk - r.total_margin)
 
 
 def test_margin_negative_lightpath_scores_as_dropped_not_nominal(down_model):
