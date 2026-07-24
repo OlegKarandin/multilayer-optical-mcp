@@ -361,8 +361,7 @@ def build_app() -> FastMCP:
 
     @app.tool()
     def solve_allocation(
-        demands: list[dict], spare_inventory: dict,
-        objective: str = "max_placed", weights: dict | None = None,
+        demands: list[dict], spare_inventory: dict, weights: dict | None = None,
     ) -> dict:
         """Greenfield heuristic: light new lightpaths from a per-site transponder
         count to serve as many weighted demands as possible. Each demand:
@@ -373,8 +372,7 @@ def build_app() -> FastMCP:
         model = snapshots.current()
         qot = make_adapter_evaluator(model, results, harvest_cache=HarvestCache())
         return allocation_result_dict(
-            _solve_allocation(model, qot, demands, spare_inventory,
-                              objective=objective, weights=weights))
+            _solve_allocation(model, qot, demands, spare_inventory, weights=weights))
 
     @app.tool()
     def whatif_margin_threshold_sweep(threshold_db: float) -> dict:

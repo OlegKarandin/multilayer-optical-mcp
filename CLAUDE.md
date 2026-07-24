@@ -266,7 +266,7 @@ Group tools by capability. Names are stable contract; argument schemas are typed
   assets/groups when they are not. This is the scenario-1 catch — re-checking a
   deployed working/protection pair against a freshly injected risk group.
 - `solve_rsa(demands, objective, constraints)` — routing + spectrum assignment.
-- `solve_allocation(demands, spare_inventory, objective, weights)` — **heuristic**
+- `solve_allocation(demands, spare_inventory, weights)` — **heuristic**
   allocation for the joint case where many services contend for scarce transponders/
   spectrum. Operates over a multi-layer graph (IP demands routed over a layered
   IP-plus-optical graph whose edges carry capacity and spectrum constraints);

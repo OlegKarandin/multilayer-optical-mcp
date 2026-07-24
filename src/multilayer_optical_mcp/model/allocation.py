@@ -374,7 +374,7 @@ def _harvest_alloc(model, qot, g, src, dst, demand_gbps, k=_ROUTE_CAP,
 
 def solve_allocation(
     model: NetworkModel, qot: QotEvaluator, demands: Sequence[dict],
-    spare_inventory: Dict[str, int], objective: str = "max_placed",
+    spare_inventory: Dict[str, int],
     weights: Optional[Dict[str, float]] = None,
     fill_policy: FillPolicy = FillPolicy.FULL,
 ) -> AllocationResult:
