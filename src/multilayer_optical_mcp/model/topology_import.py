@@ -160,12 +160,11 @@ def _add_directed_oms(
     for i, span_km in enumerate(spans):
         fid = f"fiber_{src}_{dst}_{i}"
         aid = f"amp_{src}_{dst}_{i}"
-        # S3-add-4: a_end/z_end are DECORATIVE. They skip the booster (span
-        # 0's true predecessor in `elements`) and synthesis wires connections
-        # purely from OMS.elements order (synthesize.py), never from these
-        # fields. Auditing physical adjacency from Fiber.a_end/z_end reads a
-        # topology one hop off from what actually propagates.
-        n.add_fiber(Fiber(id=fid, a_end=f"roadm_{src}" if i == 0 else f"amp_{src}_{dst}_{i-1}",
+        # Fiber.a_end/z_end now match the fiber's real predecessor/successor in
+        # the elements chain (S3-add-4 follow-up): span 0's predecessor is the
+        # booster (elements = [roadm_src, booster, fiber_0, amp_0, ...]), not the
+        # ROADM directly — the ROADM has the booster between it and fiber_0.
+        n.add_fiber(Fiber(id=fid, a_end=booster_id if i == 0 else f"amp_{src}_{dst}_{i-1}",
                           z_end=aid, length_km=float(span_km), type_variety=fiber_type))
         nf_i = float(nfs[i]) if i < len(nfs) else DEFAULT_AMP_NF_DB
         gain = round(span_km * fiber_loss_coef, 2)

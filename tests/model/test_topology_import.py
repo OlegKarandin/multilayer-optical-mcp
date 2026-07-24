@@ -71,6 +71,22 @@ def test_import_tiny_graph_builds_optical_layer():
     assert n.get_amplifier("amp_0_1_0").nf_db == 5.5
 
 
+def test_import_fiber_a_end_z_end_match_oms_element_adjacency():
+    """S3-add-4 follow-up: Fiber.a_end/z_end must match the fiber's actual
+    predecessor/successor in the OMS elements chain, not skip the booster amp
+    for span 0."""
+    n = model_from_abstract_graph(_tiny_graph(), modes=_reg())
+    oms = n.get_oms("oms_0_1")
+    elements = oms.elements
+    for idx, el_id in enumerate(elements):
+        try:
+            fiber = n.get_fiber(el_id)
+        except KeyError:
+            continue
+        assert fiber.a_end == elements[idx - 1]
+        assert fiber.z_end == elements[idx + 1]
+
+
 def test_import_registers_fibertype_per_distinct_fiber_type():
     """Addendum-1: an edge naming a non-SSMF fiber_type must not crash the
     importer; the type is registered so add_fiber accepts it."""
