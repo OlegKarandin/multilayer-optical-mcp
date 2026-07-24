@@ -318,7 +318,8 @@ re-derived from source by a task reviewer, not just re-run):
   hardcoded roll-off (see roll_off item above), but the probe still doesn't re-probe
   per delivered mode — the residual assumption remains open/untouched.
 - A long tail of "resolved as documented limitation" items from the inspection
-  roadmap. Five were fixed in this cycle; the rest remain conscious simplifications:
+  roadmap. Four were fixed in this cycle (a fifth, `roll_off`, is the separate
+  bullet above); the rest remain conscious simplifications:
   - **33dB ROADM add/drop penalty — RESOLVED (2026-07-24, commit `0a0136f`).**
     Per-instance add/drop OSNR now implemented.
   - Flat NF polynomial in the advanced amp model (out of scope).
