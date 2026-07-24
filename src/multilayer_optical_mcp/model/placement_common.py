@@ -22,14 +22,22 @@ from .spectrum import FillPolicy, SpectrumGrid
 
 def _forbidden_assets(model: NetworkModel, avoid: Optional[dict]) -> FrozenSet[str]:
     """Physical asset ids to prune from the graph: the avoid-set's explicit
-    assets plus the members of any named SRLG / risk group. NOTE: do not expand
-    to endpoint nodes — a failed fiber must not condemn its healthy end ROADMs
-    (which would prune parallel survivor OMS sharing those nodes)."""
+    assets plus the members of any named SRLG (avoid.srlgs) or RiskGroup
+    (avoid.risk_groups) — searched as two separate namespaces (S6-7 fix,
+    2026-07-24), matching solvers.py's forbidden_oms and exposure.py's srlg:/rg:
+    convention. NOTE: do not expand to endpoint nodes — a failed fiber must not
+    condemn its healthy end ROADMs (which would prune parallel survivor OMS
+    sharing those nodes)."""
     avoid = avoid or {}
     bad = set(avoid.get("assets", ()))
+    avoid_srlgs = set(avoid.get("srlgs", ()))
     avoid_rgs = set(avoid.get("risk_groups", ()))
+    if avoid_srlgs:
+        for g in model.list_srlgs():
+            if g.id in avoid_srlgs:
+                bad.update(g.asset_ids)
     if avoid_rgs:
-        for g in list(model.list_srlgs()) + list(model.list_risk_groups()):
+        for g in model.list_risk_groups():
             if g.id in avoid_rgs:
                 bad.update(g.asset_ids)
     return frozenset(bad)

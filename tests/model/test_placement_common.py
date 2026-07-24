@@ -31,8 +31,18 @@ def test_forbidden_assets_expands_named_srlg_and_risk_group():
     n = _model()
     n.add_srlg(SRLG(id="srlg1", asset_ids=("fAB", "fBC")))
     n.define_risk_group("rg1", ("fXY",))
-    bad = _forbidden_assets(n, {"assets": ["fZZ"], "risk_groups": ["srlg1", "rg1"]})
+    bad = _forbidden_assets(n, {"assets": ["fZZ"], "srlgs": ["srlg1"],
+                               "risk_groups": ["rg1"]})
     assert bad == frozenset({"fZZ", "fAB", "fBC", "fXY"})
+
+
+def test_forbidden_assets_risk_groups_key_no_longer_matches_srlg():
+    """S6-7 fix: an SRLG id under avoid.risk_groups must not expand — srlgs and
+    risk_groups are now two distinct namespaces."""
+    n = _model()
+    n.add_srlg(SRLG(id="srlg1", asset_ids=("fAB", "fBC")))
+    bad = _forbidden_assets(n, {"risk_groups": ["srlg1"]})
+    assert bad == frozenset()
 
 
 def test_lever_hybrid_optical_reroute_ip_reroute():
