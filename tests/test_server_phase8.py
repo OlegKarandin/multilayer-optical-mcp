@@ -93,16 +93,35 @@ def test_route_service_result_dict_shape():
     assert d["candidates"][0]["cost_vector"] == {"transponders": 2.0, "scalar": -5.0}
     assert d["candidates"][0]["new_lightpaths"][0]["oms_sequence"] == ["omsAB"]
 
+    work_cand = RouteServiceCandidate(
+        lever="optical_reroute", reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 0, "100G", 15.0, 100.0),),
+        restored_gbps=100.0, shortfall_gbps=0.0, cost_vector={})
+    prot_cand = RouteServiceCandidate(
+        lever="ip_reroute", reused_lightpaths=("lp-existing",), new_lightpaths=(),
+        restored_gbps=100.0, shortfall_gbps=0.0, cost_vector={})
     pair_res = RouteServiceResult(
         status=SolverStatus.PARTIAL, service_id="svc1", demand_gbps=100.0,
         protected=True, candidates=(),
-        pairs=(RoutePair(working=cand, protection=cand, disjoint=False,
+        pairs=(RoutePair(working=work_cand, protection=prot_cand, disjoint=False,
                          shared_assets=("f_omsAB",), shared_groups=(),
                          cost_vector={"scalar": -3.0}),))
     d2 = route_service_result_dict(pair_res)
     assert d2["pairs"][0]["disjoint"] is False
     assert d2["pairs"][0]["shared_assets"] == ["f_omsAB"]
     assert d2["pairs"][0]["cost_vector"] == {"scalar": -3.0}
+    # The two legs must not be conflated -- distinct content in each key,
+    # matching real route_service's convention of an empty cost_vector per leg.
+    working = d2["pairs"][0]["working"]
+    protection = d2["pairs"][0]["protection"]
+    assert working["lever"] == "optical_reroute"
+    assert working["new_lightpaths"][0]["oms_sequence"] == ["omsAB"]
+    assert working["reused_lightpaths"] == []
+    assert working["cost_vector"] == {}
+    assert protection["lever"] == "ip_reroute"
+    assert protection["reused_lightpaths"] == ["lp-existing"]
+    assert protection["new_lightpaths"] == []
+    assert protection["cost_vector"] == {}
 
 
 def test_route_service_and_evaluate_objective_tools_registered():
