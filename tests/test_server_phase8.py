@@ -1,5 +1,6 @@
 # tests/test_server_phase8.py
 """compute_restoration MCP tool returns a structured candidate list."""
+import pytest
 from multilayer_optical_mcp.model.restoration import (
     RestorationResult, RestorationCandidate,
 )
@@ -113,3 +114,28 @@ def test_route_service_and_evaluate_objective_tools_registered():
     menu = _call(app, "route_service", service_id="svc1")
     assert menu["status"] in ("solution", "partial", "no_solution")
     assert menu["service_id"] == "svc1"
+
+
+def test_evaluate_objective_state_param_reads_the_named_snapshot_not_current():
+    app = build_app()
+    n = _seed(app)
+    # svc1 is unrouted (working_path=()) -> its 100 Gbps demand is dropped in
+    # whatever state we score it against.
+    baseline = _call(app, "evaluate_objective")
+    assert baseline["dropped_traffic"] == pytest.approx(100.0)
+
+    snap_id = _call(app, "snapshot_create")["id"]
+
+    # Mutate `current()` AFTER the snapshot: add a second unrouted service.
+    # The snapshot must not see it -- proving state=<id> resolves via
+    # snapshots.get(state), not snapshots.current().
+    app._snapshots.current().add_router(Router(id="RC", site="C"))
+    app._snapshots.current().add_service(Service(
+        id="svc2", src_router="RA", dst_router="RC",
+        demand_gbps=40.0, working_path=()))
+
+    current_after = _call(app, "evaluate_objective")
+    assert current_after["dropped_traffic"] == pytest.approx(140.0)   # svc1 + svc2
+
+    snapshot_result = _call(app, "evaluate_objective", state=snap_id)
+    assert snapshot_result["dropped_traffic"] == pytest.approx(100.0)  # svc1 only
