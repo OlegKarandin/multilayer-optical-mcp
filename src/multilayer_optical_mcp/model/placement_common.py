@@ -17,7 +17,7 @@ from typing import FrozenSet, Optional
 from .network import NetworkModel
 from .multilayer_graph import Placement, place_demands
 from .solvers import SolverStatus
-from .spectrum import FillPolicy
+from .spectrum import FillPolicy, SpectrumGrid
 
 
 def _forbidden_assets(model: NetworkModel, avoid: Optional[dict]) -> FrozenSet[str]:
@@ -64,19 +64,22 @@ def _status(has_any: bool, fully_satisfied: bool) -> SolverStatus:
 def _harvest_placements(
     model, qot, g, src, dst, demand_gbps, k,
     fill_policy: FillPolicy = FillPolicy.FULL,
+    grid: Optional[SpectrumGrid] = None,
 ) -> list:
     """groom_or_new + new_only frontiers over *g*, deduped on the lambda-free
     route identity (reused lightpath ids + new runs' oms_sequences) so a
     placement re-surfacing under both policies counts once. Shared by
     route_service.route_service (and, through it, restoration) and
     allocation's packer -- previously two independently drifting copies
-    (docs/2026-07-19-open-todos.md #4)."""
+    (docs/2026-07-19-open-todos.md #4). `grid`, when passed, must be the SAME
+    SpectrumGrid instance used to build *g* (S7-12 fix) — see the callers in
+    route_service.py / allocation.py."""
     out: list = []
     seen: set = set()
     for policy in ("groom_or_new", "new_only"):
         for p in place_demands(model, g, qot, src=src, dst=dst,
                                demand_gbps=demand_gbps, policy=policy, k=k,
-                               fill_policy=fill_policy):
+                               fill_policy=fill_policy, grid=grid):
             key = (p.reused_lightpaths, tuple(r.oms_sequence for r in p.new_lightpaths))
             if key in seen:
                 continue

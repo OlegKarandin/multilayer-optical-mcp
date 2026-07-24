@@ -304,3 +304,24 @@ def test_protected_best_effort_partial(diamond_service_shrunk):
     model, svc = diamond_service_shrunk
     res = route_service(model, FakeQot(), svc.id, protected=True, best_effort=True)
     assert res.status is SolverStatus.PARTIAL and not res.pairs[0].disjoint
+
+
+def test_route_service_threads_one_grid_through_layered_and_placement(monkeypatch):
+    """S7-12 fix: build_layered_graph and place_demands must share one
+    SpectrumGrid instance per route_service call, not two independently
+    defaulted ones that could desync if a non-default grid were ever used."""
+    import multilayer_optical_mcp.model.multilayer_graph as _mg
+
+    n = _empty_net_model()
+    seen_grids = []
+    real_build_spectrum_state = _mg.build_spectrum_state
+
+    def _spy(model, grid):
+        seen_grids.append(grid)
+        return real_build_spectrum_state(model, grid)
+
+    monkeypatch.setattr(_mg, "build_spectrum_state", _spy)
+    route_service(n, FakeQot(), "svc-AB")
+
+    assert len(seen_grids) >= 2
+    assert all(g is seen_grids[0] for g in seen_grids)

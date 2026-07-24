@@ -43,11 +43,11 @@ Stage 7 assumptions (recorded explicitly, from the inspection roadmap):
   light. Harmless today because successive runs in one placement are
   separated by grooming hops on different OMS (no shared-fiber NLI between
   them) — an unstated precondition, not a proof.
-- `build_layered_graph` and `place_demands` each call `build_spectrum_state`
-  independently (S7-12): they agree today because both default to
-  `SpectrumGrid.default()`, but passing a custom `grid` to one call and not
-  the other would desync the WLE wavelength layers from the NLI loading comb.
-  Thread one grid through both if that ever becomes a real caller pattern.
+- `build_layered_graph` and `place_demands` each independently accept a `grid`
+  parameter (S7-12, fixed): every caller that invokes both for the same
+  placement (`route_service.route_service`, `allocation`'s per-demand loop)
+  now builds one `SpectrumGrid` and threads it through both calls, so the two
+  `build_spectrum_state` calls can never desync on grid choice.
 """
 from __future__ import annotations
 

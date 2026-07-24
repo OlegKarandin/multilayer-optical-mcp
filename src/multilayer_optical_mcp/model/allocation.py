@@ -361,14 +361,15 @@ def _merge_need(a: Dict[str, int], b: Dict[str, int]) -> Dict[str, int]:
 
 
 def _harvest_alloc(model, qot, g, src, dst, demand_gbps, k=_ROUTE_CAP,
-                   fill_policy: FillPolicy = FillPolicy.FULL):
+                   fill_policy: FillPolicy = FillPolicy.FULL,
+                   grid: Optional[SpectrumGrid] = None):
     """allocation's materializable-only view of the shared groom_or_new +
     new_only harvest (placement_common._harvest_placements): filters out any
     placement whose new run ends at a router-less optical node or whose reused
     lightpath has no bound IP link, same as route_service's post-harvest
     filter."""
     placements = _harvest_placements(model, qot, g, src, dst, demand_gbps, k,
-                                     fill_policy=fill_policy)
+                                     fill_policy=fill_policy, grid=grid)
     return [p for p in placements if _objective.placement_materializable(model, p)]
 
 
@@ -448,9 +449,12 @@ def _pack(
         # Rebuilt every iteration, not hoisted above the loop: `work`'s loading
         # changes each time a demand is placed (a new lightpath lit or a
         # survivor's residual consumed), so a stale graph built before this
-        # demand would route against yesterday's spectrum/grooming state.
-        g = build_layered_graph(work)
-        cands = _harvest_alloc(work, qot, g, src, dst, gbps, fill_policy=fill_policy)
+        # demand would route against yesterday's spectrum/grooming state. One
+        # grid instance is threaded through both calls (S7-12 fix) so the graph
+        # build and the placement probe never desync on grid choice.
+        grid = SpectrumGrid.default()
+        g = build_layered_graph(work, grid=grid)
+        cands = _harvest_alloc(work, qot, g, src, dst, gbps, fill_policy=fill_policy, grid=grid)
         if not cands:
             unplaced.append((did, "no feasible route"))
             continue

@@ -17,6 +17,7 @@ from .multilayer_graph import build_layered_graph, NewLightpathRun
 from .placement_common import _forbidden_assets, _lever, _status, _harvest_placements
 from .multilayer_disjoint import disjoint_pairs
 from .objective import score_candidate, score_pair, placement_materializable
+from .spectrum import SpectrumGrid
 
 
 @dataclass(frozen=True)
@@ -68,8 +69,9 @@ def route_service(model: NetworkModel, qot, service_id: str, *, protected: bool 
     svc = model.get_service(service_id)
     src = model.get_router(svc.src_router).site
     dst = model.get_router(svc.dst_router).site
-    g = build_layered_graph(model, forbidden_assets=_forbidden_assets(model, avoid))
-    placements = _harvest_placements(model, qot, g, src, dst, svc.demand_gbps, k)
+    grid = SpectrumGrid.default()
+    g = build_layered_graph(model, forbidden_assets=_forbidden_assets(model, avoid), grid=grid)
+    placements = _harvest_placements(model, qot, g, src, dst, svc.demand_gbps, k, grid=grid)
     # A placement whose new run terminates at a router-less optical node cannot be
     # bound to an IP link (score_candidate/score_pair would KeyError provisioning
     # it). Such a placement is an INFEASIBLE service-routing candidate: exclude it

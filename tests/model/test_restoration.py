@@ -144,7 +144,7 @@ def test_cross_bucket_dedup_ignores_wavelength(monkeypatch):
     from multilayer_optical_mcp.model.multilayer_graph import Placement, NewLightpathRun
 
     def _fake_place(model, g, qot, *, src, dst, demand_gbps, policy, k=8,
-                    fill_policy=None):
+                    fill_policy=None, grid=None):
         # same physical route (oms-AB), different representative lambda per pass
         lam = 0 if policy == "groom_or_new" else 3
         run = NewLightpathRun(("oms-AB",), lam, "100G", 15.0, 100.0,

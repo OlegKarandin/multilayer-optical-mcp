@@ -124,3 +124,25 @@ def test_protected_insufficient_inventory_unplaced():
                            spare_inventory={"A": 1, "Z": 1})  # need 2 each
     assert res.status is SolverStatus.NO_SOLUTION
     assert res.unplaced[0] == ("d1", "insufficient transponders")
+
+
+def test_solve_allocation_threads_one_grid_through_layered_and_placement(monkeypatch):
+    """S7-12 fix: build_layered_graph and place_demands must share one
+    SpectrumGrid instance per demand placement."""
+    import multilayer_optical_mcp.model.multilayer_graph as _mg
+
+    n = _two_routes()
+    seen_grids = []
+    real_build_spectrum_state = _mg.build_spectrum_state
+
+    def _spy(model, grid):
+        seen_grids.append(grid)
+        return real_build_spectrum_state(model, grid)
+
+    monkeypatch.setattr(_mg, "build_spectrum_state", _spy)
+    solve_allocation(n, _hi_qot(),
+                     [{"id": "d1", "src": "A", "dst": "Z", "demand_gbps": 400.0}],
+                     spare_inventory={"A": 2, "Z": 2})
+
+    assert len(seen_grids) >= 2
+    assert all(g is seen_grids[0] for g in seen_grids)
