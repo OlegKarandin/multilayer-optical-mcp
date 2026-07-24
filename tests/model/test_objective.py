@@ -55,6 +55,50 @@ def down_model():
     return n
 
 
+@pytest.fixture
+def down_and_congested_model():
+    """Two independent spans: A-B's lightpath is margin-negative (down -> its
+    service svc-AB, demand 80, is fully dropped) and C-D's lightpath is
+    margin-positive but its service's demand (250) exceeds the mode's 200 Gbps
+    capacity (congested -> 50 Gbps overflow). Down and congested links are
+    disjoint SETS per IPRoutingResult's docstring (ip_routing.py:187-192): this
+    fixture locks in that dropped_traffic sums both contributions exactly once
+    each, rather than double-counting either service."""
+    n = _base_model()
+    n.set_qot_state("lpAB", QoTState(gsnr_db=18.0, osnr_db=20.0, margin_db=-0.5))
+    n.add_amplifier(Amplifier(id="a3", type_variety="advanced_toy",
+                              gain_db=20.0, nf_db=5.5))
+    n.add_fiber(Fiber(id="fCD", a_end="a3", z_end="a4", length_km=80.0,
+                      type_variety="SSMF"))
+    n.add_amplifier(Amplifier(id="a4", type_variety="advanced_toy",
+                              gain_db=20.0, nf_db=5.5))
+    for node in ("C", "D"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    n.add_oms(OMS(id="omsCD", src_node_id="C", dst_node_id="D",
+                  elements=("roadm_C", "a3", "fCD", "a4")))
+    n.add_lightpath(Lightpath(id="lpCD", oms_sequence=("omsCD",),
+                              mode_id="200G-16QAM", center_freq_hz=193.5e12))
+    n.set_qot_state("lpCD", QoTState(gsnr_db=22.0, osnr_db=24.0, margin_db=3.5))
+    n.add_router(Router(id="R-C", site="C"))
+    n.add_router(Router(id="R-D", site="D"))
+    n.add_ip_link(IPLink(id="ipCD", a_router="R-C", z_router="R-D",
+                         lightpath_id="lpCD"))
+    n.add_service(Service(id="svc-CD", src_router="R-C", dst_router="R-D",
+                          demand_gbps=250.0, working_path=("ipCD",)))
+    return n
+
+
+def test_dropped_traffic_sums_down_and_overflow_without_double_counting(
+        down_and_congested_model):
+    from multilayer_optical_mcp.model.ip_routing import simulate_ip_routing
+    n = down_and_congested_model
+    ipr = simulate_ip_routing(n)
+    assert {d.service_id for d in ipr.dropped_services} == {"svc-AB"}
+    assert ipr.overflow_gbps == pytest.approx(50.0)          # 250 - 200 on ipCD
+    r = evaluate_objective(n)
+    assert r.dropped_traffic == pytest.approx(130.0)         # 80 (down) + 50 (overflow)
+
+
 def test_objective_vector_on_seeded_state(loaded_model):
     r = evaluate_objective(loaded_model)
     assert isinstance(r, ObjectiveResult)
