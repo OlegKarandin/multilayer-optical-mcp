@@ -111,30 +111,36 @@ def oms_length_km(model: NetworkModel, oms_id: str) -> float:
     return total
 
 
-def _avoid_sets(constraints: Optional[dict]) -> Tuple[frozenset, frozenset]:
-    """Extract (avoid_assets, avoid_risk_groups) from a constraints dict.
-    Missing/empty -> empty sets (no pruning).
+def _avoid_sets(constraints: Optional[dict]) -> Tuple[frozenset, frozenset, frozenset]:
+    """Extract (avoid_assets, avoid_srlgs, avoid_risk_groups) from a constraints
+    dict. Missing/empty -> empty sets (no pruning).
 
-    S6-7: despite the name, the `risk_groups` constraint key matches BOTH
-    RiskGroup ids and static SRLG ids — see forbidden_oms, which iterates
-    `list_srlgs() + list_risk_groups()`. An id collision between an SRLG and a
-    RiskGroup expands both. Intentional (one avoid-key for "any named group"),
-    not a bug — documented rather than split into two keys."""
+    S6-7 fix (2026-07-24): srlgs and risk_groups are now two distinct namespaces
+    (mirrors exposure.py's srlg:/rg: keys) instead of one risk_groups key matching
+    both static SRLGs and dynamic RiskGroups — an id collision between the two no
+    longer silently expands both."""
     avoid = (constraints or {}).get("avoid") or {}
-    return frozenset(avoid.get("assets", ())), frozenset(avoid.get("risk_groups", ()))
+    return (frozenset(avoid.get("assets", ())),
+            frozenset(avoid.get("srlgs", ())),
+            frozenset(avoid.get("risk_groups", ())))
 
 
 def forbidden_oms(
-    model: NetworkModel, avoid_assets: frozenset, avoid_risk_groups: frozenset,
+    model: NetworkModel, avoid_assets: frozenset, avoid_srlgs: frozenset,
+    avoid_risk_groups: frozenset,
 ) -> frozenset:
     """OMS ids to prune: an OMS is forbidden if any of its assets (own id,
     fiber/amp/roadm elements, or either endpoint node) is in avoid_assets, or if
-    a risk group / SRLG named in avoid_risk_groups has a member intersecting the
-    OMS's physical asset set."""
-    if not avoid_assets and not avoid_risk_groups:
+    a named SRLG (avoid_srlgs) or RiskGroup (avoid_risk_groups) has a member
+    intersecting the OMS's physical asset set. SRLGs and RiskGroups are searched
+    separately (S6-7 fix) — an id collision between the two no longer double-matches."""
+    if not avoid_assets and not avoid_srlgs and not avoid_risk_groups:
         return frozenset()
     group_members: set = set()
-    for g in list(model.list_srlgs()) + list(model.list_risk_groups()):
+    for g in model.list_srlgs():
+        if g.id in avoid_srlgs:
+            group_members.update(g.asset_ids)
+    for g in model.list_risk_groups():
         if g.id in avoid_risk_groups:
             group_members.update(g.asset_ids)
     bad: set = set()
@@ -232,8 +238,8 @@ def compute_paths(
 ) -> RoutingResult:
     """k-shortest OMS routes src->dst (`weight` ∈ {"hops", "length"}). No route
     -> typed NO_SOLUTION."""
-    avoid_assets, avoid_rgs = _avoid_sets(constraints)
-    forbidden = forbidden_oms(model, avoid_assets, avoid_rgs)
+    avoid_assets, avoid_srlgs, avoid_rgs = _avoid_sets(constraints)
+    forbidden = forbidden_oms(model, avoid_assets, avoid_srlgs, avoid_rgs)
     paths = tuple(_enumerate_oms_paths(model, src, dst, k, weight=weight, forbidden=forbidden))
     if not paths:
         return RoutingResult(status=SolverStatus.NO_SOLUTION, paths=())
@@ -300,8 +306,8 @@ def compute_disjoint_paths(
     weighted by asset count: the cap-32 candidate window (_DISJOINT_CANDIDATE_CAP)
     already makes an exact severity ranking unreliable, so a naive weighting
     would be false precision."""
-    avoid_assets, avoid_rgs = _avoid_sets(constraints)
-    forbidden = forbidden_oms(model, avoid_assets, avoid_rgs)
+    avoid_assets, avoid_srlgs, avoid_rgs = _avoid_sets(constraints)
+    forbidden = forbidden_oms(model, avoid_assets, avoid_srlgs, avoid_rgs)
     cands = list(_enumerate_oms_paths(model, src, dst, _DISJOINT_EMISSION_CAP,
                                       weight=weight, forbidden=forbidden,
                                       max_node_paths=_DISJOINT_CANDIDATE_CAP))

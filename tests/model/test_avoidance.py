@@ -41,9 +41,20 @@ def test_avoid_parallel_in_different_srlg_keeps_the_other():
     n = _two_parallel()
     n.add_srlg(SRLG(id="srlg-north", asset_ids=("fiber-north",)))
     res = compute_paths(n, "A", "B", k=4,
-                        constraints={"avoid": {"risk_groups": ["srlg-north"]}})
+                        constraints={"avoid": {"srlgs": ["srlg-north"]}})
     found = {p.oms_sequence for p in res.paths}
     assert found == {("oms-south",)}
+
+
+def test_avoid_risk_groups_no_longer_matches_srlg_id():
+    """S6-7 fix: an SRLG id under avoid.risk_groups must NOT prune anything —
+    risk_groups now matches RiskGroup ids only, srlgs matches SRLG ids only."""
+    n = _two_parallel()
+    n.add_srlg(SRLG(id="srlg-north", asset_ids=("fiber-north",)))
+    res = compute_paths(n, "A", "B", k=4,
+                        constraints={"avoid": {"risk_groups": ["srlg-north"]}})
+    found = {p.oms_sequence for p in res.paths}
+    assert found == {("oms-north",), ("oms-south",)}   # nothing pruned
 
 
 def test_avoid_all_routes_is_typed_no_solution():
