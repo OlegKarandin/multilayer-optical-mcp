@@ -281,27 +281,27 @@ re-derived from source by a task reviewer, not just re-run):
   Phase 1–2 foundation plan; no evidence it was ever built.
 - **Sensitivity tooling** (derive sensitivity by differencing `QoTBreakdown`s
   across branches) — same origin, same status: flagged, never built.
-- **Regen-node transponder-inventory gating — CONFIRMED GAP (2026-07-24).** Moved
-  here from §6, where it was carried as "status unclear." Verification pass found it
-  is simply not built: the `multilayer-graph-restoration` design doc
-  (`docs/plans/2026-06-14-multilayer-graph-restoration-design.md:73-75,164-166`)
-  promises regen-node transponder availability is "checked at validate/commit
-  (Phase 7)," but `validate_plan`/`commit_plan` (`model/validate.py`, `model/commit.py`)
-  have no transponder/inventory/regen check at all — `ViolationType`'s full enum is
-  `MODE_INFEASIBLE`, `SPECTRUM_CLASH`, `IP_LINK_OVERLOAD`, `DROPPED_TRAFFIC`,
+- **Regen-node transponder-inventory gating — ACCEPTED SIMPLIFICATION (decided
+  2026-07-24, superseding the "CONFIRMED GAP" framing below).** Verification pass
+  (2026-07-24) found it is simply not built: the `multilayer-graph-restoration` design doc
+  (`docs/plans/2026-06-14-multilayer-graph-restoration-design.md:73-75,164-166`, now
+  corrected) had promised regen-node transponder availability would be "checked at
+  validate/commit (Phase 7)," but `validate_plan`/`commit_plan` (`model/validate.py`,
+  `model/commit.py`) have no transponder/inventory/regen check at all — `ViolationType`'s
+  full enum is `MODE_INFEASIBLE`, `SPECTRUM_CLASH`, `IP_LINK_OVERLOAD`, `DROPPED_TRAFFIC`,
   `DISJOINTNESS_COLLAPSE`, `PROTECTION_NOT_VIABLE`, `PROTECTION_OVERSUBSCRIBED`,
   `INVALID_PLAN`, with no inventory variant, and grep for
   `transponder|spare|inventory|regen` across both files is empty. The only inventory
   gating in the repo is `solve_allocation`'s `spare_inventory`-driven `_tp_need`/
   `_inv_ok`/`_dec_inv` in `model/allocation.py:336-353,466-488` — a separate heuristic
-  packer, never called by `compute_restoration` or `validate_plan`. Net effect:
-  `validate_plan` will pass a restoration plan that adds a new lightpath through a
-  regen node with zero spare transponders. No test exercises this (`test_validate.py`,
-  `test_validate_transient.py`, `test_commit_reconcile.py`,
-  `test_commit_qot_convergence.py` all have zero `transponder|inventory|spare|regen`
-  hits). Needs a new `ViolationType` (e.g. `REGEN_INVENTORY_EXHAUSTED`) plus a
-  validate-time check against regen-node spare transponder counts, wired from
-  `compute_restoration`'s regen candidates through to `validate_plan`.
+  packer, never called by `compute_restoration` or `validate_plan`. Given the choice, the
+  decision was made **not** to build validate/commit-time gating: regen-node transponder
+  capacity is now assumed infinite. Reasoning: gating requires pre-planning regen capacity
+  (which node needs how many spares, replenishment, etc.), a nontrivial planning problem
+  of its own that isn't worth the complexity for this repo's scope.
+  `solve_allocation`'s `spare_inventory` packer remains available, unchanged, for callers
+  who explicitly want scarcity modeling (e.g. capacity-planning use cases) — only the
+  validate/commit path stays ungated. No `ViolationType`/check will be added for this.
 
 ---
 
@@ -312,11 +312,14 @@ re-derived from source by a task reviewer, not just re-run):
   assumption remains: allocation's probe doesn't re-probe per delivered mode, so it
   still assumes GSNR is mode-independent across the whole feasible-mode set (see
   Stage 7 finding 9 below).
-- **Stage 7 finding 9, ref_mode probe — PARTIAL fix (2026-07-24, commit `6118e6b`).**
-  `allocation._build_loading`/`place_demands` probe QoT only at a fixed `ref_mode`,
-  assuming GSNR is mode-independent given a fixed probe shape. Task 1 fixed the
-  hardcoded roll-off (see roll_off item above), but the probe still doesn't re-probe
-  per delivered mode — the residual assumption remains open/untouched.
+- **Stage 7 finding 9, ref_mode probe — ACCEPTED (2026-07-24, commit `6118e6b` +
+  decision same day).** `allocation._build_loading`/`place_demands` probe QoT only at
+  a fixed `ref_mode`, assuming GSNR is mode-independent given a fixed probe shape.
+  Task 1 fixed the hardcoded roll-off (see roll_off item above), which closed the
+  main GSNR-affecting way modes actually differ (spectral shape). The residual —
+  not re-probing per delivered mode — is accepted as a modeling simplification, not
+  scheduled for further work: different modes are treated as equivalent for probing
+  purposes.
 - A long tail of "resolved as documented limitation" items from the inspection
   roadmap. Four were fixed in this cycle (a fifth, `roll_off`, is the separate
   bullet above); the rest remain conscious simplifications:
@@ -328,10 +331,28 @@ re-derived from source by a task reviewer, not just re-run):
   - **`edge["num_spans"]` unread — RESOLVED (2026-07-24, commit `5da6d88`).**
     Num_spans cross-check on import now implemented.
   - Approximate length-weighted k-shortest paths (out of scope).
-  - `risk_groups` avoid-key naming overlap with SRLG ids (confirmed-intentional design decision).
+  - **`risk_groups` avoid-key naming overlap with SRLG ids — RESOLVED (2026-07-24,
+    commits `93771c4`, `0d03de2`).** Per
+    `docs/superpowers/plans/2026-07-24-avoid-key-namespace-split.md`: `avoid.risk_groups`
+    now matches dynamic RiskGroup ids only; a new `avoid.srlgs` key matches static SRLG
+    ids. Fixed independently in both implementations that had it —
+    `solvers.py`'s `_avoid_sets`/`forbidden_oms` (used by `compute_paths`/
+    `compute_disjoint_paths`) and `placement_common.py`'s `_forbidden_assets` (used by
+    `route_service`/`compute_restoration`/`solve_allocation`) — mirroring the `srlg:`/
+    `rg:` namespacing `model/exposure.py` already used for disjointness comparisons.
+    Breaking change, deliberate: an SRLG id passed under `avoid.risk_groups` no longer
+    matches (must move to `avoid.srlgs`); confirmed via repo-wide grep that no
+    production caller relied on the old conflation, only two tests did (now updated).
   - Best-effort disjoint overlap minimizing shared-key *count* rather than severity
     (confirmed-intentional design decision).
-  - Per-direction IP-capacity modeling boundary (out of scope).
+  - **Per-direction IP-capacity modeling boundary (out of scope; scope narrowed
+    2026-07-24).** CLAUDE.md's per-direction QoT rationale no longer cites storms as
+    the motivating asymmetric case — storm/heatwave degradation is now modeled
+    symmetric (both directions of an affected fiber), so this boundary is not
+    exercised by the disaster scenarios. It remains a real limitation for other
+    asymmetric failure modes (e.g. a construction dig-in or splice fault damaging one
+    direction only), where `ip_link_capacity_gbps`'s single `QoTState` per lightpath
+    still can't surface a directional capacity difference. Still out of scope to fix.
   - **`overflow_gbps`/dropped-demand summing caveat — already safe (commit
     `8326ca7`, verified 2026-07-24).** No code fix required; confirmed double-count-safe in practice.
   - OMS-disjoint-within-one-placement assumption in hybrid placements (out of scope).

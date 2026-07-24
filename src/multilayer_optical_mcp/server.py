@@ -416,7 +416,9 @@ def build_app() -> FastMCP:
     @app.tool()
     def compute_restoration(service_id: str, avoid: dict | None = None) -> dict:
         """Enumerate recovery candidates for a service over survivors. `avoid` is
-        {assets?: [...], risk_groups?: [...]} (typically a failure's asset set).
+        {assets?: [...], srlgs?: [...], risk_groups?: [...]} (typically a
+        failure's asset set). `srlgs` matches static SRLG ids, `risk_groups`
+        matches dynamic RiskGroup ids only (distinct namespaces).
         Read-only: returns typed candidates (full + degraded) with status
         solution/partial/no_solution. Does not mutate or commit anything."""
         model = snapshots.current()
@@ -497,10 +499,12 @@ def build_app() -> FastMCP:
                       best_effort: bool = False, avoid: dict | None = None,
                       weights: dict | None = None) -> dict:
         """Service-level routing/restoration menu on the layered graph. avoid=None ->
-        first-time routing; avoid={assets?,risk_groups?} -> restoration. protected=True
-        returns a disjoint-pair menu (best_effort -> min-overlap PARTIAL). Read-only.
-        weights: per-cost-term weights for the 7-term objective scalar (e.g.
-        {"transponders": 2.0}); not a per-demand priority."""
+        first-time routing; avoid={assets?,srlgs?,risk_groups?} -> restoration
+        (srlgs matches static SRLG ids, risk_groups matches dynamic RiskGroup ids
+        only). protected=True returns a disjoint-pair menu (best_effort ->
+        min-overlap PARTIAL). Read-only. weights: per-cost-term weights for the
+        7-term objective scalar (e.g. {"transponders": 2.0}); not a per-demand
+        priority."""
         model = snapshots.current()
         qot = make_adapter_evaluator(model, results, harvest_cache=HarvestCache())
         res = _route_service(model, qot, service_id, protected=protected, basis=basis,

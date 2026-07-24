@@ -2,7 +2,9 @@
 """Service-level routing/restoration on the layered graph (menu, no-consume).
 
 avoid=None -> first-time routing (empty net -> all-new candidates).
-avoid={assets?, risk_groups?} -> restoration over survivors.
+avoid={assets?, srlgs?, risk_groups?} -> restoration over survivors. srlgs matches
+static SRLG ids, risk_groups matches dynamic RiskGroup ids only (two distinct
+namespaces, S6-7 fix).
 protected=False -> up to k single candidates; protected=True -> disjoint-pair menu.
 Read-only: every score is computed on a throwaway clone.
 """

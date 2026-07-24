@@ -1,8 +1,9 @@
 # src/multilayer_optical_mcp/model/restoration.py
 """Per-service restoration: enumerate recovery candidates over survivors.
 
-Read-only. Prunes the layered graph by an avoid-set (failed assets / risk
-groups), harvests k-best placements over the groom_or_new frontier plus a
+Read-only. Prunes the layered graph by an avoid-set (failed assets / SRLGs / risk
+groups — srlgs and risk_groups are distinct namespaces, S6-7 fix), harvests
+k-best placements over the groom_or_new frontier plus a
 new_only fallback, and returns typed candidates (lever ip_reroute / optical_reroute
 / hybrid) with restored/shortfall capacity. Execution (validate_plan/commit_plan/
 provision_lightpath) is Phase 7; this tool only enumerates.
@@ -41,7 +42,9 @@ def compute_restoration(
     model: NetworkModel, qot, service_id: str, avoid: Optional[dict] = None,
 ) -> RestorationResult:
     """Enumerate recovery candidates for a service over survivors. `avoid` is
-    `{assets?: [...], risk_groups?: [...]}` (typically inject_failure's set).
+    `{assets?: [...], srlgs?: [...], risk_groups?: [...]}` (typically
+    inject_failure's set). `srlgs` matches static SRLG ids, `risk_groups` matches
+    dynamic RiskGroup ids only.
 
     Thin wrapper over route_service's single-candidate (unprotected) menu: the
     harvest, dedup, and materializability filtering all live there now. Ranking
