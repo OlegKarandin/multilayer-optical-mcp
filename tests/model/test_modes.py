@@ -62,3 +62,32 @@ def test_yaml_loader_reads_per_format_symbol_rate(tmp_path):
     by_bitrate = {m.bitrate_gbps: m for m in load_modulation_formats(p).list()}
     assert by_bitrate[400.0].symbol_rate_baud == 87.5e9   # inherits default
     assert by_bitrate[1200.0].symbol_rate_baud == 140.0e9  # per-format override
+
+
+def test_yaml_loader_defaults_roll_off_when_absent():
+    """modulation_formats.yaml has no roll_off key anywhere; every mode must
+    still get the 0.15 scalar that used to be hardcoded in the adapter."""
+    reg = load_modulation_formats(MOD_FORMATS_YAML)
+    for m in reg.list():
+        assert m.roll_off == 0.15
+
+
+def test_yaml_loader_reads_per_format_roll_off(tmp_path):
+    """Mirrors S2-4's symbol_rate_gbaud pattern: a format that declares its own
+    roll_off overrides the file-level default; formats without one inherit it."""
+    yaml_text = (
+        "channel_spacing_ghz: 100\n"
+        "symbol_rate_gbaud: 87.5\n"
+        "roll_off: 0.15\n"
+        "formats:\n"
+        "  - bitrate_gbps: 400\n"
+        "    snr_threshold_db: 7.1\n"
+        "  - bitrate_gbps: 1200\n"
+        "    snr_threshold_db: 20.0\n"
+        "    roll_off: 0.3\n"
+    )
+    p = tmp_path / "mf.yaml"
+    p.write_text(yaml_text, encoding="utf-8")
+    by_bitrate = {m.bitrate_gbps: m for m in load_modulation_formats(p).list()}
+    assert by_bitrate[400.0].roll_off == 0.15    # inherits file-level default
+    assert by_bitrate[1200.0].roll_off == 0.3    # per-format override

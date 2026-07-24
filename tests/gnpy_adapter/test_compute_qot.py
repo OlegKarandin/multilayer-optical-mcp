@@ -24,7 +24,7 @@ from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot_results import QoTResultStore
 
 
-def _toy_model():
+def _toy_model(roll_off: float = 0.15):
     reg = ModeRegistry([
         TransceiverMode(
             id="400G@7.1dB",
@@ -32,6 +32,7 @@ def _toy_model():
             required_gsnr_db=7.1,
             symbol_rate_baud=87.5e9,
             channel_spacing_hz=100e9,
+            roll_off=roll_off,
         ),
         TransceiverMode(
             id="800G@15.1dB",
@@ -39,6 +40,7 @@ def _toy_model():
             required_gsnr_db=15.1,
             symbol_rate_baud=87.5e9,
             channel_spacing_hz=100e9,
+            roll_off=roll_off,
         ),
         TransceiverMode(
             id="impossible",
@@ -46,6 +48,7 @@ def _toy_model():
             required_gsnr_db=100.0,
             symbol_rate_baud=87.5e9,
             channel_spacing_hz=100e9,
+            roll_off=roll_off,
         ),
     ])
     n = NetworkModel(modes=reg)
@@ -234,3 +237,30 @@ def test_mode_feasible_flips_when_gsnr_below_required():
     )
     assert state.mode_feasible is False
     assert state.margin_db < 0
+
+
+def test_probe_roll_off_is_sourced_from_mode_not_hardcoded(monkeypatch):
+    """S2-4 follow-up: build_si_for_loading's roll_off scalar must come from the
+    probed mode's own TransceiverMode.roll_off, not a bare 0.15 literal that
+    ignores which mode is being evaluated."""
+    from multilayer_optical_mcp.gnpy_adapter import adapter as _adapter
+    from multilayer_optical_mcp.gnpy_adapter.translate import build_si_for_loading as _real
+
+    captured = {}
+
+    def _spy(loading, *, baud_rate, roll_off, **kw):
+        captured["roll_off"] = roll_off
+        return _real(loading, baud_rate=baud_rate, roll_off=roll_off, **kw)
+
+    monkeypatch.setattr(_adapter, "build_si_for_loading", _spy)
+
+    n = _toy_model(roll_off=0.3)
+    store = QoTResultStore()
+    loading = LoadingState(channels=(
+        Channel(center_freq_hz=193.4e12, slot_width_hz=100e9,
+                power_dbm=None, mode_id="400G@7.1dB"),
+    ))
+    compute_qot(model=n, store=store, oms_sequence=("oms-AZ",),
+               direction=Direction.FORWARD, mode_id="400G@7.1dB", loading=loading)
+
+    assert captured["roll_off"] == 0.3

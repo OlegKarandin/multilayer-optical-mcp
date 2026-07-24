@@ -291,7 +291,7 @@ def _propagate_loading(
     si = build_si_for_loading(
         loading_for_gnpy,
         baud_rate=mode.symbol_rate_baud,
-        roll_off=0.15,
+        roll_off=mode.roll_off,
     )
 
     # ------------------------------------------------------------------ propagation

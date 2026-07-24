@@ -58,6 +58,10 @@ class TransceiverMode:
     required_gsnr_db: float
     symbol_rate_baud: float
     channel_spacing_hz: float
+    # S2-4 follow-up: probe spectral shape (Nyquist roll-off), sourced per mode
+    # instead of the adapter's historical hardcoded 0.15 scalar. Default matches
+    # that historical constant so every existing construction is unaffected.
+    roll_off: float = 0.15
 
 
 @dataclass(frozen=True)

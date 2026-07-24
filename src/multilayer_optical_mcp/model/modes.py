@@ -23,6 +23,10 @@ def load_modulation_formats(yaml_path: Path) -> ModeRegistry:
     # 140 Gbaud alongside 400G at 87.5) each carry their own spectral shape. The
     # file-level symbol_rate_gbaud remains the default for formats that omit it.
     default_baud_gbaud = raw.get("symbol_rate_gbaud")
+    # Mirrors the same per-format-override / file-level-default pattern for
+    # roll_off. 0.15 remains the ultimate fallback so files that declare neither
+    # a file-level nor a per-format roll_off behave exactly as before.
+    default_roll_off = float(raw.get("roll_off", 0.15))
     modes = []
     for f in raw["formats"]:
         bitrate = float(f["bitrate_gbps"])
@@ -33,11 +37,13 @@ def load_modulation_formats(yaml_path: Path) -> ModeRegistry:
                 f"format {bitrate:g}G has no symbol_rate_gbaud and the file "
                 f"declares no default symbol_rate_gbaud"
             )
+        roll_off = float(f.get("roll_off", default_roll_off))
         modes.append(TransceiverMode(
             id=f"{int(bitrate)}G@{threshold}dB",
             bitrate_gbps=bitrate,
             required_gsnr_db=threshold,
             symbol_rate_baud=float(baud_gbaud) * 1e9,
             channel_spacing_hz=spacing_hz,
+            roll_off=roll_off,
         ))
     return ModeRegistry(modes)
