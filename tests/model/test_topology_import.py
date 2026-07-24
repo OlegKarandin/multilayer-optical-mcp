@@ -112,6 +112,19 @@ def test_import_rejects_nf_count_span_count_mismatch():
         model_from_abstract_graph(graph, modes=_reg())
 
 
+def test_import_rejects_num_spans_count_mismatch():
+    """S3-add-5 follow-up: num_spans disagreeing with the resolved span count
+    must fail loudly rather than import silently."""
+    graph = {
+        "nodes": [{"id": 0}, {"id": 1}],
+        "edges": [{"src": 0, "dst": 1, "length_km": 160.0, "num_spans": 3,
+                   "span_lengths_km": [80.0, 80.0],  # resolves to 2 spans, not 3
+                   "amplifier_nf_db": [5.5, 5.5]}],
+    }
+    with pytest.raises(ValueError):
+        model_from_abstract_graph(graph, modes=_reg())
+
+
 def test_import_german_17_structural_counts():
     graph = json.loads(GERMAN_17.read_text())
     n = model_from_abstract_graph(graph, modes=_reg())

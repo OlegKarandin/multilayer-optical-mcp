@@ -70,11 +70,10 @@ SSMF_LOSS_COEF_DB_PER_KM = 0.2
 
 def _edge_spans(edge: Dict[str, Any]) -> List[float]:
     """Resolve an edge's per-span lengths from span_lengths_km, or derive them
-    from length_km via split_link_into_spans.
-
-    S3-add-5: `edge["num_spans"]`, if present, is NEVER read or cross-checked
-    against len(span_lengths_km) / the derived span count. A graph whose
-    num_spans disagrees with the actual span count imports silently."""
+    from length_km via split_link_into_spans. If `edge["num_spans"]` is present,
+    it must agree with the resolved span count (S3-add-5 follow-up) — a graph
+    whose num_spans disagrees with the actual span count now fails loudly
+    instead of importing silently."""
     spans = edge.get("span_lengths_km")
     if spans:
         # Addendum-2: span_lengths_km are authoritative when present. If they do
@@ -87,8 +86,17 @@ def _edge_spans(edge: Dict[str, Any]) -> List[float]:
                 f"{spans} sum to {sum(spans):g} km, not length_km "
                 f"{edge['length_km']:g} km"
             )
-        return [float(s) for s in spans]
-    return split_link_into_spans(float(edge["length_km"]))
+        resolved = [float(s) for s in spans]
+    else:
+        resolved = split_link_into_spans(float(edge["length_km"]))
+
+    num_spans = edge.get("num_spans")
+    if num_spans is not None and int(num_spans) != len(resolved):
+        raise ValueError(
+            f"edge {edge.get('src')}-{edge.get('dst')}: num_spans={num_spans} "
+            f"disagrees with the resolved span count {len(resolved)}"
+        )
+    return resolved
 
 
 def model_from_abstract_graph(
