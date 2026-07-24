@@ -1,5 +1,43 @@
 # Open TODOs — consolidated (2026-07-19)
 
+> **Reconciled 2026-07-24 (latest pass) against HEAD `5555fc8`.** Verification pass over
+> §6 (five parallel audits, one per cluster of claims): all 8 "deliberately left"
+> simplifications reconfirmed **STILL TRUE** against current source (roll_off absence,
+> fixed-ref_mode probing, amp band-edge top-slot drop, the 33dB ROADM add/drop constant,
+> the flat NF polynomial, decorative `Fiber.a_end`/`z_end`, unread `edge["num_spans"]`,
+> approximate length-weighted k-shortest, the `risk_groups`/SRLG avoid-key overlap,
+> count-not-severity best-effort disjoint tie-break, the per-direction IP-capacity
+> boundary, the `overflow_gbps` summing caveat — confirmed double-count-safe in practice
+> — the OMS-disjoint-within-one-placement assumption, and the two independent
+> `build_spectrum_state` call sites) — no drift, all still accurately described. One item
+> was **not** a documented simplification but an open question ("status is unclear"), and
+> it resolved to a real gap: **regen-node transponder-inventory gating is NOT
+> implemented** — `validate_plan`/`commit_plan` have no transponder/inventory/regen
+> check anywhere (`ViolationType` enum has no such variant; zero grep hits in
+> `validate.py`/`commit.py`), and the only inventory gating that exists at all
+> (`solve_allocation`'s `spare_inventory` packer, `allocation.py:336-353,466-488`) is a
+> separate code path never wired to `compute_restoration`'s regen candidates. Moved from
+> §6 to §5 as a confirmed standing gap (see below). Per user request, two items were
+> dropped from this doc entirely rather than tracked further: the Stage 4 NLI fast-path
+> (was §6, an intentional design deferral) and Suurballe/Bhandari guaranteed
+> disjoint-pair routing (was §5, an intentional out-of-scope-for-this-inspection note).
+> Neither represents new information — both are simply no longer tracked here. A
+> follow-up plan, `docs/superpowers/plans/2026-07-24-section6-model-simplification-fixes.md`,
+> now covers implementing fixes for the remaining §6 items (previously "documented
+> limitations, not bugs" — reclassified as a backlog to close, not permanently accepted).
+
+> **Reconciled 2026-07-24 (later same day) against HEAD `58bb792`.** The housekeeping flag
+> below — `docs/inspection-roadmap.md` badly stale — is now **addressed**: a full update
+> pass re-verified all ~60 numbered findings across all 8 stages against current source
+> (five parallel audits), not just re-read. Verdict: the large majority are now RESOLVED
+> in place with fixing-commit + file:line citations, including every `[High]`-severity
+> finding (Stage 4's backward-OMS/probe-frequency bugs, Stage 5/6's non-total
+> `simulate_ip_routing`/fake-disjoint-pair bug, Stage 8's failure/degradation
+> non-composition bug). What remains open there is exclusively the low-priority/documented-
+> simplification tail already tracked in §6 below, plus a couple of confirmed-intentional
+> design choices. The doc was kept (not archived) as the detailed per-finding record;
+> this consolidated doc remains the top-level summary.
+
 > **Reconciled 2026-07-24 against HEAD `58bb792`.** §4's entire cleanup backlog —
 > both the "DRY / layering polish" bullets and the "Test-coverage nits" — is now
 > **RESOLVED** (`docs/superpowers/plans/2026-07-23-section4-cleanup-batch.md`,
@@ -48,13 +86,14 @@ entry in this project's auto-memory store, and every external plan file under
 source where feasible, not just doc text — several docs (notably
 `docs/inspection-roadmap.md`) claim far more open work than actually remains.
 
-**Housekeeping flag, before the list:** `docs/inspection-roadmap.md` is badly
-stale. Of its ~60 numbered findings, the large majority are already fixed in code
-(Batches C1–C9, O1–O3 all landed per `git log`) but were never annotated
-`RESOLVED` in the doc. Only a handful are genuinely still open (listed in §5
-below). Recommend either updating that doc's RESOLVED annotations in one pass, or
-archiving it in favor of this consolidated list — as-is it will mislead anyone
-(human or agent) who reads it at face value.
+**Housekeeping flag — RESOLVED (2026-07-24).** `docs/inspection-roadmap.md` was badly
+stale as of this writing (see the reconciliation banner now at the top of this doc for
+the fix). Original text, for context: "Of its ~60 numbered findings, the large majority
+are already fixed in code (Batches C1–C9, O1–O3 all landed per `git log`) but were never
+annotated `RESOLVED` in the doc. Only a handful are genuinely still open (listed in §5
+below)." That gap is now closed — every finding in that doc carries either a RESOLVED
+annotation with fixing commit + file:line, or a confirmed-still-open note distinguishing
+genuine gaps from documented simplifications.
 
 ---
 
@@ -242,10 +281,27 @@ re-derived from source by a task reviewer, not just re-run):
   Phase 1–2 foundation plan; no evidence it was ever built.
 - **Sensitivity tooling** (derive sensitivity by differencing `QoTBreakdown`s
   across branches) — same origin, same status: flagged, never built.
-- **Suurballe/Bhandari guaranteed disjoint-pair routing** (Stage 6 design note) —
-  explicitly named as "a future code change (its own PR), not part of this
-  inspection." Today's disjoint-pair search is a heuristic, not a guaranteed-optimal
-  algorithm, for the physical/link/node case.
+- **Regen-node transponder-inventory gating — CONFIRMED GAP (2026-07-24).** Moved
+  here from §6, where it was carried as "status unclear." Verification pass found it
+  is simply not built: the `multilayer-graph-restoration` design doc
+  (`docs/plans/2026-06-14-multilayer-graph-restoration-design.md:73-75,164-166`)
+  promises regen-node transponder availability is "checked at validate/commit
+  (Phase 7)," but `validate_plan`/`commit_plan` (`model/validate.py`, `model/commit.py`)
+  have no transponder/inventory/regen check at all — `ViolationType`'s full enum is
+  `MODE_INFEASIBLE`, `SPECTRUM_CLASH`, `IP_LINK_OVERLOAD`, `DROPPED_TRAFFIC`,
+  `DISJOINTNESS_COLLAPSE`, `PROTECTION_NOT_VIABLE`, `PROTECTION_OVERSUBSCRIBED`,
+  `INVALID_PLAN`, with no inventory variant, and grep for
+  `transponder|spare|inventory|regen` across both files is empty. The only inventory
+  gating in the repo is `solve_allocation`'s `spare_inventory`-driven `_tp_need`/
+  `_inv_ok`/`_dec_inv` in `model/allocation.py:336-353,466-488` — a separate heuristic
+  packer, never called by `compute_restoration` or `validate_plan`. Net effect:
+  `validate_plan` will pass a restoration plan that adds a new lightpath through a
+  regen node with zero spare transponders. No test exercises this (`test_validate.py`,
+  `test_validate_transient.py`, `test_commit_reconcile.py`,
+  `test_commit_qot_convergence.py` all have zero `transponder|inventory|spare|regen`
+  hits). Needs a new `ViolationType` (e.g. `REGEN_INVENTORY_EXHAUSTED`) plus a
+  validate-time check against regen-node spare transponder counts, wired from
+  `compute_restoration`'s regen candidates through to `validate_plan`.
 
 ---
 
@@ -258,9 +314,6 @@ re-derived from source by a task reviewer, not just re-run):
   probe QoT only at a fixed `ref_mode`, assuming GSNR is mode-independent given a
   fixed probe shape — true today only because baud/roll-off isn't threaded from
   the delivered mode into the probe.
-- Stage 4's C2/C3 NLI fast-path (two-engine single-channel path, overloading
-  GNPy's NLI extraction) — **intentionally deferred by design decision**, not an
-  oversight: "revisit only if post-O1 profiling shows NLI itself dominates."
 - A long tail of "resolved as documented limitation" items from the inspection
   roadmap (hardcoded 33dB ROADM add/drop penalty, flat NF polynomial in the
   advanced amp model, decorative/unused `Fiber.a_end`/`z_end`, unread
@@ -271,12 +324,8 @@ re-derived from source by a task reviewer, not just re-run):
   one-placement assumption in hybrid placements, two independent `build_spectrum_state`
   calls that could drift). None of these are flagged as broken — they're conscious
   simplifications recorded so a future change doesn't reintroduce the underlying
-  assumption unknowingly.
-- Regen-node transponder-inventory gating status is unclear — the
-  multilayer-graph-restoration design doc says availability is checked at
-  validate/commit (Phase 7), but whether Phase 7's actual implementation added
-  this specific check wasn't independently confirmed. Worth a quick verification
-  pass rather than assuming either way.
+  assumption unknowingly. **All 11 items in this bundle reconfirmed STILL TRUE
+  against current source (2026-07-24 verification pass, HEAD `5555fc8`) — no drift.**
 - **New (2026-07-23): amp band-edge always drops the top grid slot.** On this
   repo's `SpectrumGrid`/amp-band configuration, the topmost spectrum slot's
   occupied band (±50 GHz around center, for a 100 GHz-spaced grid) exceeds
