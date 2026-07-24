@@ -10,14 +10,13 @@ provision_lightpath) is Phase 7; this tool only enumerates.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from .network import NetworkModel
 from .solvers import SolverStatus
-from .multilayer_graph import NewLightpathRun, Placement
-# route_service imports _forbidden_assets/_lever from this module, so the
-# dependency is inverted here (compute_restoration -> route_service) via a
-# deferred import inside the function to avoid a circular import at load time.
+from .multilayer_graph import NewLightpathRun
+from .placement_common import _status
+from .route_service import route_service
 
 
 @dataclass(frozen=True)
@@ -38,29 +37,6 @@ class RestorationResult:
     candidates: Tuple[RestorationCandidate, ...]
 
 
-def _forbidden_assets(model: NetworkModel, avoid: Optional[dict]) -> FrozenSet[str]:
-    """Physical asset ids to prune from the graph: the avoid-set's explicit
-    assets plus the members of any named SRLG / risk group. NOTE: do not expand
-    to endpoint nodes — a failed fiber must not condemn its healthy end ROADMs
-    (which would prune parallel survivor OMS sharing those nodes)."""
-    avoid = avoid or {}
-    bad = set(avoid.get("assets", ()))
-    avoid_rgs = set(avoid.get("risk_groups", ()))
-    if avoid_rgs:
-        for g in list(model.list_srlgs()) + list(model.list_risk_groups()):
-            if g.id in avoid_rgs:
-                bad.update(g.asset_ids)
-    return frozenset(bad)
-
-
-def _lever(p: Placement) -> str:
-    if p.new_lightpaths and p.reused_lightpaths:
-        return "hybrid"
-    if p.new_lightpaths:
-        return "optical_reroute"
-    return "ip_reroute"
-
-
 def compute_restoration(
     model: NetworkModel, qot, service_id: str, avoid: Optional[dict] = None,
 ) -> RestorationResult:
@@ -73,8 +49,6 @@ def compute_restoration(
     route_service's plain scalar order, because restoration must still surface a
     FULLY-restoring candidate ahead of a cheaper-but-partial one.
     """
-    from .route_service import route_service  # deferred: avoids circular import
-
     rs = route_service(model, qot, service_id, protected=False, avoid=avoid)
     candidates = tuple(
         RestorationCandidate(
@@ -89,10 +63,5 @@ def compute_restoration(
     )
     candidates = tuple(sorted(candidates,
                               key=lambda c: (c.shortfall_gbps, c.cost_vector["scalar"])))
-    if not candidates:
-        status = SolverStatus.NO_SOLUTION
-    elif any(c.shortfall_gbps == 0.0 for c in candidates):
-        status = SolverStatus.SOLUTION
-    else:
-        status = SolverStatus.PARTIAL
+    status = _status(bool(candidates), any(c.shortfall_gbps == 0.0 for c in candidates))
     return RestorationResult(status, service_id, rs.demand_gbps, candidates)

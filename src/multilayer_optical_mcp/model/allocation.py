@@ -33,7 +33,7 @@ from .spectrum import (
 )
 from .multilayer_graph import build_layered_graph, place_demands, NewLightpathRun
 from .multilayer_disjoint import disjoint_pairs
-from .restoration import _lever
+from .placement_common import _lever, _status
 from . import objective as _objective
 from ..gnpy_adapter.loading import Channel, LoadingState
 from ..gnpy_adapter.adapter import compute_qot, harvest_qot, harvest_cache_key
@@ -158,14 +158,6 @@ class AllocationResult:
     status: SolverStatus
     placements: Tuple[AllocationPlacement, ...] = ()
     unplaced: Tuple[Tuple[str, str], ...] = ()     # (demand_id, reason)
-
-
-def _status(n_placed: int, n_unplaced: int) -> SolverStatus:
-    if n_unplaced == 0:
-        return SolverStatus.SOLUTION
-    if n_placed == 0:
-        return SolverStatus.NO_SOLUTION
-    return SolverStatus.PARTIAL
 
 
 # ----------------------------------------------------------------- core placement
@@ -327,8 +319,8 @@ def solve_rsa(
                 continue
             placements.append(DemandPlacement(did, sa, None))
 
-    return PlacementResult(_status(len(placements), len(unplaced)),
-                           tuple(placements), tuple(unplaced))
+    status = _status(len(placements) > 0, len(unplaced) == 0)
+    return PlacementResult(status, tuple(placements), tuple(unplaced))
 
 
 # ----------------------------------------------------------------- solve_allocation
@@ -507,5 +499,5 @@ def _pack(
                 restored_gbps=pick.restored_gbps,
                 shortfall_gbps=pick.shortfall_gbps))
 
-    return (AllocationResult(_status(len(placements), len(unplaced)),
-                             tuple(placements), tuple(unplaced)), work)
+    status = _status(len(placements) > 0, len(unplaced) == 0)
+    return (AllocationResult(status, tuple(placements), tuple(unplaced)), work)

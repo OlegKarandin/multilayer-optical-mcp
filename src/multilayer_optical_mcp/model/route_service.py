@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Tuple
 from .network import NetworkModel
 from .solvers import SolverStatus
 from .multilayer_graph import build_layered_graph, place_demands, NewLightpathRun
-from .restoration import _forbidden_assets, _lever
+from .placement_common import _forbidden_assets, _lever, _status
 from .multilayer_disjoint import disjoint_pairs
 from .objective import score_candidate, score_pair, placement_materializable
 
@@ -73,14 +73,6 @@ def _harvest(model, qot, g, src, dst, demand, k):
     return out
 
 
-def _status(shortfalls: List[float]) -> SolverStatus:
-    if not shortfalls:
-        return SolverStatus.NO_SOLUTION
-    if any(s == 0.0 for s in shortfalls):
-        return SolverStatus.SOLUTION
-    return SolverStatus.PARTIAL
-
-
 def route_service(model: NetworkModel, qot, service_id: str, *, protected: bool = False,
                   basis: str = "physical", level: str = "link", best_effort: bool = False,
                   avoid: Optional[dict] = None, weights: Optional[dict] = None,
@@ -109,8 +101,8 @@ def route_service(model: NetworkModel, qot, service_id: str, *, protected: bool 
                     _vec(score_candidate(model, p, svc, weights)))
                  for p in placements]
         cands.sort(key=lambda c: c.cost_vector["scalar"])
-        return RouteServiceResult(_status([c.shortfall_gbps for c in cands]),
-                                  service_id, svc.demand_gbps, False,
+        status = _status(bool(cands), any(c.shortfall_gbps == 0.0 for c in cands))
+        return RouteServiceResult(status, service_id, svc.demand_gbps, False,
                                   candidates=tuple(cands))
 
     pp = disjoint_pairs(model, placements, basis=basis, level=level,
