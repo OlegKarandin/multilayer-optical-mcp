@@ -31,9 +31,9 @@ from .spectrum import (
     SpectrumGrid, build_spectrum_state, first_fit_slot, occupied_along, reserve,
     FillPolicy,
 )
-from .multilayer_graph import build_layered_graph, place_demands, NewLightpathRun
+from .multilayer_graph import build_layered_graph, NewLightpathRun
 from .multilayer_disjoint import disjoint_pairs
-from .placement_common import _lever, _status
+from .placement_common import _lever, _status, _harvest_placements
 from . import objective as _objective
 from ..gnpy_adapter.loading import Channel, LoadingState
 from ..gnpy_adapter.adapter import compute_qot, harvest_qot, harvest_cache_key
@@ -360,26 +360,16 @@ def _merge_need(a: Dict[str, int], b: Dict[str, int]) -> Dict[str, int]:
     return out
 
 
-def _harvest_alloc(model, qot, g, src, dst, demand_gbps, k=8,
+def _harvest_alloc(model, qot, g, src, dst, demand_gbps, k=_ROUTE_CAP,
                    fill_policy: FillPolicy = FillPolicy.FULL):
-    """The route_service harvest: groom_or_new + new_only frontiers on the CURRENT
-    (consumed) loading, deduped on the λ-free route identity, materializable only.
-    Cost order preserved — the frontier's discovery order IS 'shortest-available
-    per demand', so grooming (cheap LPE) precedes lighting new (moderate TxE)."""
-    out: List = []
-    seen: set = set()
-    for policy in ("groom_or_new", "new_only"):
-        for p in place_demands(model, g, qot, src=src, dst=dst,
-                               demand_gbps=demand_gbps, policy=policy, k=k,
-                               fill_policy=fill_policy):
-            key = (p.reused_lightpaths, tuple(r.oms_sequence for r in p.new_lightpaths))
-            if key in seen:
-                continue
-            seen.add(key)
-            if not _objective.placement_materializable(model, p):
-                continue
-            out.append(p)
-    return out
+    """allocation's materializable-only view of the shared groom_or_new +
+    new_only harvest (placement_common._harvest_placements): filters out any
+    placement whose new run ends at a router-less optical node or whose reused
+    lightpath has no bound IP link, same as route_service's post-harvest
+    filter."""
+    placements = _harvest_placements(model, qot, g, src, dst, demand_gbps, k,
+                                     fill_policy=fill_policy)
+    return [p for p in placements if _objective.placement_materializable(model, p)]
 
 
 def solve_allocation(

@@ -13,8 +13,8 @@ from typing import Dict, List, Optional, Tuple
 
 from .network import NetworkModel
 from .solvers import SolverStatus
-from .multilayer_graph import build_layered_graph, place_demands, NewLightpathRun
-from .placement_common import _forbidden_assets, _lever, _status
+from .multilayer_graph import build_layered_graph, NewLightpathRun
+from .placement_common import _forbidden_assets, _lever, _status, _harvest_placements
 from .multilayer_disjoint import disjoint_pairs
 from .objective import score_candidate, score_pair, placement_materializable
 
@@ -57,22 +57,6 @@ def _vec(res) -> Dict[str, float]:
     return d
 
 
-def _harvest(model, qot, g, src, dst, demand, k):
-    """The restoration harvest: groom_or_new + new_only frontiers, deduped on the
-    lambda-free route identity (matches restoration.compute_restoration)."""
-    out = []
-    seen = set()
-    for policy in ("groom_or_new", "new_only"):
-        for p in place_demands(model, g, qot, src=src, dst=dst,
-                               demand_gbps=demand, policy=policy, k=k):
-            key = (p.reused_lightpaths, tuple(r.oms_sequence for r in p.new_lightpaths))
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(p)
-    return out
-
-
 def route_service(model: NetworkModel, qot, service_id: str, *, protected: bool = False,
                   basis: str = "physical", level: str = "link", best_effort: bool = False,
                   avoid: Optional[dict] = None, weights: Optional[dict] = None,
@@ -85,7 +69,7 @@ def route_service(model: NetworkModel, qot, service_id: str, *, protected: bool 
     src = model.get_router(svc.src_router).site
     dst = model.get_router(svc.dst_router).site
     g = build_layered_graph(model, forbidden_assets=_forbidden_assets(model, avoid))
-    placements = _harvest(model, qot, g, src, dst, svc.demand_gbps, k)
+    placements = _harvest_placements(model, qot, g, src, dst, svc.demand_gbps, k)
     # A placement whose new run terminates at a router-less optical node cannot be
     # bound to an IP link (score_candidate/score_pair would KeyError provisioning
     # it). Such a placement is an INFEASIBLE service-routing candidate: exclude it

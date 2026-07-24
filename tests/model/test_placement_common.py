@@ -64,3 +64,45 @@ def test_status_empty_input_ordering_matches_each_original_caller():
     # NO_SOLUTION for zero candidates -- any() over an empty list is False,
     # so fully_satisfied is False too, and this must stay NO_SOLUTION.
     assert _status(has_any=False, fully_satisfied=False) == SolverStatus.NO_SOLUTION
+
+
+from multilayer_optical_mcp.model.assets import (
+    FiberType, Fiber, Amplifier, OMS, ROADM, Lightpath, TransceiverMode,
+)
+from multilayer_optical_mcp.model.multilayer_graph import build_layered_graph
+from multilayer_optical_mcp.model.placement_common import _harvest_placements
+
+
+def _spanned_model() -> NetworkModel:
+    n = NetworkModel(modes=ModeRegistry([
+        TransceiverMode(id="100G", bitrate_gbps=100.0, required_gsnr_db=12.0,
+                        symbol_rate_baud=32e9, channel_spacing_hz=100e9)]))
+    n.register_fiber_type(FiberType("SSMF", 0.2))
+    n.add_amplifier(Amplifier("a1", "advanced_toy", 20.0, 5.5))
+    n.add_fiber(Fiber("fAB", "a1", "a2", 80.0, "SSMF"))
+    n.add_amplifier(Amplifier("a2", "advanced_toy", 20.0, 5.5))
+    n.add_roadm(ROADM(id="roadm_A"))
+    n.add_roadm(ROADM(id="roadm_B"))
+    n.add_oms(OMS("omsAB", "A", "B", ("roadm_A", "a1", "fAB", "a2")))
+    return n
+
+
+def _fake_qot(gsnr_db=22.0):
+    from multilayer_optical_mcp.model.qot import QoTState
+
+    def _eval(*, oms_sequence, direction, mode_id, loading):
+        return QoTState(gsnr_db=gsnr_db, osnr_db=gsnr_db + 2.0,
+                        margin_db=gsnr_db - 12.0)
+    return _eval
+
+
+def test_harvest_placements_dedupes_across_groom_or_new_and_new_only():
+    model = _spanned_model()
+    g = build_layered_graph(model)
+    out = _harvest_placements(model, _fake_qot(), g, "A", "B", 50.0, k=8)
+    # Both policies discover the same single new-lightpath run over the only
+    # OMS (no existing lightpath to groom onto) -> dedup collapses it to one.
+    seen = {(p.reused_lightpaths, tuple(r.oms_sequence for r in p.new_lightpaths))
+            for p in out}
+    assert len(out) == len(seen)      # no duplicate route identity survives
+    assert len(out) >= 1

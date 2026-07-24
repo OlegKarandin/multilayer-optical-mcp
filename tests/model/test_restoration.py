@@ -136,13 +136,15 @@ def test_cross_bucket_dedup_ignores_wavelength(monkeypatch):
     match place_demands' lambda-free intra-bucket key.
 
     compute_restoration now delegates to route_service, which owns the harvest
-    (_harvest) that calls place_demands -- so the fake is installed on
-    route_service's binding of place_demands, not restoration's (restoration no
-    longer imports it directly)."""
-    from multilayer_optical_mcp.model import route_service as RS
+    (_harvest_placements, shared with allocation.py) that calls place_demands --
+    so the fake is installed on placement_common's binding of place_demands,
+    where the shared harvest now lives (restoration itself no longer imports it
+    directly, and neither does route_service anymore)."""
+    from multilayer_optical_mcp.model import placement_common as PC
     from multilayer_optical_mcp.model.multilayer_graph import Placement, NewLightpathRun
 
-    def _fake_place(model, g, qot, *, src, dst, demand_gbps, policy, k=8):
+    def _fake_place(model, g, qot, *, src, dst, demand_gbps, policy, k=8,
+                    fill_policy=None):
         # same physical route (oms-AB), different representative lambda per pass
         lam = 0 if policy == "groom_or_new" else 3
         run = NewLightpathRun(("oms-AB",), lam, "100G", 15.0, 100.0,
@@ -150,7 +152,7 @@ def test_cross_bucket_dedup_ignores_wavelength(monkeypatch):
         return [Placement(reused_lightpaths=(), new_lightpaths=(run,),
                           restored_gbps=demand_gbps, shortfall_gbps=0.0)]
 
-    monkeypatch.setattr(RS, "place_demands", _fake_place)
+    monkeypatch.setattr(PC, "place_demands", _fake_place)
     n = _diamond()
     res = compute_restoration(n, FakeQot(15.0), "svc")
     assert len(res.candidates) == 1, [c.new_lightpaths for c in res.candidates]
