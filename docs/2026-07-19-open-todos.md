@@ -1,5 +1,22 @@
 # Open TODOs — consolidated (2026-07-19)
 
+> **Reconciled 2026-07-24 against HEAD `58bb792`.** §4's entire cleanup backlog —
+> both the "DRY / layering polish" bullets and the "Test-coverage nits" — is now
+> **RESOLVED** (`docs/superpowers/plans/2026-07-23-section4-cleanup-batch.md`,
+> commits `adfb4c7`..`58bb792`, 10 tasks, subagent-driven-development with a
+> task reviewer per task): a new neutral `model/placement_common.py` module
+> holds `_forbidden_assets`/`_lever`/a shared `_status`/a shared
+> `_harvest_placements`, which also resolved the `restoration.py`↔
+> `route_service.py` import-cycle workaround (`restoration.py` now imports
+> `route_service` at module scope, no more function-local deferral);
+> `_harvest_alloc`'s `k=8` now reuses `_ROUTE_CAP`; `solve_allocation`'s dead
+> `objective` param is removed (`solve_rsa`'s analogous one is untouched,
+> explicitly out of scope); both "why-it's-safe" comments were added; all 5
+> test-coverage nits were closed with new/extended tests, each independently
+> re-verified against source by a task reviewer (not just re-run). Full suite
+> **416 passed, 1 skipped** (406 baseline + 10 new/extended tests). See §4
+> below for the itemized RESOLVED annotations.
+
 > **Reconciled 2026-07-23 against HEAD `3097bc2`.** §3's small carried follow-up —
 > making `FillPolicy.FULL` cache-friendly — is now **RESOLVED**
 > (`docs/superpowers/plans/2026-07-23-full-policy-allcut-harvest.md`): a
@@ -139,23 +156,38 @@ archiving it in favor of this consolidated list — as-is it will mislead anyone
 
 From `docs/superpowers/plans/2026-07-13-followups-and-next-steps.md` §3–4:
 
-**DRY / layering polish:**
+**RESOLVED (2026-07-24), all of "DRY / layering polish"**
+(`docs/superpowers/plans/2026-07-23-section4-cleanup-batch.md`, commits
+`adfb4c7`..`0de53d0`, Tasks 1-5):
 - Harvest + λ-free dedup logic duplicated between `route_service._harvest` and
-  `allocation._harvest_alloc` (same policies, same dedup key) — fold into one helper.
-- Layering inversion: `_forbidden_assets`/`_lever` live in `restoration.py` but
-  `route_service.py` imports them, forcing `compute_restoration` to import
-  `route_service` via a function-local import to dodge a cycle — hoist both into
-  a neutral module.
-- `_status` reimplemented three ways (allocation / route_service / restoration)
-  with identical semantics — share one helper.
-- `_harvest_alloc` hardcodes `k=8` instead of reusing the module's `_ROUTE_CAP = 8`.
-- `solve_allocation`'s `objective: str` param is vestigial (never read) — remove or wire.
-- `_stitch_ip_path` silent truncation (`objective.py`) relies on a downstream
-  `is_contiguous_path` raise to surface a broken walk — add a why-it's-safe
-  comment or a typed guard.
-- Per-demand `build_layered_graph(work)` rebuild in `solve_allocation` is correct
-  (loading changes each iteration) but wants a one-line "intentional, not
-  hoistable" comment.
+  `allocation._harvest_alloc` — folded into `placement_common._harvest_placements`
+  (Task 3, commit `9424a19`); both callers now delegate to it.
+- Layering inversion (`_forbidden_assets`/`_lever` in `restoration.py`,
+  `route_service.py` importing them, `compute_restoration`'s function-local
+  deferred import of `route_service` to dodge the resulting cycle) — both
+  helpers hoisted into a new neutral `model/placement_common.py` (Task 1,
+  commit `adfb4c7`); `restoration.py`/`route_service.py`/`allocation.py`
+  rewired onto it (Task 2, commit `eb10a4c`). The cycle is gone, not
+  relocated: `restoration.py` now imports `route_service` at module scope,
+  confirmed via a repo-wide grep that no back-reference remains anywhere in
+  `model/`.
+- `_status` reimplemented three ways — unified into
+  `placement_common._status(has_any, fully_satisfied)` (Task 1/2). The merge
+  preserves each caller's exact original edge-case behavior, including
+  `allocation`'s vacuous-`SOLUTION`-on-zero-demands case, via a deliberate
+  check-order (`fully_satisfied` before `has_any`) — verified by both an
+  implementer and a task reviewer against all three original call sites.
+- `_harvest_alloc` hardcodes `k=8` — now defaults to `_ROUTE_CAP` (Task 3).
+- `solve_allocation`'s vestigial `objective: str` param — removed from
+  `allocation.py`, `server.py`'s tool wrapper, and `CLAUDE.md`'s documented
+  signature (Task 4, commit `0de53d0`). `solve_rsa`'s analogous unused param
+  was left untouched — same underlying issue, but out of scope for this pass.
+- `_stitch_ip_path` silent truncation — why-it's-safe comment added, tracing
+  the actual downstream catch (`apply_op(RerouteService)` →
+  `set_service_working_path` → `is_contiguous_path` → `ValueError` →
+  `PlanError`) (Task 5, commit `3c832a1`).
+- Per-demand `build_layered_graph(work)` rebuild — "intentional, not
+  hoistable" comment added (Task 5).
 
 **RESOLVED (2026-07-23):** `tests/test_server_phase7.py::test_commit_live_requires_confirm_then_reconcile_in_sync`
   root-caused and fixed in `commit.py`. Root cause: the 2026-07-20 QoT-convergence
@@ -175,13 +207,27 @@ From `docs/superpowers/plans/2026-07-13-followups-and-next-steps.md` §3–4:
   `tests/test_server_phase7.py` + `tests/gnpy_adapter` green (365 passed, 1
   skipped); full `tests/` suite also green (406 passed, 1 skipped).
 
-**Test-coverage nits:**
-- `evaluate_objective`'s snapshot-by-id branch (`snapshots.get(state)`) is untested.
-- `route_service_result_dict`'s nested `RoutePair` leg contents asserted only implicitly.
-- `evaluate_objective`'s raw-vector test under-verifies 5 of 7 terms numerically.
-- `dropped_traffic`'s "disjoint sets ⇒ no double count" invariant has no dedicated
-  regression test.
-- `disjoint_pairs` has no `top_n > 2` truncation/tie-break test.
+**RESOLVED (2026-07-24), all "Test-coverage nits"**
+(`docs/superpowers/plans/2026-07-23-section4-cleanup-batch.md`, commits
+`9234cfa`..`58bb792`, Tasks 6-10 — each ground-truth value independently
+re-derived from source by a task reviewer, not just re-run):
+- `evaluate_objective`'s snapshot-by-id branch — new test in
+  `tests/test_server_phase8.py` proves `state=<id>` resolves via
+  `snapshots.get()`, not `current()` (Task 6, commit `9234cfa`).
+- `route_service_result_dict`'s nested `RoutePair` legs — the existing shape
+  test now uses two genuinely distinct working/protection candidates instead
+  of reusing one object, so it can actually catch a swapped-leg regression
+  (Task 7, commit `e93e8dd`).
+- `evaluate_objective`'s raw-vector test — all 7 terms now pinned to
+  hand-derived ground truth, not just `transponders` and the scalar sign
+  (Task 8, commit `df3cd1d`).
+- `dropped_traffic`'s "disjoint sets ⇒ no double count" invariant — new
+  regression fixture with one down link and one independently congested link,
+  asserting the sum (130 = 80 dropped + 50 overflow) without double-counting
+  either (Task 9, commit `8326ca7`).
+- `disjoint_pairs`' `top_n > 2` truncation — new test confirms truncation
+  keeps exactly the first `top_n` pairs in pairwise-scan generation order
+  (Task 10, commit `58bb792`).
 
 ---
 
