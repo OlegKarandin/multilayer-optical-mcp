@@ -445,6 +445,10 @@ def _pack(
                       working_path=())
         work.add_service(svc)
 
+        # Rebuilt every iteration, not hoisted above the loop: `work`'s loading
+        # changes each time a demand is placed (a new lightpath lit or a
+        # survivor's residual consumed), so a stale graph built before this
+        # demand would route against yesterday's spectrum/grooming state.
         g = build_layered_graph(work)
         cands = _harvest_alloc(work, qot, g, src, dst, gbps, fill_policy=fill_policy)
         if not cands:

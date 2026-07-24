@@ -129,7 +129,15 @@ def _stitch_ip_path(segments, src_router, dst_router):
             if z == node:
                 path.append(ip_id); node = a; remaining.pop(k); break
         else:
-            break     # no segment continues the walk (should not happen for a real placement)
+            # No segment continues the walk -- should not happen for a real
+            # placement. Not re-raised here: the truncated `path` this
+            # produces gets handed to apply_op(RerouteService(...)), whose
+            # NetworkModel.set_service_working_path (network.py) validates
+            # contiguity via is_contiguous_path and raises ValueError, which
+            # apply_op re-raises as PlanError (plan.py) -- so a broken walk is
+            # always caught, just one call frame downstream of here rather
+            # than at the point of truncation.
+            break
     return tuple(path)
 
 
