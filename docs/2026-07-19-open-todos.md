@@ -279,8 +279,18 @@ re-derived from source by a task reviewer, not just re-run):
 - **Per-channel loading attribution** in `recompute_qot_under_loading` (which
   interferer drove which survivor's margin drop) — flagged deferred in the
   Phase 1–2 foundation plan; no evidence it was ever built.
-- **Sensitivity tooling** (derive sensitivity by differencing `QoTBreakdown`s
-  across branches) — same origin, same status: flagged, never built.
+- **Sensitivity tooling — RESOLVED (2026-07-25, commits `edaf5c4`, `bb21d8d`).**
+  Per `docs/superpowers/plans/2026-07-24-sensitivity-tooling.md`: `whatif_sensitivity`
+  (`model/whatif.py`) diffs per-element QoT contribution between two branches
+  (typically a nominal baseline and one with `inject_degradation` applied), exposed
+  as an MCP tool. Diffs each element's OWN contribution fields (`gsnr_delta_db`,
+  `ase_contribution_db`, `nli_contribution_db`), not the cumulative
+  `gsnr_db_after`/`osnr_db_after` figure — a change at one element shifts every
+  downstream element's cumulative value too, which would flood a naive diff with
+  echoes instead of isolating the actual cause. A `_safe_delta` helper handles the
+  adapter's structural `+-inf`/NaN values at/before the path's first
+  noise-introducing element (a pre-existing adapter characteristic, not new) so
+  those don't corrupt the sort.
 - **Regen-node transponder-inventory gating — ACCEPTED SIMPLIFICATION (decided
   2026-07-24, superseding the "CONFIRMED GAP" framing below).** Verification pass
   (2026-07-24) found it is simply not built: the `multilayer-graph-restoration` design doc
