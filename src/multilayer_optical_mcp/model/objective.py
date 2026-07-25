@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from .network import NetworkModel
 from .spectrum import SpectrumGrid, build_spectrum_state
@@ -182,18 +182,30 @@ def apply_candidate(work, placement, service, *, prefix="cand") -> None:
     apply_op(work, RerouteService(service_id=service.id, ip_path=ip_path))
 
 
-def provision_new_runs(work, placement, service, *, prefix) -> None:
+def provision_new_runs(work, placement, service, *, prefix) -> Tuple[str, ...]:
     """Provision each new run of `placement` as a lightpath + IP link and seed its
     QoT, WITHOUT rerouting any service. Used for a protection leg: a 1:1 idle
     reserve whose transponder/spectrum/margin cost must count but which carries no
-    IP load. Shared by score_pair and solve_allocation's protected commit so both
-    provision protection identically (DRY)."""
+    IP load. Shared by score_pair (which discards the return value -- protection
+    must not be routed while scoring, see score_pair's docstring) and
+    solve_allocation's protected commit (which uses the return value to stitch
+    Service.protection_path -- see allocation.py's _pack). Returns the ip_path
+    segments would stitch into, same construction as apply_candidate, including
+    reused legs (previously silently dropped -- a protection leg that grooms onto a
+    survivor lightpath had no IP-link segment tracked at all)."""
     grid = SpectrumGrid.default()
     site_to_router = {r.site: r.id for r in work.list_routers()}
+    lp_to_iplink = {l.lightpath_id: l for l in work.list_ip_links()}
+    segments = []
+    for lp_id in placement.reused_lightpaths:
+        link = lp_to_iplink[lp_id]
+        segments.append((link.a_router, link.z_router, link.id))
     for i, run in enumerate(placement.new_lightpaths):
         lp_id = f"lp-{prefix}-{service.id}-{i}"
         ipl_id = f"ipl-{prefix}-{service.id}-{i}"
-        _provision_and_seed_run(work, run, lp_id, ipl_id, site_to_router, grid)
+        a, z = _provision_and_seed_run(work, run, lp_id, ipl_id, site_to_router, grid)
+        segments.append((a, z, ipl_id))
+    return _stitch_ip_path(segments, service.src_router, service.dst_router)
 
 
 def placement_materializable(model, placement) -> bool:

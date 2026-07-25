@@ -15,7 +15,7 @@ from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model.solvers import SolverStatus
-from multilayer_optical_mcp.model.allocation import solve_allocation
+from multilayer_optical_mcp.model.allocation import solve_allocation, solve_allocation_model
 
 
 class FakeQot:
@@ -103,7 +103,7 @@ def test_protected_consumes_four_transponders_and_two_routes():
     # Exactly 2 per site -> enough for one protected demand (working + protection
     # lightpaths, one transponder per new-run endpoint = 2 per site).
     n = _two_routes()
-    res = solve_allocation(n, _hi_qot(),
+    res, work = solve_allocation_model(n, _hi_qot(),
                            [{"id": "d1", "src": "A", "dst": "Z",
                              "demand_gbps": 100.0, "protected": True}],
                            spare_inventory={"A": 2, "Z": 2})
@@ -114,6 +114,16 @@ def test_protected_consumes_four_transponders_and_two_routes():
     work_oms = {o for r in p.new_lightpaths for o in r.oms_sequence}
     prot_oms = {o for r in p.protection_new for o in r.oms_sequence}
     assert work_oms and prot_oms and work_oms.isdisjoint(prot_oms)   # disjoint routes
+
+    # Root-cause pin: protection_path must actually be written on the Service, and
+    # its IP links must resolve back to protection_new's OMS set.
+    svc = work.get_service("d1")
+    assert svc.protection_path, "protection leg was provisioned but never stitched onto the Service"
+    prot_path_oms = set()
+    for ip_id in svc.protection_path:
+        lp_id = work.get_ip_link(ip_id).lightpath_id
+        prot_path_oms |= set(work.get_lightpath(lp_id).oms_sequence)
+    assert prot_path_oms == prot_oms
 
 
 def test_protected_insufficient_inventory_unplaced():

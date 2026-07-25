@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
 
 from .assets import Direction, Service
 from .network import NetworkModel
+from .plan import apply_op, RerouteService
 from .qot import QoTState
 from .solvers import (
     OmsPath, SolverStatus, compute_paths, compute_disjoint_paths,
@@ -472,7 +473,10 @@ def _pack(
                 unplaced.append((did, "insufficient transponders"))
                 continue
             _objective.apply_candidate(work, pair.working, svc)          # provision+seed+reroute
-            _objective.provision_new_runs(work, pair.protection, svc, prefix="prot")
+            protection_ip_path = _objective.provision_new_runs(
+                work, pair.protection, svc, prefix="prot")
+            apply_op(work, RerouteService(service_id=svc.id, ip_path=protection_ip_path,
+                                          which="protection"))
             _dec_inv(inv, need)
             placements.append(AllocationPlacement(
                 demand_id=did, lever=_lever(pair.working),
