@@ -159,7 +159,7 @@ def build_app() -> FastMCP:
         ip_topology_dict, grooming_map_dict, ip_routing_result_dict,
         affected_services_dict,
         margin_sweep_dict, degradation_report_dict, failure_report_dict,
-        restoration_result_dict, max_feasible_mode_dict,
+        restoration_result_dict, max_feasible_mode_dict, sensitivity_result_dict,
     )
     from .model.restoration import compute_restoration as _compute_restoration
     from .model.whatif import (
@@ -167,6 +167,7 @@ def build_app() -> FastMCP:
         max_feasible_mode_view as _max_feasible_mode_view,
         inject_degradation as _inject_degradation,
         inject_failure as _inject_failure,
+        whatif_sensitivity as _whatif_sensitivity,
         loading_from_model,
     )
     from .model.exposure import compute_exposure
@@ -412,6 +413,26 @@ def build_app() -> FastMCP:
         asset goes down (capacity 0). Operate on a branch — mutates state."""
         report = _inject_failure(snapshots.current(), tuple(asset_ids))
         return failure_report_dict(report)
+
+    @app.tool()
+    def whatif_sensitivity(
+        state_a: str, state_b: str, oms_sequence: list[str], direction: str,
+        mode_id: str, loading_channels: list[dict],
+    ) -> dict:
+        """Diff per-element QoT contribution between two branches (e.g. a nominal
+        baseline vs. one with inject_degradation applied) for the same
+        path/direction/mode/loading. Isolates which asset's OWN contribution
+        changed — not the cumulative GSNR-after figure, which shifts at every
+        element downstream of the real cause too. Read-only; mutates neither
+        branch. rows sorted by |gsnr_contribution_delta_db| descending."""
+        model_a = snapshots.get(state_a)
+        model_b = snapshots.get(state_b)
+        res = _whatif_sensitivity(
+            model_a, model_b, store=results,
+            oms_sequence=tuple(oms_sequence), direction=Direction(direction),
+            mode_id=mode_id, loading=_loading_from(loading_channels),
+        )
+        return sensitivity_result_dict(res)
 
     @app.tool()
     def compute_restoration(service_id: str, avoid: dict | None = None) -> dict:

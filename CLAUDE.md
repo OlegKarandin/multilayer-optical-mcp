@@ -125,13 +125,20 @@ contract decisions are baked in here, at the adapter, not discovered later:
   the GN model for it, and never requires you to provision a channel to ask about
   it. Building the adapter around a before/after *pair* instead is the single
   re-architecture this design exists to avoid — see Build order step 2.
-- **QoT is per-direction.** Asymmetric degradation is physically real (a storm can
-  damage one fiber direction and not the reverse), and the disaster consumer will
-  generate exactly that. `compute_qot` takes a direction; a lightpath's usable mode
-  is gated by the *worse* direction. Note GNPy's `path_request_run` does forward+
-  backward propagation in one pass, so per-direction QoT likely means driving
-  propagation per direction with per-direction span parameters rather than getting
-  it free — verify against your pinned GNPy version (see Requirements).
+- **QoT is per-direction.** Asymmetric degradation is physically real — a bidirectional
+  OMS is two physically distinct fiber runs with independent amp/fiber chains (see
+  `topology_import.py`'s `_add_directed_oms`), so e.g. a construction dig-in or a
+  splice fault can damage one direction and not its reverse. `compute_qot` takes a
+  direction; a lightpath's usable mode is gated by the *worse* direction.
+  **Storm/heatwave degradation, by contrast, is modeled symmetric** — the disaster
+  consumer applies `inject_degradation` equally to both directions of an affected
+  fiber, since a storm cell or a heat event degrades a physical span, not a single
+  strand (see CLAUDE-disaster.md). The per-direction contract stays load-bearing for
+  the asymmetric failure modes above, not as a storm-specific requirement. Note
+  GNPy's `path_request_run` does forward+backward propagation in one pass, so
+  per-direction QoT likely means driving propagation per direction with
+  per-direction span parameters rather than getting it free — verify against your
+  pinned GNPy version (see Requirements).
 
 Given a path, direction, transceiver mode, fixed per-span operating points, and a
 loading state, the adapter returns GSNR/OSNR/margin. **No power/tilt optimization**
@@ -297,6 +304,12 @@ questions:
   physically-grounded degradation path: perturb the *impairment*, let margin move as
   a consequence. Heat, aging, and any modeled impairment feed here.
 - `inject_failure(asset_set)` — mark assets failed on a branch.
+- `whatif_sensitivity(state_a, state_b, path, direction, mode, loading)` — diff
+  per-element QoT contribution between two branches (typically a nominal baseline and
+  one with `inject_degradation` applied). Isolates which physical asset's own
+  contribution to GSNR/OSNR changed, not the cumulative post-element figure (which
+  echoes the same root cause at every downstream element). Read-only; mutates neither
+  branch.
 
 ### Validate & commit (mutating, gated)
 - `validate_plan(plan)` → typed `violations[]`: QoT, spectrum clash, optical

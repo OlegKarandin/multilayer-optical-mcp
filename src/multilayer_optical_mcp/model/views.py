@@ -286,6 +286,20 @@ def failure_report_dict(report) -> dict:
             "downed_lightpaths": list(report.downed_lightpaths)}
 
 
+def sensitivity_result_dict(res) -> Dict[str, Any]:
+    return {
+        "delta_margin_db": res.delta_margin_db,
+        "delta_gsnr_db": res.delta_gsnr_db,
+        "rows": [
+            {"element_id": r.element_id,
+             "gsnr_contribution_delta_db": r.gsnr_contribution_delta_db,
+             "ase_contribution_delta_db": r.ase_contribution_delta_db,
+             "nli_contribution_delta_db": r.nli_contribution_delta_db}
+            for r in res.rows
+        ],
+    }
+
+
 def restoration_result_dict(res) -> Dict[str, Any]:
     """Serialize a RestorationResult to a JSON-safe dict."""
     def _new_lp(r) -> dict:

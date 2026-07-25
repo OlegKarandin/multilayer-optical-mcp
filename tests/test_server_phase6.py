@@ -4,6 +4,7 @@ import pytest
 from multilayer_optical_mcp.server import build_app
 from multilayer_optical_mcp.model.assets import (
     FiberType, Amplifier, Fiber, OMS, ROADM, Lightpath, IPLink, Router, Service,
+    Transceiver,
 )
 from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model.qot_results import QoTResultStore
@@ -91,3 +92,34 @@ def test_inject_failure_tool_multiple_assets():
     out = _call(app, "inject_failure", asset_ids=["fAB", "fBC"])
     assert set(out["downed_lightpaths"]) == {"lpAB", "lpBC"}
     assert set(out["failed_assets"]) == {"fAB", "fBC"}
+
+
+def test_whatif_sensitivity_tool_flags_perturbed_amp():
+    app = build_app()
+    n = app._snapshots.current()
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    n.add_roadm(ROADM(id="roadm_A"))
+    n.add_roadm(ROADM(id="roadm_B"))
+    n.add_transceiver(Transceiver(id="trx_A", site="A"))
+    n.add_transceiver(Transceiver(id="trx_B", site="B"))
+    n.add_amplifier(Amplifier(id="a1", type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+    n.add_fiber(Fiber(id="f1", a_end="roadm_A", z_end="a1", length_km=80.0, type_variety="SSMF"))
+    n.add_amplifier(Amplifier(id="a2", type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+    n.add_fiber(Fiber(id="f2", a_end="a1", z_end="a2", length_km=80.0, type_variety="SSMF"))
+    n.add_oms(OMS(id="omsAB", src_node_id="A", dst_node_id="B",
+                  elements=("roadm_A", "a1", "f1", "a2", "f2")))
+    mode_id = n.modes.list()[0].id
+
+    id_a = _call(app, "snapshot_create")["id"]
+    id_b = _call(app, "snapshot_branch", parent_id=id_a)["id"]
+    app._snapshots.current().apply_nf_delta("a2", 6.0)   # mutate branch b only
+
+    loading_channels = [{"center_freq_hz": 193.4e12, "slot_width_hz": 100e9,
+                         "power_dbm": None, "mode_id": mode_id}]
+    out = _call(app, "whatif_sensitivity", state_a=id_a, state_b=id_b,
+               oms_sequence=["omsAB"], direction="forward", mode_id=mode_id,
+               loading_channels=loading_channels)
+    assert out["delta_margin_db"] < 0
+    assert out["rows"][0]["element_id"] == "a2"
+    other = next(r for r in out["rows"] if r["element_id"] == "a1")
+    assert abs(other["gsnr_contribution_delta_db"]) < 0.05
