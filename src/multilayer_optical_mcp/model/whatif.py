@@ -18,11 +18,12 @@ Stage 8 assumptions (recorded explicitly, from the inspection roadmap):
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import List, Tuple
 
 from ..gnpy_adapter.loading import Channel, LoadingState
-from ..gnpy_adapter.adapter import recompute_qot_under_loading
+from ..gnpy_adapter.adapter import compute_qot, recompute_qot_under_loading
 from .network import NetworkModel
 from .qot import QoTState
 from .qot_results import QoTResultStore
@@ -248,3 +249,80 @@ def inject_degradation(
             within_threshold=st.margin_db <= threshold_db))
     return DegradationReport(asset_id=asset_id, nf_delta=nf_delta, loss_delta=loss_delta,
                              rows=tuple(rows), crossings=tuple(crossings))
+
+
+# ---------------------------------------------------------------------------
+# whatif_sensitivity: per-asset QoT sensitivity via branch diff
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AssetSensitivityRow:
+    element_id: str
+    gsnr_contribution_delta_db: float
+    ase_contribution_delta_db: float
+    nli_contribution_delta_db: float
+
+
+@dataclass(frozen=True)
+class SensitivityResult:
+    delta_margin_db: float
+    delta_gsnr_db: float
+    rows: Tuple[AssetSensitivityRow, ...]   # sorted by |gsnr_contribution_delta_db| desc
+
+
+def _safe_delta(before: float, after: float) -> float:
+    """after - before, but treats "equal, including both non-finite" as exactly
+    0.0. ElementSnapshot.gsnr_delta_db is structurally +-inf/NaN for elements at
+    or before the path's first noise-introducing point (the adapter's own
+    prev_gsnr_db starts at +inf) regardless of what changed elsewhere on the
+    path — a bare subtraction of two such values (e.g. -inf - -inf) yields NaN
+    even when nothing about that element actually differs between branches,
+    which would corrupt the |delta| sort. A genuine finite<->non-finite
+    transition (a real signal: this element newly introduces/stops introducing
+    measurable noise) still surfaces as a real (possibly infinite) delta."""
+    if before == after:                             # covers inf == inf
+        return 0.0
+    if math.isnan(before) and math.isnan(after):
+        return 0.0
+    return after - before
+
+
+def whatif_sensitivity(
+    model_a: NetworkModel, model_b: NetworkModel, *,
+    store: QoTResultStore,
+    oms_sequence: Tuple[str, ...], direction, mode_id: str,
+    loading: LoadingState,
+) -> SensitivityResult:
+    """Diff per-element QoT contribution between two branches (typically a
+    nominal baseline and one with inject_degradation applied) for the SAME
+    path/direction/mode/loading — isolates which asset's OWN contribution
+    changed, not the cumulative gsnr_db_after figure (which shifts at every
+    element downstream of the real cause too, echoing it rather than isolating
+    it). Read-only: computes QoT fresh on each model, mutates neither. Both
+    result_ids remain retrievable afterward via get_qot_breakdown (same
+    `store` for both calls)."""
+    state_a, rid_a = compute_qot(model=model_a, store=store, oms_sequence=oms_sequence,
+                                 direction=direction, mode_id=mode_id, loading=loading)
+    state_b, rid_b = compute_qot(model=model_b, store=store, oms_sequence=oms_sequence,
+                                 direction=direction, mode_id=mode_id, loading=loading)
+    by_id_a = {s.element_id: s for s in store.get(rid_a).snapshots}
+    by_id_b = {s.element_id: s for s in store.get(rid_b).snapshots}
+    rows = [
+        AssetSensitivityRow(
+            element_id=eid,
+            gsnr_contribution_delta_db=_safe_delta(by_id_a[eid].gsnr_delta_db,
+                                                    sb.gsnr_delta_db),
+            ase_contribution_delta_db=_safe_delta(by_id_a[eid].ase_contribution_db,
+                                                   sb.ase_contribution_db),
+            nli_contribution_delta_db=_safe_delta(by_id_a[eid].nli_contribution_db,
+                                                   sb.nli_contribution_db),
+        )
+        for eid, sb in by_id_b.items() if eid in by_id_a
+    ]
+    rows.sort(key=lambda r: abs(r.gsnr_contribution_delta_db), reverse=True)
+    return SensitivityResult(
+        delta_margin_db=state_b.margin_db - state_a.margin_db,
+        delta_gsnr_db=state_b.gsnr_db - state_a.gsnr_db,
+        rows=tuple(rows),
+    )

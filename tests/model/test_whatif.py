@@ -274,3 +274,44 @@ def test_clear_failed_keeps_sentinel_while_another_asset_still_failed():
     m.clear_failed(("fiber_0_1_0",))                 # amp_0_1_1 still failed
     st = m.get_qot_state("lp0")
     assert math.isinf(st.margin_db) and st.margin_db < 0
+
+
+# ---------------------------------------------------------------------------
+# whatif_sensitivity
+# ---------------------------------------------------------------------------
+
+from multilayer_optical_mcp.model.whatif import whatif_sensitivity, SensitivityResult
+
+
+def test_sensitivity_flags_the_perturbed_amp_as_dominant():
+    """Perturbing one amp's NF on branch B must show up as the dominant
+    per-element delta, with the OTHER amp on the same path near zero — proving
+    the diff isolates the changed asset instead of echoing the cumulative
+    downstream shift at every element."""
+    model_a = _one_edge_model()
+    model_b = model_a.clone()
+    model_b.apply_nf_delta("amp_0_1_1", 6.0)   # second (downstream) amp only
+    store = QoTResultStore()
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, None, MODE),))
+    res = whatif_sensitivity(model_a, model_b, store=store,
+                             oms_sequence=("oms_0_1",), direction=Direction.FORWARD,
+                             mode_id=MODE, loading=loading)
+    assert isinstance(res, SensitivityResult)
+    assert res.delta_margin_db < -0.5   # margin genuinely moved
+    top = res.rows[0]
+    assert top.element_id == "amp_0_1_1"
+    assert abs(top.gsnr_contribution_delta_db) > 1.0
+    other = next(r for r in res.rows if r.element_id == "amp_0_1_0")
+    assert abs(other.gsnr_contribution_delta_db) < 0.05   # unaffected amp ~= 0
+
+
+def test_sensitivity_identical_branches_are_all_zero():
+    model_a = _one_edge_model()
+    model_b = model_a.clone()
+    store = QoTResultStore()
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, None, MODE),))
+    res = whatif_sensitivity(model_a, model_b, store=store,
+                             oms_sequence=("oms_0_1",), direction=Direction.FORWARD,
+                             mode_id=MODE, loading=loading)
+    assert res.delta_margin_db == pytest.approx(0.0, abs=1e-9)
+    assert all(abs(r.gsnr_contribution_delta_db) < 1e-9 for r in res.rows)
