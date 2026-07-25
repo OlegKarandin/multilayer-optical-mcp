@@ -1,6 +1,7 @@
 import pytest
 from multilayer_optical_mcp.model.assets import (
     Fiber, FiberType, Amplifier, Lightpath, Router, IPLink, OMS, TransceiverMode,
+    Service,
 )
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
@@ -91,3 +92,46 @@ def test_full_happy_path_add_chain():
                          lightpath_id="lp1"))
     assert n.get_ip_link("ip1").lightpath_id == "lp1"
     assert n.get_oms("oms1").elements == ("amp1", "f1", "amp2")
+
+
+def _model_with_service():
+    """A->B IP topology (ipAB) plus a service A->B with only working_path set."""
+    n = _bare()
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    n.add_amplifier(Amplifier(id="amp1", type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+    n.add_fiber(Fiber(id="f1", a_end="amp1", z_end="amp2", length_km=80.0, type_variety="SSMF"))
+    n.add_amplifier(Amplifier(id="amp2", type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+    n.add_oms(OMS(id="oms1", src_node_id="A", dst_node_id="B", elements=("amp1", "f1", "amp2")))
+    n.add_lightpath(Lightpath(id="lp1", oms_sequence=("oms1",), mode_id="100G-QPSK",
+                              center_freq_hz=193.4e12))
+    n.add_router(Router(id="R-A", site="A"))
+    n.add_router(Router(id="R-B", site="B"))
+    n.add_ip_link(IPLink(id="ip1", a_router="R-A", z_router="R-B", lightpath_id="lp1"))
+    n.add_service(Service(id="svc", src_router="R-A", dst_router="R-B",
+                          demand_gbps=50.0, working_path=("ip1",)))
+    return n
+
+
+def test_set_service_protection_path_replaces_protection_leaves_working():
+    n = _model_with_service()
+    n.set_service_protection_path("svc", ("ip1",))
+    svc = n.get_service("svc")
+    assert svc.protection_path == ("ip1",)
+    assert svc.working_path == ("ip1",)               # untouched
+
+
+def test_set_service_protection_path_rejects_unknown_ip_link():
+    n = _model_with_service()
+    with pytest.raises(ValueError, match="unknown IP link"):
+        n.set_service_protection_path("svc", ("ip-missing",))
+
+
+def test_set_service_protection_path_rejects_non_contiguous_path():
+    n = _model_with_service()
+    # Second link B->C: does not connect src_router="R-A" to dst_router="R-B".
+    n.add_lightpath(Lightpath(id="lp2", oms_sequence=("oms1",), mode_id="100G-QPSK",
+                              center_freq_hz=193.5e12))
+    n.add_router(Router(id="R-C", site="C"))
+    n.add_ip_link(IPLink(id="ip2", a_router="R-B", z_router="R-C", lightpath_id="lp2"))
+    with pytest.raises(ValueError, match="does not connect"):
+        n.set_service_protection_path("svc", ("ip2",))

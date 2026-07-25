@@ -267,6 +267,26 @@ class NetworkModel:
             )
         self._services[service_id] = replace(svc, working_path=tuple(ip_path))
 
+    def set_service_protection_path(
+        self, service_id: str, ip_path: Tuple[str, ...],
+    ) -> None:
+        """Set the service's intended protection path (validated for connectivity
+        only). Mirrors set_service_working_path's contract exactly: statement of
+        INTENT, not a liveness guarantee -- margin/capacity viability is
+        validate_plan's job (_protection_viability_findings), never this method's.
+        """
+        from .ip_routing import is_contiguous_path
+        self._check_mutable()
+        svc = self._services[service_id]
+        for ip_id in ip_path:
+            if ip_id not in self._ip_links:
+                raise ValueError(f"unknown IP link {ip_id!r}")
+        if not is_contiguous_path(self, svc.src_router, svc.dst_router, ip_path):
+            raise ValueError(
+                f"ip_path does not connect {svc.src_router!r}->{svc.dst_router!r}"
+            )
+        self._services[service_id] = replace(svc, protection_path=tuple(ip_path))
+
     def add_srlg(self, g: SRLG) -> None:
         self._check_mutable()
         self._srlgs[g.id] = g
