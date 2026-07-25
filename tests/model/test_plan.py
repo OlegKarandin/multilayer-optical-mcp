@@ -1,7 +1,7 @@
 import pytest
 from multilayer_optical_mcp.model.assets import ROADM
 from multilayer_optical_mcp.model.assets import (
-    FiberType, Amplifier, Fiber, OMS, Lightpath, IPLink, Service,
+    FiberType, Amplifier, Fiber, OMS, Lightpath, IPLink, Service, Router,
 )
 from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model.modes import ModeRegistry
@@ -111,3 +111,53 @@ def test_provision_duplicate_lightpath_id_raises_plan_error():
     apply_op(m, op)
     with pytest.raises(PlanError):
         apply_op(m, op)        # same lightpath id again -> rejected, not overwritten
+
+
+def _model_with_service():
+    m = _model()
+    m.add_router(Router(id="rA", site="A"))
+    m.add_router(Router(id="rB", site="B"))
+    apply_op(m, ProvisionLightpath(
+        lightpath=Lightpath(id="lp1", oms_sequence=("omsAB",), mode_id="400G",
+                            center_freq_hz=193.4e12),
+        ip_link=IPLink(id="ip1", a_router="rA", z_router="rB", lightpath_id="lp1")))
+    m.add_service(Service(id="svc", src_router="rA", dst_router="rB",
+                          demand_gbps=50.0, working_path=("ip1",)))
+    return m
+
+
+def test_reroute_service_which_protection_dispatches_to_protection_path():
+    m = _model_with_service()
+    apply_op(m, RerouteService(service_id="svc", ip_path=("ip1",), which="protection"))
+    svc = m.get_service("svc")
+    assert svc.protection_path == ("ip1",)
+    assert svc.working_path == ("ip1",)               # untouched (fixture already set it)
+
+
+def test_reroute_service_which_default_is_working_regression_guard():
+    m = _model_with_service()
+    apply_op(m, RerouteService(service_id="svc", ip_path=("ip1",)))   # which omitted
+    svc = m.get_service("svc")
+    assert svc.working_path == ("ip1",)
+    assert svc.protection_path == ()                  # unchanged, still empty
+
+
+def test_reroute_service_unrecognized_which_raises_plan_error():
+    from multilayer_optical_mcp.model.plan import PlanError
+    m = _model_with_service()
+    with pytest.raises(PlanError, match="which"):
+        apply_op(m, RerouteService(service_id="svc", ip_path=("ip1",), which="bogus"))
+
+
+def test_plan_from_dict_parses_which_key():
+    plan = plan_from_dict({"ops": [
+        {"op": "reroute_service", "service_id": "svc", "ip_path": ["ip1"], "which": "protection"},
+    ]})
+    assert plan.ops[0].which == "protection"
+
+
+def test_plan_from_dict_defaults_which_to_working_when_absent():
+    plan = plan_from_dict({"ops": [
+        {"op": "reroute_service", "service_id": "svc", "ip_path": ["ip1"]},
+    ]})
+    assert plan.ops[0].which == "working"

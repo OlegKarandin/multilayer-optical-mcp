@@ -33,6 +33,7 @@ class TeardownLightpath:
 class RerouteService:
     service_id: str
     ip_path: Tuple[str, ...]
+    which: str = "working"
 
 
 @dataclass(frozen=True)
@@ -79,8 +80,14 @@ def apply_op(model: NetworkModel, op: PlanOp) -> None:
     elif isinstance(op, RerouteService):
         if op.service_id not in model._services:
             raise PlanError(f"reroute: unknown service {op.service_id!r}")
+        if op.which == "working":
+            setter = model.set_service_working_path
+        elif op.which == "protection":
+            setter = model.set_service_protection_path
+        else:
+            raise PlanError(f"reroute {op.service_id!r}: unrecognized which {op.which!r}")
         try:
-            model.set_service_working_path(op.service_id, tuple(op.ip_path))
+            setter(op.service_id, tuple(op.ip_path))
         except ValueError as exc:
             raise PlanError(f"reroute {op.service_id!r}: {exc}") from exc
     elif isinstance(op, SetModulationFormat):
@@ -121,7 +128,8 @@ def plan_from_dict(data: dict) -> Plan:
        "lightpath": {id, oms_sequence, mode_id, center_freq_hz},
        "ip_link": {id, a_router, z_router} | null},
       {"op": "teardown_lightpath", "lightpath_id": ...},
-      {"op": "reroute_service", "service_id": ..., "ip_path": [...]},
+      {"op": "reroute_service", "service_id": ..., "ip_path": [...],
+       "which": "working"|"protection"  # optional, defaults "working"},
       {"op": "set_modulation_format", "lightpath_id": ..., "mode_id": ...}]}
     """
     ops: list[PlanOp] = []
@@ -141,7 +149,8 @@ def plan_from_dict(data: dict) -> Plan:
             ops.append(TeardownLightpath(lightpath_id=raw["lightpath_id"]))
         elif kind == "reroute_service":
             ops.append(RerouteService(service_id=raw["service_id"],
-                                      ip_path=tuple(raw["ip_path"])))
+                                      ip_path=tuple(raw["ip_path"]),
+                                      which=raw.get("which", "working")))
         elif kind == "set_modulation_format":
             ops.append(SetModulationFormat(lightpath_id=raw["lightpath_id"],
                                            mode_id=raw["mode_id"]))
