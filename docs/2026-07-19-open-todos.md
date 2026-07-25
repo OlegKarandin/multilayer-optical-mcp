@@ -373,20 +373,23 @@ re-derived from source by a task reviewer, not just re-run):
   simplifications recorded so a future change doesn't reintroduce the underlying
   assumption unknowingly. **All items reconfirmed against current source (2026-07-24
   verification pass, HEAD `5555fc8`) — no drift.**
-- **New (2026-07-23): amp band-edge always drops the top grid slot.** On this
-  repo's `SpectrumGrid`/amp-band configuration, the topmost spectrum slot's
-  occupied band (±50 GHz around center, for a 100 GHz-spaced grid) exceeds
-  GNPy's `AMP_BAND` guard (only 25 GHz past the signal band) by 25 GHz, so every
-  `Edfa` element silently demuxes that carrier out on *every* path, in *either*
-  direction — a structural property of the grid/guard-band combination, not a
-  per-topology quirk. Confirmed against GNPy's `is_in_band`/
-  `demuxed_spectral_information` source, not just observed behavior. Surfaced by
-  `harvest_qot` (§3 above), which now documents and tests around it (returns 47
-  of 48 slots; consuming code must check membership, not index blindly). Not
-  fixed at the root (would mean widening `AMP_BAND`'s guard past half a channel
-  width, a GNPy-config-level change with broader implications) — recorded here
-  as a documented limitation for whoever next touches spectrum-grid/amp-band
-  config.
+- **Amp band-edge top-slot drop — RESOLVED (2026-07-25, commits `b93f288`,
+  `042f173`).** Per `docs/superpowers/plans/2026-07-25-spectrum-band-guard-fix.md`:
+  `bands.py`'s `_AMP_GUARD_HZ` widened from `25e9` to `50e9` — the exact minimum
+  needed (confirmed against GNPy's `is_in_band`, `gnpy/core/info.py:396-399`, an
+  INCLUSIVE `>=`/`<=` boundary check) for `AMP_BAND` to cover the topmost spectrum
+  slot's full occupied band (±50 GHz around center, for this repo's default 100
+  GHz-spaced grid, which tiles `SI_BAND` with zero slack so the top channel's
+  center sits flush with `SI_BAND.f_max`). `harvest_qot` now returns all 48 of 48
+  slots, not 47 (`tests/gnpy_adapter/test_harvest_qot.py` inverted accordingly).
+  The blast radius was narrow — `AMP_BAND` has exactly one consumer
+  (`synthesize.py`'s advanced-model NF-fit `f_min`/`f_max`) — confirmed via
+  repo-wide grep before the fix. To prevent the same silent-drop trap
+  reappearing if the default grid spacing ever changes, `tests/gnpy_adapter/
+  test_bands.py` now pins the cross-module invariant (`_AMP_GUARD_HZ >=
+  SpectrumGrid.default().spacing_hz / 2`) as a test rather than a runtime import
+  coupling, so a future mismatch fails loudly in CI instead of silently
+  reintroducing the drop.
 
 ---
 
