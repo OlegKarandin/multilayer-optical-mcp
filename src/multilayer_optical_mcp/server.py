@@ -247,13 +247,22 @@ def build_app() -> FastMCP:
         return ip_routing_result_dict(_simulate_ip_routing(snapshots.current()))
 
     @app.tool()
-    def reroute_service(service_id: str, ip_path: list[str]) -> dict:
-        """Move a service's working_path onto a different IP-link sequence.
-        Validates contiguity src->dst; raises on an invalid path."""
+    def reroute_service(service_id: str, ip_path: list[str], which: str = "working") -> dict:
+        """Move a service's working_path (default) or protection_path onto a
+        different IP-link sequence. `which` selects the leg: "working" or
+        "protection". Validates contiguity src->dst; raises on an invalid path
+        or an unrecognized `which`."""
         model = snapshots.current()
-        model.set_service_working_path(service_id, tuple(ip_path))
+        if which == "working":
+            model.set_service_working_path(service_id, tuple(ip_path))
+            key = "working_path"
+        elif which == "protection":
+            model.set_service_protection_path(service_id, tuple(ip_path))
+            key = "protection_path"
+        else:
+            raise ValueError(f"unrecognized which {which!r}: expected 'working' or 'protection'")
         svc = model.get_service(service_id)
-        return {"service_id": svc.id, "working_path": list(svc.working_path)}
+        return {"service_id": svc.id, key: list(getattr(svc, key))}
 
     @app.tool()
     def list_srlgs() -> list[dict]:

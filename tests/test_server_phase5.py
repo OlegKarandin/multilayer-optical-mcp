@@ -104,3 +104,26 @@ def test_reroute_service_tool_rejects_bad_path():
     _seed(app)
     with pytest.raises(ValueError, match="does not connect"):
         _call(app, "reroute_service", service_id="svc-AC", ip_path=["ipAB"])
+
+
+def test_reroute_service_tool_which_protection_returns_protection_path():
+    app = build_app()
+    bitrate = _seed(app)
+    n = app._snapshots.current()
+    mode_id = n.modes.list()[0].id
+    n.add_lightpath(Lightpath(id="lpAC", oms_sequence=("omsAB", "omsBC"),
+                              mode_id=mode_id, center_freq_hz=193.5e12))
+    n.set_qot_state("lpAC", QoTState(gsnr_db=30.0, osnr_db=32.0, margin_db=5.0))
+    n.add_ip_link(IPLink(id="ipAC", a_router="R-A", z_router="R-C",
+                         lightpath_id="lpAC"))
+    out = _call(app, "reroute_service", service_id="svc-AC", ip_path=["ipAC"],
+               which="protection")
+    assert out["service_id"] == "svc-AC"
+    assert out["protection_path"] == ["ipAC"]
+    assert "working_path" not in out
+
+    # omitted `which` still targets working_path (regression guard), unaffected by
+    # the protection reroute above:
+    out2 = _call(app, "reroute_service", service_id="svc-AC", ip_path=["ipAC"])
+    assert out2["working_path"] == ["ipAC"]
+    assert "protection_path" not in out2
