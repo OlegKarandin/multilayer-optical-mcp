@@ -83,6 +83,23 @@ def test_disjointness_collapse_when_working_and_protection_share_oms():
     assert "omsAB" in collapse[0].detail["shared_assets"]
 
 
+def test_disjointness_collapse_via_protection_reroute_op():
+    # Same disjointness-collapse setup, but protection_path is set through the
+    # RerouteService(which="protection") plan op -- not hand-built via replace() --
+    # proving the plan-level path into collapse detection actually works end to end.
+    m = _ip_over_optical(demand=10.0)
+    m.add_lightpath(Lightpath(id="lpAB2", oms_sequence=("omsAB",), mode_id="400G",
+                              center_freq_hz=193.5e12))
+    m.add_ip_link(IPLink(id="ipAB2", a_router="rA", z_router="rB", lightpath_id="lpAB2"))
+    m.set_qot_state("lpAB2", QoTState(gsnr_db=12.0, osnr_db=22.0, margin_db=2.0))
+    plan = Plan(ops=(RerouteService(service_id="svc", ip_path=("ipAB2",), which="protection"),))
+    report = validate_plan(m, plan, store=_store(), basis="physical", level="link")
+    collapse = [v for v in report.violations
+                if v.type == ViolationType.DISJOINTNESS_COLLAPSE]
+    assert collapse and collapse[0].asset_id == "svc"
+    assert "omsAB" in collapse[0].detail["shared_assets"]
+
+
 def test_spectrum_clash_detail_distinguishes_retune_from_reroute():
     # Provision a second lightpath onto lpAB's exact (oms, slot). The clashed
     # state short-circuits QoT (no GNPy), so this is fast and deterministic.

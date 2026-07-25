@@ -333,3 +333,58 @@ def test_reserved_capacity_sums_protection_demand():
     reserved = reserved_capacity_per_link(m)
     assert reserved["ipCD"] == 100.0
     assert reserved["ipAB"] == 0.0                  # working link carries no reservation
+
+
+def _disjoint_two_route_topology():
+    """A->Z over two disjoint OMS (north/south), routers at A and Z, for a real
+    solve_allocation protected placement. Mirrors test_allocation.py's _two_routes()."""
+    reg = _MR([
+        _TM(id="100G-QPSK", bitrate_gbps=100.0, required_gsnr_db=5.0,
+            symbol_rate_baud=32e9, channel_spacing_hz=50e9),
+    ])
+    n = _NM(modes=reg)
+    n.register_fiber_type(_FT(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    for a in ("aN1", "aN2", "aS1", "aS2"):
+        n.add_amplifier(_Amp(id=a, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+    n.add_fiber(_Fiber(id="fN", a_end="aN1", z_end="aN2", length_km=80.0, type_variety="SSMF"))
+    n.add_fiber(_Fiber(id="fS", a_end="aS1", z_end="aS2", length_km=120.0, type_variety="SSMF"))
+    for node in ("A", "Z"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    n.add_oms(_OMS(id="oms-north", src_node_id="A", dst_node_id="Z",
+                  elements=("roadm_A", "aN1", "fN", "aN2")))
+    n.add_oms(_OMS(id="oms-south", src_node_id="A", dst_node_id="Z",
+                  elements=("roadm_A", "aS1", "fS", "aS2")))
+    n.add_router(Router(id="r_A", site="A"))
+    n.add_router(Router(id="r_Z", site="Z"))
+    return n
+
+
+def test_solve_allocation_protected_service_fails_over_to_real_protection():
+    from multilayer_optical_mcp.model.allocation import solve_allocation_model
+    from multilayer_optical_mcp.model.solvers import SolverStatus
+
+    class _HiQot:
+        def __call__(self, *, oms_sequence, direction, mode_id, loading):
+            return _QoT(gsnr_db=16.0, osnr_db=18.0, margin_db=4.0)
+
+    n = _disjoint_two_route_topology()
+    res, work = solve_allocation_model(n, _HiQot(),
+                           [{"id": "d1", "src": "A", "dst": "Z",
+                             "demand_gbps": 100.0, "protected": True}],
+                           spare_inventory={"A": 2, "Z": 2})
+    assert res.status is SolverStatus.SOLUTION
+    svc = work.get_service("d1")
+    assert svc.working_path and svc.protection_path      # both legs really populated
+
+    # Fail the working leg by driving its lightpath's margin negative -- same
+    # technique test_working_failure_fails_over_to_protection_not_dropped uses on a
+    # hand-built fixture; here the fixture is a REAL solve_allocation output.
+    working_lp_id = work.get_ip_link(svc.working_path[0]).lightpath_id
+    work.set_qot_state(working_lp_id, _QoT(gsnr_db=2.0, osnr_db=5.0, margin_db=-1.0))
+
+    result = _sim(work)
+    assert "d1" not in {d.service_id for d in result.dropped_services}
+    assert "d1" in result.restored_services
+    prot_link = svc.protection_path[0]
+    util = {u.ip_link_id: u for u in result.utilizations}
+    assert util[prot_link].offered_gbps == 100.0
