@@ -55,7 +55,17 @@ class Band:
 
 # The amp NF-fit band sits one guard band outside the SI band on each edge, so
 # the flat-NF advanced_model is fit across the full channel range plus headroom.
-_AMP_GUARD_HZ = 25e9
+# 50 GHz = half this repo's default 100 GHz channel spacing (SpectrumGrid,
+# model/spectrum.py): SI_BAND tiles exactly 48 channels with zero slack, so the
+# top channel's center sits flush with SI_BAND.f_max and its occupied band
+# (center +- spacing/2) needs the full 50 GHz to clear GNPy's INCLUSIVE
+# is_in_band check (gnpy/core/info.py:396-399: >=/<=, not >/<). The previous
+# 25 GHz value silently demuxed the top channel out of every Edfa's NF-fit
+# range on every path, in both directions (docs/2026-07-19-open-todos.md §6).
+# tests/gnpy_adapter/test_bands.py pins this relationship so a future grid- or
+# guard-value change that breaks it fails loudly instead of reintroducing the
+# drop silently.
+_AMP_GUARD_HZ = 50e9
 # The transceiver tuning band is inset from the SI band at the low edge (extra
 # roll-off headroom); its top edge is flush with the SI band's top edge.
 _TRX_LOW_GUARD_HZ = 50e9
