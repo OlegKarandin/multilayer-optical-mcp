@@ -31,13 +31,17 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 MOD_FORMATS_YAML = REPO_ROOT / "modulation_formats.yaml"
 
 
-def build_app() -> FastMCP:
+def build_app(*, model: NetworkModel | None = None,
+              snapshots: SnapshotStore | None = None,
+              results: QoTResultStore | None = None) -> FastMCP:
     """Construct and return the FastMCP application with all phase 1-2 tools."""
     app = FastMCP("multilayer-optical-mcp")
     modes = load_modulation_formats(MOD_FORMATS_YAML)
-    model = NetworkModel(modes=modes)
-    snapshots = SnapshotStore(initial=model, max_snapshots=64, ttl_seconds=3600)
-    results = QoTResultStore(max_results=512, ttl_seconds=600)
+    if snapshots is None:
+        snapshots = SnapshotStore(initial=model or NetworkModel(modes=modes),
+                                   max_snapshots=64, ttl_seconds=3600)
+    if results is None:
+        results = QoTResultStore(max_results=512, ttl_seconds=600)
 
     @app.tool()
     def get_transceiver_modes() -> list[dict]:
