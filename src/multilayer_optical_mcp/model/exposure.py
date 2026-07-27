@@ -166,11 +166,19 @@ def path_basis_keys(
     keys: set[str] = set()
 
     def add_physical() -> None:
+        # Node-disjointness must never be WEAKER than link-disjointness: two
+        # vertex-disjoint paths are automatically edge-disjoint (standard
+        # graph-theory implication), so level="node" includes the span-level
+        # (phys) keys as a floor, plus the node-only interior-node refinement
+        # on top -- making it a strictly harder (superset) condition, not an
+        # independent, sometimes-weaker one. Without the phys floor, a
+        # single-hop path's node-only set is always empty (its only touched
+        # nodes ARE its own endpoints), so it would be trivially "disjoint"
+        # from anything, including itself.
+        keys.update(_PHYS + a for a in phys)
         if level == "node":
             nodes = oms_seq_node_set(model, oms_sequence) - endpoint_nodes
             keys.update(_NODE + n for n in nodes)
-        else:
-            keys.update(_PHYS + a for a in phys)
 
     def add_srlg() -> None:
         for g in model.list_srlgs():

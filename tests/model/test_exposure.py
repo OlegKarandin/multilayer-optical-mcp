@@ -6,7 +6,7 @@ from multilayer_optical_mcp.model.assets import (
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.exposure import (
-    ExposureResult, compute_exposure, service_asset_set,
+    ExposureResult, compute_exposure, service_asset_set, path_basis_keys,
 )
 
 
@@ -132,3 +132,19 @@ def test_exposure_service_with_no_protection_path():
     assert res.working_intersects is True
     assert res.protection_intersects is False
     assert res.both_intersect is False
+
+
+def test_level_node_is_never_weaker_than_level_link():
+    """Regression for the audit's Critical level='node' inversion finding.
+    A single-hop OMS compared against ITSELF must NOT be reported disjoint at
+    level='node' -- node-disjointness must never be weaker than
+    link-disjointness (the standard graph-theory implication: vertex-disjoint
+    paths are automatically edge-disjoint, never the other way round)."""
+    model = _model_two_paths()
+    node_keys = path_basis_keys(model, ("oms-north",), basis="physical", level="node")
+    link_keys = path_basis_keys(model, ("oms-north",), basis="physical", level="link")
+
+    assert node_keys  # must NOT be empty for a single-hop path compared to itself
+    # node-level must be a superset of link-level (link keys use the same
+    # "phys:" namespace under both levels).
+    assert link_keys <= node_keys
