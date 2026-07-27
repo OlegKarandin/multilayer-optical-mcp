@@ -234,9 +234,16 @@ def score_candidate(model, placement, service, weights=None) -> ObjectiveResult:
 def score_pair(model, working, protection, service, weights=None) -> ObjectiveResult:
     """Provision BOTH legs (protection's transponders/spectrum/total_margin count),
     route the working leg. Protection is 1:1 reserved and idle -> not loaded, so it
-    contributes no IP load; its cost surfaces via provisioned lightpaths."""
+    contributes no IP load; its cost surfaces via provisioned lightpaths.
+
+    Scratch ids use a "score-" prefix reserved for this throwaway clone, distinct
+    from allocation.py's real committer prefixes ("cand" default, "prot"
+    explicit) -- score_pair used to reuse "prot", which collided with a
+    service's own already-committed protection lightpath (same id scheme) the
+    moment route_service was asked to replan the protection leg of an
+    already-protected service, an in-scope restoration use case."""
     work = model.clone()
-    apply_candidate(work, working, service, prefix="work")
+    apply_candidate(work, working, service, prefix="score-work")
     # provision protection's new lightpaths (no reroute) so their cost is counted
-    provision_new_runs(work, protection, service, prefix="prot")
+    provision_new_runs(work, protection, service, prefix="score-prot")
     return evaluate_objective(work, weights)

@@ -8,7 +8,7 @@ from multilayer_optical_mcp.model.assets import (
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot import QoTState
-from multilayer_optical_mcp.model.objective import score_candidate, evaluate_objective
+from multilayer_optical_mcp.model.objective import score_candidate, evaluate_objective, score_pair
 from multilayer_optical_mcp.model.multilayer_graph import Placement, NewLightpathRun
 
 
@@ -72,6 +72,41 @@ def test_margin_negative_candidate_scores_dropped(diamond_service_lowgsnr):
                                           src_node="A", dst_node="B"),), 0.0, 100.0)
     r = score_candidate(model, cand, svc)
     assert r.dropped_traffic > 0.0     # not nominal line rate
+
+
+def test_score_pair_scratch_ids_do_not_collide_with_committed_protection_leg(diamond_service):
+    """Regression: score_pair used allocation.py's real committer prefix
+    ("prot") for its throwaway scoring clone, so scoring ANY new
+    protection-leg candidate for a service that already has a committed
+    protection leg (id lp-prot-{svc.id}-0, allocation.py's _pack naming)
+    raised PlanError("already exists") -- blocking route_service's
+    documented use for replanning an already-protected service's protection
+    leg (CLAUDE.md: reroute_service(which="protection") after a risk group
+    reveals correlation)."""
+    model, svc = diamond_service   # empty net + one service svc-AB
+    # A pre-existing committed protection leg, named exactly as allocation.py's
+    # _pack would name a service's first (and only) protection run.
+    model.add_lightpath(Lightpath(id="lp-prot-svc-AB-0", oms_sequence=("omsAB",),
+                                  mode_id="100G", center_freq_hz=193.4e12))
+    model.set_qot_state("lp-prot-svc-AB-0",
+                        QoTState(gsnr_db=15.0, osnr_db=30.0, margin_db=5.0))
+    model.add_ip_link(IPLink(id="ipl-prot-svc-AB-0", a_router="A", z_router="B",
+                             lightpath_id="lp-prot-svc-AB-0"))
+    model.set_service_protection_path(svc.id, ("ipl-prot-svc-AB-0",))
+
+    working = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 0, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+    # A NEW protection candidate (not a reuse of the committed leg above) --
+    # this is what scoring a replan candidate looks like.
+    protection = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 1, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+
+    result = score_pair(model, working, protection, svc)   # must not raise
+    assert result.transponders > 0.0
 
 
 def _shrunk_reuse_model() -> NetworkModel:
