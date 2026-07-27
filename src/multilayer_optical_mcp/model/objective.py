@@ -141,13 +141,44 @@ def _stitch_ip_path(segments, src_router, dst_router):
     return tuple(path)
 
 
+# Real-committer id namespaces (allocation.py's _pack): "cand" (default,
+# non-protected + protected-working) and "prot" (explicit, protected-
+# protection). Any scoring/throwaway caller of apply_candidate/
+# provision_new_runs MUST use a prefix outside this set -- score_pair uses
+# "score-work"/"score-prot", score_candidate uses "score-cand" below.
+# _mint_unique is defense in depth: it also handles a REAL committer
+# colliding with its OWN prior commits (allocation.py's _pack re-processing a
+# demand id after a failure cut the demand's earlier lightpath).
+RESERVED_COMMITTER_PREFIXES = frozenset({"cand", "prot"})
+
+
+def _mint_unique(work, registry_attr: str, template: str) -> str:
+    """Return `template` if free in `work`'s `registry_attr` dict (e.g.
+    '_lightpaths' or '_ip_links'), else the first `template-N` (N=2,3,...)
+    that is free. Prevents two independent id-minting producers -- a scorer
+    and a real committer, or a real committer colliding with its own prior
+    commits on a re-run -- from silently overwriting or crashing on the same
+    asset id."""
+    registry = getattr(work, registry_attr)
+    if template not in registry:
+        return template
+    n = 2
+    while f"{template}-{n}" in registry:
+        n += 1
+    return f"{template}-{n}"
+
+
 def _provision_and_seed_run(work, run, lp_id, ipl_id, site_to_router, grid):
     """Provision one NewLightpathRun as a lightpath+IP link via the real
     apply_op path, then SEED its QoT from the run's gsnr_db (real provision does
     not seed QoT; real commit reaches the same numbers via a post-commit
     recompute). Shared by apply_candidate (working leg) and score_pair
     (protection leg) so both go through identical provisioning logic. Returns
-    (a_router, z_router) for the caller to build IP-path segments from."""
+    (a_router, z_router, lp_id, ipl_id) -- the ACTUAL ids used, which may
+    differ from the requested lp_id/ipl_id if either collided with an id
+    already present in `work` (see _mint_unique)."""
+    lp_id = _mint_unique(work, "_lightpaths", lp_id)
+    ipl_id = _mint_unique(work, "_ip_links", ipl_id)
     a = site_to_router[run.src_node]
     z = site_to_router[run.dst_node]
     apply_op(work, ProvisionLightpath(
@@ -157,7 +188,7 @@ def _provision_and_seed_run(work, run, lp_id, ipl_id, site_to_router, grid):
     req = work.modes.get(run.mode_id).required_gsnr_db
     work.set_qot_state(lp_id, QoTState(gsnr_db=run.gsnr_db, osnr_db=run.gsnr_db,
                                        margin_db=run.gsnr_db - req))
-    return a, z
+    return a, z, lp_id, ipl_id
 
 
 def apply_candidate(work, placement, service, *, prefix="cand") -> None:
@@ -176,7 +207,8 @@ def apply_candidate(work, placement, service, *, prefix="cand") -> None:
     for i, run in enumerate(placement.new_lightpaths):
         lp_id = f"lp-{prefix}-{service.id}-{i}"
         ipl_id = f"ipl-{prefix}-{service.id}-{i}"
-        a, z = _provision_and_seed_run(work, run, lp_id, ipl_id, site_to_router, grid)
+        a, z, lp_id, ipl_id = _provision_and_seed_run(
+            work, run, lp_id, ipl_id, site_to_router, grid)
         segments.append((a, z, ipl_id))
     ip_path = _stitch_ip_path(segments, service.src_router, service.dst_router)
     apply_op(work, RerouteService(service_id=service.id, ip_path=ip_path))
@@ -203,7 +235,8 @@ def provision_new_runs(work, placement, service, *, prefix) -> Tuple[str, ...]:
     for i, run in enumerate(placement.new_lightpaths):
         lp_id = f"lp-{prefix}-{service.id}-{i}"
         ipl_id = f"ipl-{prefix}-{service.id}-{i}"
-        a, z = _provision_and_seed_run(work, run, lp_id, ipl_id, site_to_router, grid)
+        a, z, lp_id, ipl_id = _provision_and_seed_run(
+            work, run, lp_id, ipl_id, site_to_router, grid)
         segments.append((a, z, ipl_id))
     return _stitch_ip_path(segments, service.src_router, service.dst_router)
 
@@ -227,7 +260,7 @@ def placement_materializable(model, placement) -> bool:
 
 def score_candidate(model, placement, service, weights=None) -> ObjectiveResult:
     work = model.clone()
-    apply_candidate(work, placement, service)
+    apply_candidate(work, placement, service, prefix="score-cand")
     return evaluate_objective(work, weights)
 
 

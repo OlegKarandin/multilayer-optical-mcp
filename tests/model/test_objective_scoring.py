@@ -166,3 +166,56 @@ def test_provision_new_runs_stitches_reused_leg_into_ip_path():
     # _pack feeds into RerouteService(which="protection") for a real commit.
     apply_op(work, RerouteService(service_id=svc.id, ip_path=ip_path, which="protection"))
     assert work.get_service("svc").protection_path == ("ipAB",)
+
+
+def test_score_candidate_does_not_collide_with_real_committer_prefix(diamond_service):
+    """Regression for the audit's Critical id-namespace finding: score_candidate
+    must not raise PlanError when scoring a candidate for a service whose
+    existing lightpath was minted by allocation.py's real committer under the
+    SAME default 'cand' prefix and the same index-0 id (allocation.py's _pack
+    names an unprotected demand's first run exactly 'lp-cand-{demand_id}-0')."""
+    model, svc = diamond_service
+    # Mint a lightpath the way allocation.py's _pack does for an unprotected
+    # demand: prefix="cand" (default), index 0.
+    model.add_lightpath(Lightpath(id=f"lp-cand-{svc.id}-0", oms_sequence=("omsAB",),
+                                  mode_id="100G", center_freq_hz=193.4e12))
+    model.set_qot_state(f"lp-cand-{svc.id}-0",
+                        QoTState(gsnr_db=15.0, osnr_db=30.0, margin_db=5.0))
+    model.add_ip_link(IPLink(id=f"ipl-cand-{svc.id}-0", a_router="A", z_router="B",
+                             lightpath_id=f"lp-cand-{svc.id}-0"))
+
+    # A NEW candidate at index 0 (mirrors route_service's real harvest shape --
+    # a fresh scoring pass always starts its own new_lightpaths enumeration at
+    # index 0, regardless of what's already committed in the model).
+    candidate = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 1, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+
+    result = score_candidate(model, candidate, svc)   # must not raise
+    assert result.transponders > 0.0
+
+
+def test_apply_candidate_disambiguates_on_id_collision(diamond_service):
+    """A real committer re-processing the same service/demand id after its
+    prior lightpath was cut must not silently overwrite (or crash on) the
+    prior lightpath's id -- _mint_unique must pick a distinct id."""
+    from multilayer_optical_mcp.model.objective import apply_candidate
+    model, svc = diamond_service
+    model.add_lightpath(Lightpath(id=f"lp-cand-{svc.id}-0", oms_sequence=("omsAB",),
+                                  mode_id="100G", center_freq_hz=193.4e12))
+    model.set_qot_state(f"lp-cand-{svc.id}-0",
+                        QoTState(gsnr_db=15.0, osnr_db=30.0, margin_db=5.0))
+    model.add_ip_link(IPLink(id=f"ipl-cand-{svc.id}-0", a_router="A", z_router="B",
+                             lightpath_id=f"lp-cand-{svc.id}-0"))
+
+    candidate = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 1, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+
+    apply_candidate(model, candidate, svc)   # must not raise PlanError
+
+    # Both the pre-existing and the newly-minted lightpath must coexist.
+    assert f"lp-cand-{svc.id}-0" in model._lightpaths
+    assert len(model._lightpaths) == 2
