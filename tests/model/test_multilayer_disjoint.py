@@ -170,25 +170,78 @@ def test_hybrid_placement_endpoint_exclusion_needs_explicit_endpoints(diamond):
 def test_route_service_and_check_disjointness_agree_on_hybrid_placements(diamond):
     """The cross-implementation property test the audit called for: the
     layered engine's disjoint_pairs (with explicit endpoints) and the flat
-    engine's solvers.check_disjointness must agree on the SAME hybrid pair."""
+    engine's solvers.check_disjointness must agree on the SAME hybrid pair --
+    and the scenario must be built so that the FIXED and BROKEN (positional-
+    inference) layered verdicts actually differ, or the agreement assertion
+    is vacuous (task-5 review finding: the original version of this test
+    shared only the ingress ROADM `roadm_A`, which both the fixed and the
+    broken code happened to exclude, so `disjoint=True` either way -- the
+    assertion passed even with `endpoints` silently ignored).
+
+    To discriminate, this adds one extra OMS edge (`omsM2M1`, M2->M1) so a
+    second placement can transit the diamond's M1 waypoint via a DIFFERENT
+    link than the hybrid's own M1 leg. `other`'s route A-M2-M1-B genuinely
+    shares the transit node M1 with `hybrid`'s route A-M1-B (node-level
+    basis), so whether M1 is (wrongly) treated as a mandated endpoint of the
+    hybrid placement changes the verdict:
+
+    - FIXED (endpoints=("A","B")): hybrid's node keys = {M1} (A/B excluded as
+      the true mandated endpoints); other's = {M1,M2}; shared = {M1} ->
+      NOT disjoint.
+    - BROKEN (no endpoints, positional inference off the reused-then-new
+      concatenation ("omsM1B","omsAM1")): infers M1 as the mandated endpoint
+      (first.src == last.dst == M1) and wrongly keeps A/B; hybrid's keys =
+      {A,B}; other's (positional inference happens to work for it, since it's
+      a single ordered NewLightpathRun) = {M1,M2}; shared = {} -> disjoint.
+
+    These verdicts are opposite, confirmed empirically (see task-5-report.md
+    fix section) -- so this scenario can actually catch `endpoints` being
+    silently dropped, unlike the original. The flat engine is then fed the
+    TRUE physical-order OMS sequences (new-then-reused for the hybrid leg,
+    matching how a real caller like plan.service_oms_sequence would walk the
+    IP path) and must agree with the FIXED layered verdict, not the broken
+    one."""
     from multilayer_optical_mcp.model.solvers import check_disjointness
     model = diamond
     model.add_lightpath(Lightpath("lpM1B", ("omsM1B",), "100G", 193.5e12))
+
+    # Extra M2->M1 edge so `other` can transit the diamond's M1 waypoint via a
+    # link the hybrid placement never touches.
+    model.add_amplifier(Amplifier("aM2M1a", "advanced_toy", 20.0, 5.5))
+    model.add_amplifier(Amplifier("aM2M1b", "advanced_toy", 20.0, 5.5))
+    model.add_fiber(Fiber("fM2M1", "aM2M1a", "aM2M1b", 40.0, "SSMF"))
+    model.add_oms(OMS("omsM2M1", "M2", "M1", ("roadm_M2", "aM2M1a", "fM2M1", "aM2M1b")))
 
     hybrid = Placement(reused_lightpaths=("lpM1B",),
         new_lightpaths=(NewLightpathRun(("omsAM1",), 0, "100G", 15.0, 100.0,
                                         src_node="A", dst_node="M1"),),
         restored_gbps=100.0, shortfall_gbps=0.0)
     other = Placement(reused_lightpaths=(),
-        new_lightpaths=(NewLightpathRun(("omsAM2", "omsM2B"), 1, "100G", 15.0, 100.0,
-                                        src_node="A", dst_node="B"),),
+        new_lightpaths=(NewLightpathRun(("omsAM2", "omsM2M1", "omsM1B"), 1, "100G",
+                                        15.0, 100.0, src_node="A", dst_node="B"),),
         restored_gbps=100.0, shortfall_gbps=0.0)
 
-    pairs = disjoint_pairs(model, [hybrid, other], basis="physical", level="link",
-                           best_effort=False, top_n=5, endpoints=("A", "B"))
-    layered_disjoint = bool(pairs) and pairs[0].disjoint
+    # FIXED layered verdict: explicit endpoints, correctly excludes A/B only.
+    fixed_pairs = disjoint_pairs(model, [hybrid, other], basis="physical", level="node",
+                                 best_effort=True, top_n=5, endpoints=("A", "B"))
+    fixed_disjoint = bool(fixed_pairs) and fixed_pairs[0].disjoint
 
-    flat = check_disjointness(model, ("omsM1B", "omsAM1"), ("omsAM2", "omsM2B"),
-                              "physical", "link")
+    # BROKEN layered verdict (regression guard): omitting endpoints falls
+    # back to positional inference, which wrongly treats M1 as the hybrid's
+    # mandated endpoint. This must come out DIFFERENT from the fixed verdict
+    # -- if it doesn't, the scenario has stopped discriminating.
+    broken_pairs = disjoint_pairs(model, [hybrid, other], basis="physical", level="node",
+                                  best_effort=True, top_n=5)
+    broken_disjoint = bool(broken_pairs) and broken_pairs[0].disjoint
+    assert fixed_disjoint != broken_disjoint, (
+        "scenario no longer discriminates fixed vs. broken endpoint inference")
+    assert fixed_disjoint is False  # both routes genuinely cross the M1 waypoint
 
-    assert layered_disjoint == flat.disjoint
+    # Flat engine, fed the TRUE physical-order OMS sequence for the hybrid
+    # leg (new A->M1 run, then the reused M1->B lightpath -- the order a real
+    # caller like plan.service_oms_sequence walks the IP path in), must agree
+    # with the FIXED layered verdict.
+    flat = check_disjointness(model, ("omsAM1", "omsM1B"), ("omsAM2", "omsM2M1", "omsM1B"),
+                              "physical", "node")
+
+    assert flat.disjoint == fixed_disjoint
