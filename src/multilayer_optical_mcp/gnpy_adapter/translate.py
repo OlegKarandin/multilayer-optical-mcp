@@ -70,6 +70,14 @@ def reverse_oms_sequence(
     would silently pick an arbitrary one of the candidates and propagate
     through the wrong route's amplifier chain. A loud failure here is the safe
     behavior; there is currently no way to correctly resolve this case.
+
+    Also raises ``ValueError`` when the leg's own FORWARD (src, dst) node pair
+    matches more than one OMS, even if the reverse-pair lookup itself is
+    unambiguous. When two forward OMS share a node pair (parallel routes) but
+    only one OMS exists on the reverse pair, that single reverse candidate
+    would otherwise be silently returned for *every* forward sibling -- even
+    though it can only correctly pair with one of them. There is no per-OMS
+    disambiguator here either, so this must fail loudly rather than guess.
     """
     by_pair: dict[tuple[str, str], list[str]] = {}
     for o in model.list_oms():
@@ -77,6 +85,16 @@ def reverse_oms_sequence(
     reverse: list[str] = []
     for oms_id in reversed(oms_sequence):
         oms = model.get_oms(oms_id)
+        forward_siblings = by_pair.get((oms.src_node_id, oms.dst_node_id)) or []
+        if len(forward_siblings) > 1:
+            raise ValueError(
+                f"ambiguous reverse OMS for {oms_id!r}: {len(forward_siblings)} "
+                f"OMS share its own forward node pair "
+                f"({oms.src_node_id!r}, {oms.dst_node_id!r}): "
+                f"{sorted(forward_siblings)!r} -- a single reverse candidate "
+                f"cannot be reliably attributed to this OMS when parallel "
+                f"forward siblings exist on the same node pair"
+            )
         candidates = by_pair.get((oms.dst_node_id, oms.src_node_id))
         if not candidates:
             return None

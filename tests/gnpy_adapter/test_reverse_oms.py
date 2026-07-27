@@ -114,6 +114,40 @@ def test_reverse_oms_sequence_raises_on_ambiguous_parallel_routes():
         reverse_oms_sequence(n, ("route2_AB",))
 
 
+def test_reverse_oms_sequence_raises_on_ambiguous_forward_pair():
+    """Regression for the one-sided guard gap found in Task 3 review: two OMS
+    sharing the same FORWARD (src, dst) node pair (parallel routes A->B), but
+    only ONE OMS on the REVERSE (dst, src) pair. The reverse-pair lookup alone
+    is unambiguous (exactly one candidate), so the old guard let both forward
+    siblings silently resolve to that single reverse OMS -- even though it can
+    only correctly pair with one of them. Both forward OMS ids must raise."""
+    n = NetworkModel(modes=ModeRegistry([_mode()]))
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    for node in ("A", "B"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+        n.add_transceiver(Transceiver(id=f"trx_{node}", site=node))
+
+    def _span(tag, src, dst):
+        n.add_amplifier(Amplifier(id=f"boost_{tag}", type_variety="advanced_toy",
+                                  gain_db=20.0, nf_db=5.5))
+        n.add_fiber(Fiber(id=f"f_{tag}", a_end=f"roadm_{src}", z_end=f"pre_{tag}",
+                          length_km=80.0, type_variety="SSMF"))
+        n.add_amplifier(Amplifier(id=f"pre_{tag}", type_variety="advanced_toy",
+                                  gain_db=20.0, nf_db=5.5))
+        n.add_oms(OMS(id=tag, src_node_id=src, dst_node_id=dst,
+                      elements=(f"roadm_{src}", f"boost_{tag}", f"f_{tag}", f"pre_{tag}")))
+
+    # Two PARALLEL forward routes A->B, but only ONE reverse route B->A.
+    _span("oms1", "A", "B")
+    _span("oms_par", "A", "B")
+    _span("oms1_rev", "B", "A")
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        reverse_oms_sequence(n, ("oms1",))
+    with pytest.raises(ValueError, match="ambiguous"):
+        reverse_oms_sequence(n, ("oms_par",))
+
+
 def test_reverse_oms_sequence_still_resolves_unambiguous_pair():
     """Regression guard: the common (non-parallel) case must still work."""
     n = NetworkModel(modes=ModeRegistry([_mode()]))
