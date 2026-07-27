@@ -124,13 +124,16 @@ def _replan_protection(work, qot, sid: str, *, prefix: str, protected: bool,
     ANY check the healing loop could "converge" (clear the risk_group-basis
     findings it audits) while installing a truly degenerate protection leg
     identical to working. A full physical-disjointness requirement was tried
-    first and is NOT always achievable on this real topology: some services
-    (verified via a real run) sit behind a genuine chokepoint node with no
-    physically-disjoint alternate route at all, so that check made the loop
-    never converge for a topological reason unrelated to correctness. The
-    convergence gate this loop actually serves is basis="risk_group" (see
-    _heal_endpoint_violations); ruling out literal duplication is the
-    achievable, still-meaningful floor.
+    first and is NOT always achievable here: german_17 itself is 2-connected
+    (no articulation points/bridges), but `avoid` plus candidate feasibility
+    (k-limit, wavelength availability, mode feasibility) narrows some
+    services' options enough that no physically-disjoint candidate exists
+    within the search budget -- verified via a real run showing several
+    services and rounds exhausting every candidate with nonempty shared
+    assets. That check made the loop never converge for a reason downstream
+    of `avoid`, not a correctness defect. The convergence gate this loop
+    actually serves is basis="risk_group" (see _heal_endpoint_violations);
+    ruling out literal duplication is the achievable, still-meaningful floor.
 
     Returns True on success (an op was applied), False if no feasible /
     non-duplicate candidate was found (caller tries the next remedy)."""
