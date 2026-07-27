@@ -489,6 +489,15 @@ def compute_qot(
     # ------------------------------------------------------------------ SI construction
     # Ensure at least 2 channels so gnpy EDFAs can interpolate slot_width.
     loading_for_gnpy = _ensure_min_two_channels(loading, probe.center_freq_hz)
+    # gnpy's SpectralInformation sorts carriers by frequency on construction
+    # (build_si_for_loading -> create_arbitrary_spectral_information), so the
+    # probe index must be resolved against a frequency-ascending channel list,
+    # not the caller's original order -- allocation.py's _build_loading
+    # deliberately puts the probe first, which otherwise silently reads the
+    # wrong carrier's GSNR. Mirrors harvest_qot's identical sort below.
+    loading_for_gnpy = LoadingState(
+        channels=tuple(sorted(loading_for_gnpy.channels,
+                              key=lambda c: c.center_freq_hz)))
     probe_idx = _find_probe_index(loading_for_gnpy, probe.center_freq_hz)
 
     pr = _propagate_loading(model, oms_sequence, direction, loading_for_gnpy, mode,

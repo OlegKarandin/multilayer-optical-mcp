@@ -7,6 +7,8 @@
 
 import math
 
+import pytest
+
 from multilayer_optical_mcp.gnpy_adapter.adapter import compute_qot
 from multilayer_optical_mcp.gnpy_adapter.loading import Channel, LoadingState
 from multilayer_optical_mcp.model.assets import (
@@ -264,3 +266,30 @@ def test_probe_roll_off_is_sourced_from_mode_not_hardcoded(monkeypatch):
                direction=Direction.FORWARD, mode_id="400G@7.1dB", loading=loading)
 
     assert captured["roll_off"] == 0.3
+
+
+def test_compute_qot_is_order_independent_in_loading_channels():
+    """Regression for the audit's wrong-carrier-GSNR Critical finding:
+    compute_qot must return the SAME GSNR for the probe channel regardless of
+    where it sits in loading.channels, since gnpy's SpectralInformation sorts
+    by frequency internally and _find_probe_index must track that sort."""
+    n = _toy_model(roll_off=0.15)
+    store = QoTResultStore()
+    probe = Channel(193.4e12, 100e9, None, "400G@7.1dB")
+    neighbor_low = Channel(193.2e12, 100e9, None, "400G@7.1dB")
+    neighbor_high = Channel(193.6e12, 100e9, None, "400G@7.1dB")
+
+    # Ascending order (already correct today).
+    ascending = LoadingState(channels=(neighbor_low, probe, neighbor_high))
+    state_ascending, _ = compute_qot(
+        model=n, store=store, oms_sequence=("oms-AZ",), direction=Direction.FORWARD,
+        mode_id="400G@7.1dB", loading=ascending, center_freq_hz=probe.center_freq_hz)
+
+    # Probe-first order (allocation.py's actual convention -- this is what
+    # broke before the fix).
+    probe_first = LoadingState(channels=(probe, neighbor_low, neighbor_high))
+    state_probe_first, _ = compute_qot(
+        model=n, store=store, oms_sequence=("oms-AZ",), direction=Direction.FORWARD,
+        mode_id="400G@7.1dB", loading=probe_first, center_freq_hz=probe.center_freq_hz)
+
+    assert state_ascending.gsnr_db == pytest.approx(state_probe_first.gsnr_db, abs=1e-6)
