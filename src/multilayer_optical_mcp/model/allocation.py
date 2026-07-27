@@ -463,7 +463,7 @@ def _pack(
         if protected:
             basis, level, be = _demand_constraints(d)
             pp = disjoint_pairs(work, cands, basis=basis, level=level,
-                                best_effort=be, top_n=1)
+                                best_effort=be, top_n=1, endpoints=(src, dst))
             if not pp:
                 unplaced.append((did, "no disjoint feasible pair"))
                 continue

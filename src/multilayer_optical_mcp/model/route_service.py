@@ -94,7 +94,7 @@ def route_service(model: NetworkModel, qot, service_id: str, *, protected: bool 
                                   candidates=tuple(cands))
 
     pp = disjoint_pairs(model, placements, basis=basis, level=level,
-                        best_effort=best_effort, top_n=top_n)
+                        best_effort=best_effort, top_n=top_n, endpoints=(src, dst))
     pairs: List[RoutePair] = []
     for p in pp:
         sr = score_pair(model, p.working, p.protection, svc, weights)

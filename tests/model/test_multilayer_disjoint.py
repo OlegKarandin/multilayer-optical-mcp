@@ -135,3 +135,60 @@ def test_top_n_truncates_disjoint_pairs_in_generation_order(diamond):
     assert len(truncated) == 2
     assert truncated[0].working is pA and truncated[0].protection is pB
     assert truncated[1].working is pA and truncated[1].protection is pC
+
+
+def test_hybrid_placement_endpoint_exclusion_needs_explicit_endpoints(diamond):
+    """Regression for the audit's Critical cross-implementation-disagreement
+    finding. Lights a lightpath on the M1->B leg, then builds a hybrid
+    placement whose TRUE physical order is new(A->M1) followed by
+    reused(lpM1B) -- the opposite of placement_footprint_keys' unconditional
+    reused-then-new concatenation. Without explicit endpoints, the interior
+    node M1 is wrongly excluded (as if it were a mandated demand endpoint)
+    and the true endpoints A/B are wrongly NOT excluded. With explicit
+    endpoints=(src, dst), the result is correct."""
+    model = diamond
+    model.add_lightpath(Lightpath("lpM1B", ("omsM1B",), "100G", 193.5e12))
+
+    hybrid = Placement(reused_lightpaths=("lpM1B",),
+        new_lightpaths=(NewLightpathRun(("omsAM1",), 0, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="M1"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+
+    keys_no_endpoints = placement_footprint_keys(
+        model, hybrid, basis="physical", level="node")
+    keys_with_endpoints = placement_footprint_keys(
+        model, hybrid, basis="physical", level="node", endpoints=("A", "B"))
+
+    # OLD (still-reachable-without-the-new-kwarg) behavior: wrong.
+    assert keys_no_endpoints == frozenset({"node:A", "node:B"})
+    # FIXED behavior: the real transit node M1 is retained (a second
+    # placement sharing M1 would correctly read as correlated), and the true
+    # demand endpoints A/B are excluded.
+    assert keys_with_endpoints == frozenset({"node:M1"})
+
+
+def test_route_service_and_check_disjointness_agree_on_hybrid_placements(diamond):
+    """The cross-implementation property test the audit called for: the
+    layered engine's disjoint_pairs (with explicit endpoints) and the flat
+    engine's solvers.check_disjointness must agree on the SAME hybrid pair."""
+    from multilayer_optical_mcp.model.solvers import check_disjointness
+    model = diamond
+    model.add_lightpath(Lightpath("lpM1B", ("omsM1B",), "100G", 193.5e12))
+
+    hybrid = Placement(reused_lightpaths=("lpM1B",),
+        new_lightpaths=(NewLightpathRun(("omsAM1",), 0, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="M1"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+    other = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAM2", "omsM2B"), 1, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+
+    pairs = disjoint_pairs(model, [hybrid, other], basis="physical", level="link",
+                           best_effort=False, top_n=5, endpoints=("A", "B"))
+    layered_disjoint = bool(pairs) and pairs[0].disjoint
+
+    flat = check_disjointness(model, ("omsM1B", "omsAM1"), ("omsAM2", "omsM2B"),
+                              "physical", "link")
+
+    assert layered_disjoint == flat.disjoint

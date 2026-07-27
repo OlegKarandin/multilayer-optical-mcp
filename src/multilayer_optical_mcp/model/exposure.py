@@ -66,7 +66,8 @@ def terminal_roadm_id(model: NetworkModel, oms_sequence: Tuple[str, ...]) -> "st
 
 
 def path_endpoint_exclusions(
-    model: NetworkModel, oms_sequence: Tuple[str, ...]
+    model: NetworkModel, oms_sequence: Tuple[str, ...],
+    *, endpoints: "tuple[str, str] | None" = None,
 ) -> "tuple[FrozenSet[str], FrozenSet[str]]":
     """A path's own ingress/egress nodes and their ROADM uids.
 
@@ -77,14 +78,24 @@ def path_endpoint_exclusions(
     the ROADM set is empty for endpoints with no registered ROADM (legacy toy
     transceiver endpoints), which makes the exclusion a safe no-op there.
 
+    ``endpoints``, when given as ``(src_node, dst_node)``, is used VERBATIM
+    instead of inferring the path's ingress/egress from ``oms_sequence[0]``/
+    ``[-1]``. Required for a Placement whose reused-lightpath and new-run
+    segments are stored out of true physical traversal order (see
+    ``multilayer_disjoint.placement_footprint_keys``), where positional
+    inference silently names the wrong node as a "mandated endpoint".
+
     Endpoint *failure*-correlation ("do they die together?") is a different
     question and stays with ``get_exposure`` / ``service_asset_set``, not here.
     """
-    if not oms_sequence:
-        return frozenset(), frozenset()
-    first = model.get_oms(oms_sequence[0])
-    last = model.get_oms(oms_sequence[-1])
-    nodes = {first.src_node_id, last.dst_node_id}
+    if endpoints is not None:
+        nodes = set(endpoints)
+    else:
+        if not oms_sequence:
+            return frozenset(), frozenset()
+        first = model.get_oms(oms_sequence[0])
+        last = model.get_oms(oms_sequence[-1])
+        nodes = {first.src_node_id, last.dst_node_id}
     roadms = {f"roadm_{n}" for n in nodes if model.has_roadm(f"roadm_{n}")}
     return frozenset(nodes), frozenset(roadms)
 
@@ -133,6 +144,7 @@ def path_basis_keys(
     *,
     basis: str,
     level: str,
+    endpoints: "tuple[str, str] | None" = None,
 ) -> FrozenSet[str]:
     """Project an OMS-sequence path into the set of namespaced comparison keys
     for a (basis, level). Two paths are disjoint under (basis, level) iff their
@@ -145,7 +157,8 @@ def path_basis_keys(
     - basis `union`: union of physical (at the given level) + srlg + risk_group
       keys — disjoint under union means disjoint under all of them.
     """
-    endpoint_nodes, endpoint_roadms = path_endpoint_exclusions(model, oms_sequence)
+    endpoint_nodes, endpoint_roadms = path_endpoint_exclusions(
+        model, oms_sequence, endpoints=endpoints)
     # Exclude the path's own endpoints under EVERY basis: an endpoint shared by
     # both paths is mandated by the demand, not a routing correlation, so it must
     # not intersect for physical, srlg, risk_group, or union.
