@@ -93,34 +93,70 @@ def _link_physical_span_ids(model, link_id: str) -> tuple[str, ...]:
     return tuple(_physical_span_ids(oms_seq_asset_set(model, lp.oms_sequence)))
 
 
+def _materialize_and_collect(work, placement, svc_v, *, prefix: str, ops: list) -> tuple[str, ...]:
+    """Materialize `placement` as `svc_v`'s new protection leg on `work`
+    (provision any new lightpaths, seed their QoT, reroute), appending the
+    resulting ProvisionLightpath/RerouteService ops to `ops`. Returns the new
+    ip_path. Shared by svc.id's own fix and every healing-round remedy so the
+    "which lightpaths did this create, and what ops reproduce them" logic
+    lives in exactly one place."""
+    before = {lp.id for lp in work.list_lightpaths()}
+    new_path = objective.provision_new_runs(work, placement, svc_v, prefix=prefix)
+    apply_op(work, RerouteService(svc_v.id, new_path, which="protection"))
+    for lp_id in sorted({lp.id for lp in work.list_lightpaths()} - before):
+        lp_obj = work.get_lightpath(lp_id)
+        ipl_obj = next((l for l in work.list_ip_links() if l.lightpath_id == lp_id), None)
+        ops.append(ProvisionLightpath(lightpath=lp_obj, ip_link=ipl_obj))
+    ops.append(RerouteService(svc_v.id, new_path, which="protection"))
+    return new_path
+
+
 def _replan_protection(work, qot, sid: str, *, prefix: str, protected: bool,
                        avoid: dict, ops: list) -> bool:
     """Replan `sid`'s protection leg (via a protected disjoint-pair search when
     `protected=True`, else an unprotected single-candidate search) around
-    `avoid`, materialize it on `work`, append the resulting ProvisionLightpath
-    /RerouteService ops to `ops`. Returns True on success (an op was applied),
-    False if no feasible candidate/pair was found (caller tries the next
-    remedy)."""
+    `avoid`, materialize it on `work` via `_materialize_and_collect`. Tries
+    every candidate/pair route_service returns, in its own scored order,
+    until one is not a literal duplicate of `sid`'s own working ip_path.
+
+    Why a duplicate check and not a full basis="physical" disjointness check:
+    an unprotected search carries no pair-disjointness constraint, so without
+    ANY check the healing loop could "converge" (clear the risk_group-basis
+    findings it audits) while installing a truly degenerate protection leg
+    identical to working. A full physical-disjointness requirement was tried
+    first and is NOT always achievable on this real topology: some services
+    (verified via a real run) sit behind a genuine chokepoint node with no
+    physically-disjoint alternate route at all, so that check made the loop
+    never converge for a topological reason unrelated to correctness. The
+    convergence gate this loop actually serves is basis="risk_group" (see
+    _heal_endpoint_violations); ruling out literal duplication is the
+    achievable, still-meaningful floor.
+
+    Returns True on success (an op was applied), False if no feasible /
+    non-duplicate candidate was found (caller tries the next remedy)."""
     svc_v = work.get_service(sid)
     res = route_service(work, qot, sid, protected=protected, basis="risk_group",
                         level="link", avoid=avoid)
     if protected:
         if res.status not in (SolverStatus.SOLUTION, SolverStatus.PARTIAL) or not res.pairs:
             return False
-        placement = res.pairs[0].protection
+        placements = [p.protection for p in res.pairs]
     else:
         if res.status not in (SolverStatus.SOLUTION, SolverStatus.PARTIAL) or not res.candidates:
             return False
-        placement = res.candidates[0]
-    before = {lp.id for lp in work.list_lightpaths()}
-    new_path = objective.provision_new_runs(work, placement, svc_v, prefix=prefix)
-    apply_op(work, RerouteService(sid, new_path, which="protection"))
-    for lp_id in sorted({lp.id for lp in work.list_lightpaths()} - before):
-        lp_obj = work.get_lightpath(lp_id)
-        ipl_obj = next((l for l in work.list_ip_links() if l.lightpath_id == lp_id), None)
-        ops.append(ProvisionLightpath(lightpath=lp_obj, ip_link=ipl_obj))
-    ops.append(RerouteService(sid, new_path, which="protection"))
-    return True
+        placements = list(res.candidates)
+
+    for idx, placement in enumerate(placements):
+        # Probe the candidate's ip_path on a throwaway clone before
+        # committing it to `work`, so a rejected candidate leaves no partial
+        # state behind.
+        probe = work.clone()
+        probe_path = _materialize_and_collect(probe, placement, probe.get_service(sid),
+                                              prefix=f"{prefix}-probe{idx}", ops=[])
+        if probe_path != svc_v.working_path:
+            _materialize_and_collect(work, placement, svc_v, prefix=prefix, ops=ops)
+            return True
+    return False
 
 
 def _heal_endpoint_violations(work, qot, rg_id: str, store, *, max_rounds: int = 10):
@@ -256,16 +292,18 @@ def test_flood_zone_correlation_exposes_gap_and_remedy_lands(german17_built):
     assert failure.downed_lightpaths
 
     ipr2 = simulate_ip_routing(branch2)
+    # Either arm must show the PROTECTION leg itself went dark -- that's the
+    # actual correlation failure mode (protection existed but couldn't save
+    # the service because it was exposed to the same event), not merely that
+    # the service was dropped for some unrelated reason.
+    prot_caps = [branch2.ip_link_capacity_gbps(ip) for ip in svc.protection_path]
+    assert min(prot_caps) == 0.0
     dropped_ids = {d.service_id for d in ipr2.dropped_services}
-    if svc.id in dropped_ids:
-        pass  # protection did not save the service -- exactly the correlation failure mode
-    else:
+    if svc.id not in dropped_ids:
         # grooming absorbed it onto a survivor -- fall back to the
         # bottleneck-capacity signal the brief allows as the alternative.
         work_caps = [branch2.ip_link_capacity_gbps(ip) for ip in svc.working_path]
-        prot_caps = [branch2.ip_link_capacity_gbps(ip) for ip in svc.protection_path]
         assert min(work_caps) == 0.0
-        assert min(prot_caps) == 0.0
 
     # ---- Step 4b: contrast -- an independent (uncorrelated) failure does NOT
     #      defeat protection, proving the flood's failure mode is about
@@ -282,7 +320,13 @@ def test_flood_zone_correlation_exposes_gap_and_remedy_lands(german17_built):
     assert svc2 is not None, "no protected service unaffected by the flood zone was found"
 
     svc2_working = _physical_span_ids(service_asset_set(branch, svc2.id, which="working"))
-    independent_assets = [a for a in svc2_working if a not in flood_assets]
+    svc2_protection = _physical_span_ids(service_asset_set(branch, svc2.id, which="protection"))
+    # Exclude flood-zone assets (this is the CONTRAST case, not another flood
+    # hit) and svc2's own protection-leg assets (an asset on both legs would
+    # down protection too, defeating the "protection survives" assertion
+    # below for a reason unrelated to what this contrast is testing).
+    independent_assets = [a for a in svc2_working
+                          if a not in flood_assets and a not in svc2_protection]
     assert independent_assets
 
     branch3 = branch.clone()
@@ -317,14 +361,9 @@ def test_flood_zone_correlation_exposes_gap_and_remedy_lands(german17_built):
     # protection leg per round), so the live commit below can genuinely reach
     # "committed" against the real network, not just a hand-picked toy case.
     work = branch.clone()
-    before = {lp.id for lp in work.list_lightpaths()}
-    new_ip_path = objective.provision_new_runs(work, pair.protection, svc, prefix="flood-fix")
-    apply_op(work, RerouteService(svc.id, new_ip_path, which="protection"))
-    ops = [ProvisionLightpath(lightpath=work.get_lightpath(lp_id),
-                              ip_link=next((l for l in work.list_ip_links()
-                                           if l.lightpath_id == lp_id), None))
-           for lp_id in sorted({lp.id for lp in work.list_lightpaths()} - before)]
-    ops.append(RerouteService(svc.id, new_ip_path, which="protection"))
+    ops: list = []
+    new_ip_path = _materialize_and_collect(work, pair.protection, svc,
+                                           prefix="flood-fix", ops=ops)
 
     fix_report = validate_plan(work, Plan(ops=()), store=store,
                                basis="risk_group", level="link")
