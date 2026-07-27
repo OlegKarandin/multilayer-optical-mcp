@@ -15,14 +15,18 @@ from tests.phase7_topology import new_model, add_bidir_span
 
 
 def _two_path_model():
-    """svc rA->rB rides ipOld (lpOld/omsAB). A parallel ipNew (lpNew/omsAB2) is
-    standing by. Migration moves svc from ipOld to ipNew, then tears down lpOld."""
+    """svc rA->rB rides ipOld (lpOld/omsAB). A standby ipNew (lpNew via A->C->B
+    multi-hop). Migration moves svc from ipOld to ipNew, then tears down lpOld.
+
+    Uses distinct routes (direct A->B and multi-hop A->C->B) to avoid ambiguous
+    parallel reverse OMS; the backward QoT chain is unambiguous for each direction."""
     m = new_model()
     add_bidir_span(m, "A", "B", "omsAB")
-    add_bidir_span(m, "A", "B", "omsAB2")
+    add_bidir_span(m, "A", "C", "omsAC")
+    add_bidir_span(m, "C", "B", "omsCB")
     m.add_lightpath(Lightpath(id="lpOld", oms_sequence=("omsAB",), mode_id="400G",
                               center_freq_hz=193.4e12))
-    m.add_lightpath(Lightpath(id="lpNew", oms_sequence=("omsAB2",), mode_id="400G",
+    m.add_lightpath(Lightpath(id="lpNew", oms_sequence=("omsAC", "omsCB"), mode_id="400G",
                               center_freq_hz=193.4e12))
     m.add_ip_link(IPLink(id="ipOld", a_router="rA", z_router="rB", lightpath_id="lpOld"))
     m.add_ip_link(IPLink(id="ipNew", a_router="rA", z_router="rB", lightpath_id="lpNew"))
@@ -81,12 +85,16 @@ def test_endpoint_only_check_would_miss_the_transient():
 
 
 def _migration_model():
-    """svc rides ipOld (lpOld/omsAB). A parallel span omsAB2 is built and ready,
-    but lpNew is NOT yet provisioned — the 3-op make-before-break will provision
-    it, migrate onto it, then tear down lpOld."""
+    """svc rides ipOld (lpOld/omsAB). A standby multi-hop route (A->C->B via
+    omsAC+omsCB) is built and ready, but lpNew is NOT yet provisioned — the 3-op
+    make-before-break will provision it, migrate onto it, then tear down lpOld.
+
+    Uses distinct routes (direct A->B and multi-hop A->C->B) to avoid ambiguous
+    parallel reverse OMS."""
     m = new_model()
     add_bidir_span(m, "A", "B", "omsAB")
-    add_bidir_span(m, "A", "B", "omsAB2")
+    add_bidir_span(m, "A", "C", "omsAC")
+    add_bidir_span(m, "C", "B", "omsCB")
     m.add_lightpath(Lightpath(id="lpOld", oms_sequence=("omsAB",), mode_id="400G",
                               center_freq_hz=193.4e12))
     m.add_ip_link(IPLink(id="ipOld", a_router="rA", z_router="rB", lightpath_id="lpOld"))
@@ -99,7 +107,7 @@ def _migration_model():
 def _new_lp_ops():
     return (
         ProvisionLightpath(
-            lightpath=Lightpath(id="lpNew", oms_sequence=("omsAB2",), mode_id="400G",
+            lightpath=Lightpath(id="lpNew", oms_sequence=("omsAC", "omsCB"), mode_id="400G",
                                 center_freq_hz=193.4e12),
             ip_link=IPLink(id="ipNew", a_router="rA", z_router="rB", lightpath_id="lpNew")),
     )

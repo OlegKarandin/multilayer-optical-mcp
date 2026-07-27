@@ -63,15 +63,31 @@ def reverse_oms_sequence(
     raise a clear error rather than silently reversing the forward element list
     (which would walk the forward fiber's amps and discard the reverse chain's
     per-direction impairments — S4-2/S4-3).
+
+    Raises ``ValueError`` when a leg's reverse (dst, src) node pair matches
+    MORE THAN ONE OMS (parallel/diverse routes between the same two sites) --
+    the data model has no per-OMS disambiguator beyond node pair, so guessing
+    would silently pick an arbitrary one of the candidates and propagate
+    through the wrong route's amplifier chain. A loud failure here is the safe
+    behavior; there is currently no way to correctly resolve this case.
     """
-    by_pair = {(o.src_node_id, o.dst_node_id): o.id for o in model.list_oms()}
+    by_pair: dict[tuple[str, str], list[str]] = {}
+    for o in model.list_oms():
+        by_pair.setdefault((o.src_node_id, o.dst_node_id), []).append(o.id)
     reverse: list[str] = []
     for oms_id in reversed(oms_sequence):
         oms = model.get_oms(oms_id)
-        paired = by_pair.get((oms.dst_node_id, oms.src_node_id))
-        if paired is None:
+        candidates = by_pair.get((oms.dst_node_id, oms.src_node_id))
+        if not candidates:
             return None
-        reverse.append(paired)
+        if len(candidates) > 1:
+            raise ValueError(
+                f"ambiguous reverse OMS for {oms_id!r}: {len(candidates)} OMS "
+                f"share the node pair ({oms.dst_node_id!r}, {oms.src_node_id!r}): "
+                f"{sorted(candidates)!r} -- parallel routes between the same "
+                f"endpoints cannot be disambiguated by node pair alone"
+            )
+        reverse.append(candidates[0])
     return tuple(reverse)
 
 

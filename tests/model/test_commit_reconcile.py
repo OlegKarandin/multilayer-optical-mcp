@@ -7,10 +7,12 @@ from tests.phase7_topology import new_model, add_bidir_span
 
 
 def _base():
-    """Two synthesizable parallel A<->B spans (oms1, oms2), no lightpaths yet."""
+    """Two synthesizable spans: direct A->B (oms1) and multi-hop A->C->B
+    (omsAC, omsCB), no lightpaths yet. Avoids ambiguous parallel reverse OMS."""
     m = new_model()
     add_bidir_span(m, "A", "B", "oms1")
-    add_bidir_span(m, "A", "B", "oms2")
+    add_bidir_span(m, "A", "C", "omsAC")
+    add_bidir_span(m, "C", "B", "omsCB")
     return m
 
 
@@ -21,7 +23,7 @@ def _two_provisions():
                                 center_freq_hz=193.4e12),
             ip_link=IPLink(id="ipX", a_router="rA", z_router="rB", lightpath_id="lpX")),
         ProvisionLightpath(
-            lightpath=Lightpath(id="lpY", oms_sequence=("oms2",), mode_id="400G",
+            lightpath=Lightpath(id="lpY", oms_sequence=("omsAC", "omsCB"), mode_id="400G",
                                 center_freq_hz=193.4e12),
             ip_link=IPLink(id="ipY", a_router="rA", z_router="rB", lightpath_id="lpY")),
     ))
