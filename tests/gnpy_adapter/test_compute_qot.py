@@ -1,8 +1,11 @@
 # GROUND TRUTH (gnpy==2.14.0, symmetric toy_2span.json, 400G@7.1dB @ 193.4 THz):
 # Topology: trx A → ROADM A → booster → fiber(80km) → ILA → fiber(80km) → preamp → ROADM Z → trx Z
-# Both ends terminate at a ROADM (S3-11 Option B), so each direction carries one
-# add + one drop add_drop_osnr=33 dB penalty (plus tx_osnr=35 dB, OpenROADM v4/v5).
-# GSNR: fwd ~17.81 dB, bwd ~17.81 dB (symmetric, was 18.85/17.53 pre-drop-ROADM).
+# Both ends terminate at a ROADM (S3-11 Option B). Each is a TERMINAL ROADM (one
+# add or one drop, never both), so per _apply_penalties' half-budget-corrected
+# formula each incurs add_drop_osnr + 10*log10(2) = 33 + 3.01 = 36.01 dB (plus
+# tx_osnr=35 dB, OpenROADM v4/v5).
+# GSNR: fwd ~18.85 dB, bwd ~18.85 dB (symmetric; was ~17.81 dB pre-Task-2, when
+# every propagated ROADM was over-charged the bare combined add_drop_osnr).
 # Updates on intentional gnpy bumps only.
 
 import math
@@ -293,3 +296,91 @@ def test_compute_qot_is_order_independent_in_loading_channels():
         mode_id="400G@7.1dB", loading=probe_first, center_freq_hz=probe.center_freq_hz)
 
     assert state_ascending.gsnr_db == pytest.approx(state_probe_first.gsnr_db, abs=1e-6)
+
+
+MODE = "400G@7.1dB"
+
+
+def _mode() -> TransceiverMode:
+    return TransceiverMode(
+        id=MODE,
+        bitrate_gbps=400.0,
+        required_gsnr_db=7.1,
+        symbol_rate_baud=87.5e9,
+        channel_spacing_hz=100e9,
+        roll_off=0.15,
+    )
+
+
+def test_apply_penalties_charges_terminal_roadms_only_at_half_budget():
+    """Regression for the audit's ROADM-OSNR-penalty Critical finding.
+    Builds a real 2-hop A->M->B topology (roadm_M is propagated as an
+    EXPRESS/interior ROADM; roadm_A and roadm_B are terminal). Compares the
+    fixed _apply_penalties against a locally-reproduced copy of the OLD
+    (buggy) formula run on the exact same real si/elements from one real
+    propagation -- so this needs no external gnpy ground truth, only the
+    invariant that fixing the formula can only IMPROVE (raise) GSNR/OSNR
+    relative to the old, over-penalized one, since express roadm_M's bogus
+    penalty is removed and the two terminals gain +10*log10(2) dB each.
+    """
+    from gnpy.core.elements import Roadm as _GnpyRoadm
+    from gnpy.core.utils import lin2db, db2lin, snr_sum
+    from multilayer_optical_mcp.gnpy_adapter.adapter import (
+        _propagate_loading, _apply_penalties, _extract_gsnr_osnr,
+    )
+
+    n = NetworkModel(modes=ModeRegistry([_mode()]))
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    for node in ("A", "M", "B"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    n.add_transceiver(Transceiver(id="trx_A", site="A"))
+    n.add_transceiver(Transceiver(id="trx_B", site="B"))
+    n.add_amplifier(Amplifier(id="boost_AM", type_variety="advanced_toy",
+                              gain_db=20.0, nf_db=5.5))
+    n.add_fiber(Fiber(id="f_AM", a_end="roadm_A", z_end="pre_AM",
+                      length_km=80.0, type_variety="SSMF"))
+    n.add_amplifier(Amplifier(id="pre_AM", type_variety="advanced_toy",
+                              gain_db=20.0, nf_db=5.5))
+    n.add_oms(OMS(id="oms_AM", src_node_id="A", dst_node_id="M",
+                  elements=("roadm_A", "boost_AM", "f_AM", "pre_AM")))
+    n.add_amplifier(Amplifier(id="boost_MB", type_variety="advanced_toy",
+                              gain_db=20.0, nf_db=5.5))
+    n.add_fiber(Fiber(id="f_MB", a_end="roadm_M", z_end="pre_MB",
+                      length_km=80.0, type_variety="SSMF"))
+    n.add_amplifier(Amplifier(id="pre_MB", type_variety="advanced_toy",
+                              gain_db=20.0, nf_db=5.5))
+    n.add_oms(OMS(id="oms_MB", src_node_id="M", dst_node_id="B",
+                  elements=("roadm_M", "boost_MB", "f_MB", "pre_MB")))
+
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, None, MODE),
+                                     Channel(193.5e12, 100e9, None, MODE)))
+    pr = _propagate_loading(n, ("oms_AM", "oms_MB"), Direction.FORWARD,
+                            loading, _mode(), probe_idx=0)
+
+    assert pr.uids_list[0] == "roadm_A"
+    assert "roadm_M" in pr.roadm_propagated
+    assert "roadm_M" not in (pr.uids_list[0], pr.uids_list[-1])
+
+    gsnr0, osnr0 = _extract_gsnr_osnr(pr.si, 0)
+
+    def old_apply_penalties(si, idx, uids_list, elements, roadm_propagated,
+                            baud_rate, gsnr_db, osnr_db):
+        penalties_noise_lin = 0.0
+        for _uid, _el in zip(uids_list, elements):
+            if isinstance(_el, _GnpyRoadm) and _uid in roadm_propagated:
+                penalties_noise_lin += db2lin(-_el.params.add_drop_osnr)
+        tx_osnr_db = float(si.tx_osnr[idx])
+        penalties_noise_lin += db2lin(-tx_osnr_db)
+        combined_penalty_db = -lin2db(penalties_noise_lin)
+        return (float(snr_sum(gsnr_db, baud_rate, combined_penalty_db)),
+                float(snr_sum(osnr_db, baud_rate, combined_penalty_db)))
+
+    old_gsnr, old_osnr = old_apply_penalties(
+        pr.si, 0, pr.uids_list, pr.elements, pr.roadm_propagated, pr.baud_rate,
+        gsnr0, osnr0)
+    new_gsnr, new_osnr = _apply_penalties(
+        pr.si, 0, pr.uids_list, pr.elements, pr.roadm_propagated, pr.baud_rate,
+        gsnr0, osnr0)
+
+    assert new_gsnr > old_gsnr
+    assert new_osnr > old_osnr

@@ -374,9 +374,21 @@ def _propagate_loading(
 
 def _apply_penalties(si, idx, uids_list, elements, roadm_propagated, baud_rate,
                      gsnr_db, osnr_db) -> tuple[float, float]:
-    """Apply add_drop_osnr (per propagated ROADM) + tx_osnr (per carrier idx),
-    normalised from 12.5 GHz to baud_rate via gnpy's snr_sum. Mirrors the block
-    formerly inline in compute_qot."""
+    """Apply add_drop_osnr (terminal ROADMs only, half-budget corrected) +
+    tx_osnr (per carrier idx), normalised from 12.5 GHz to baud_rate via gnpy's
+    snr_sum. Mirrors the block formerly inline in compute_qot.
+
+    gnpy's `add_drop_osnr` is the COMBINED add+drop noise budget for a full
+    add+drop cycle. A TERMINAL ROADM (the first or last propagated element on
+    the path) incurs only one side of that (either the add or the drop, never
+    both), so its actual contribution is `add_drop_osnr + 10*log10(2)` dB
+    (one-sided is better than the combined figure). An EXPRESS (interior,
+    pass-through) ROADM incurs no add/drop penalty at all -- it neither adds
+    nor drops the signal. The previous version charged the bare add_drop_osnr
+    on EVERY propagated ROADM regardless of position, making margin
+    systematically pessimistic and hop-count-dependent (verified against real
+    gnpy's own get_impairment to 4 decimal places: 33.0 + 10*log10(2) =
+    36.0103, gnpy's exact returned value for a one-sided terminal ROADM)."""
     # gnpy does not apply add_drop_osnr or tx_osnr to si.ase during bare element propagation;
     # they are metadata consumed only by request.py's Transceiver.update_snr(). We apply them
     # here using gnpy's own snr_sum, which normalises each penalty from 12.5 GHz to baud_rate.
@@ -384,9 +396,13 @@ def _apply_penalties(si, idx, uids_list, elements, roadm_propagated, baud_rate,
     from gnpy.core.utils import snr_sum as _snr_sum, lin2db as _lin2db, db2lin as _db2lin
 
     penalties_noise_lin = 0.0
-    for _uid, _el in zip(uids_list, elements):
+    last_idx = len(uids_list) - 1
+    for i, (_uid, _el) in enumerate(zip(uids_list, elements)):
         if isinstance(_el, _GnpyRoadm) and _uid in roadm_propagated:
-            penalties_noise_lin += _db2lin(-_el.params.add_drop_osnr)
+            if i == 0 or i == last_idx:
+                penalties_noise_lin += _db2lin(
+                    -(_el.params.add_drop_osnr + _lin2db(2.0)))
+            # else: express/pass-through ROADM -- no add/drop penalty.
 
     tx_osnr_db = float(si.tx_osnr[idx])  # at 12.5 GHz ref BW
     penalties_noise_lin += _db2lin(-tx_osnr_db)
