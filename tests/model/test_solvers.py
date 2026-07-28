@@ -345,8 +345,88 @@ def _model_exponential_parallels_plus_bypass(n_hops: int, parallels_per_hop: int
 
 def test_compute_disjoint_paths_finds_bypass_despite_exponential_parallels():
     """Regression for the audit's Critical emission-cap-starvation finding."""
-    n = _model_exponential_parallels_plus_bypass(n_hops=10, parallels_per_hop=2)
+    from multilayer_optical_mcp.model.solvers import _DISJOINT_EMISSION_CAP
+    n_hops, parallels_per_hop = 10, 2
+    # Task-8 fix reviewer's Minor finding: this test's premise depends on
+    # 2**n_hops == _DISJOINT_EMISSION_CAP (the chain alone must exactly fill
+    # the global budget) -- assert the relationship explicitly so the test
+    # doesn't silently stop exercising the starvation path if the constant
+    # changes.
+    assert parallels_per_hop ** n_hops == _DISJOINT_EMISSION_CAP
+    n = _model_exponential_parallels_plus_bypass(n_hops=n_hops, parallels_per_hop=parallels_per_hop)
     res = compute_disjoint_paths(n, "A", "B", basis="physical", level="link",
                                  best_effort=False)
     assert res.status is SolverStatus.SOLUTION
     assert res.disjoint is True
+    # Minor finding: also assert the bypass route is actually the one found,
+    # not merely that *some* disjoint pair exists.
+    expected_bypass = tuple(f"oms-by{h}" for h in range(n_hops + 1))
+    pair = {res.path_a.oms_sequence, res.path_b.oms_sequence}
+    assert expected_bypass in pair
+
+
+def _model_single_route_alternating_srlg_planes(n_hops: int, parallels_per_hop: int = 2) -> NetworkModel:
+    """A SINGLE node-chain A->n1->...->n(k-1)->B (no alternate node path) with
+    `parallels_per_hop` parallel OMS on EVERY hop, where parallel index 0 at
+    every hop belongs to SRLG 'srlg-plane0' and parallel index 1 belongs to
+    SRLG 'srlg-plane1' -- mirroring the classic working/protection-over-
+    diverse-conduits setup (e.g. two physically diverse fiber plants running
+    alongside the same node route). The ONLY SRLG-disjoint pair is the two
+    "pure" full-route combinations (all-plane0 vs all-plane1); every other
+    combination touches both SRLGs and so shares a group with everything.
+
+    In `itertools.product`'s odometer order (last hop varies fastest), the
+    all-plane0 combo is index 0 (first emitted) but the all-plane1 combo is
+    the LAST of parallels_per_hop**n_hops combos -- so a per-node-path
+    emission cap smaller than that count truncates it away even though this
+    is the ONLY node path and the 1024-emission global budget sits almost
+    entirely unused."""
+    n = NetworkModel(modes=ModeRegistry([
+        TransceiverMode(id="100G-QPSK", bitrate_gbps=100.0,
+                        required_gsnr_db=12.0, symbol_rate_baud=32e9,
+                        channel_spacing_hz=50e9),
+    ]))
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+
+    chain_nodes = ["A"] + [f"n{i}" for i in range(1, n_hops)] + ["B"]
+    for node in chain_nodes:
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+
+    plane0_fibers: List[str] = []
+    plane1_fibers: List[str] = []
+    for h in range(n_hops):
+        u, v = chain_nodes[h], chain_nodes[h + 1]
+        for p in range(parallels_per_hop):
+            a1, a2 = f"ch{h}_{p}_1", f"ch{h}_{p}_2"
+            fib = f"chfib{h}_{p}"
+            n.add_amplifier(Amplifier(id=a1, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+            n.add_amplifier(Amplifier(id=a2, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+            n.add_fiber(Fiber(id=fib, a_end=a1, z_end=a2, length_km=80.0, type_variety="SSMF"))
+            n.add_oms(OMS(id=f"oms-ch{h}-{p}", src_node_id=u, dst_node_id=v,
+                          elements=(f"roadm_{u}", a1, fib, a2)))
+            if p == 0:
+                plane0_fibers.append(fib)
+            elif p == 1:
+                plane1_fibers.append(fib)
+    n.add_srlg(SRLG(id="srlg-plane0", asset_ids=tuple(plane0_fibers)))
+    n.add_srlg(SRLG(id="srlg-plane1", asset_ids=tuple(plane1_fibers)))
+    return n
+
+
+def test_compute_disjoint_paths_finds_srlg_disjoint_extremes_in_single_node_path():
+    """Regression for the Task-8-fix reviewer's finding: a per-node-path
+    emission cap that truncates ODOMETER-order emission (rather than the
+    node-path count) can throw away a single node path's own most-diverse
+    combinations when they sit near the far end of itertools.product's
+    enumeration, even though this is the ONLY node path and the global
+    emission budget is nowhere near exhausted."""
+    n_hops = 6
+    n = _model_single_route_alternating_srlg_planes(n_hops=n_hops, parallels_per_hop=2)
+    res = compute_disjoint_paths(n, "A", "B", basis="srlg", level="link",
+                                 best_effort=False)
+    assert res.status is SolverStatus.SOLUTION
+    assert res.disjoint is True
+    expected_plane0 = tuple(f"oms-ch{h}-0" for h in range(n_hops))
+    expected_plane1 = tuple(f"oms-ch{h}-1" for h in range(n_hops))
+    pair = {res.path_a.oms_sequence, res.path_b.oms_sequence}
+    assert pair == {expected_plane0, expected_plane1}

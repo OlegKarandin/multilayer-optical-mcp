@@ -168,6 +168,45 @@ def _oms_between(
     return sorted(out)
 
 
+def _hop_combos(hop_options: Sequence[Sequence[str]], *, diagonal_first: bool) -> Iterator[Tuple[str, ...]]:
+    """Yield per-hop OMS-choice combinations for one node path.
+
+    `diagonal_first=False` is plain `itertools.product` odometer order
+    (unchanged — this is what `compute_paths`, i.e. `max_node_paths=None`,
+    always gets).
+
+    `diagonal_first=True` (only used when a per-node-path emission cap is in
+    play, i.e. `compute_disjoint_paths`) first yields the "diagonal" combos
+    that pick the SAME parallel index at every hop — index 0 at every hop,
+    then index 1 at every hop, ... up to `min(len(opts) for opts in
+    hop_options) - 1`. These are the maximally-diverse combinations a
+    per-node-path cap must not truncate away: with two parallel OMS per hop
+    (e.g. two physically diverse conduits), the two diagonal combos are
+    exactly "all conduit A" / "all conduit B" — the one pair that can be
+    disjoint from each other when every other combination mixes both
+    conduits and so shares SOMETHING with everything. Plain odometer order
+    varies the LAST hop fastest, so the "all index 1" diagonal combo is the
+    very LAST of the product's combinations — the opposite end from "all
+    index 0" — and a per-path cap smaller than the full product falls short
+    of it even though it is only 1 of `len(hop_options)` fixed choices away.
+    Falls through to standard odometer order (skipping combos already
+    yielded as part of the diagonal) for the remainder."""
+    if not diagonal_first or not hop_options:
+        yield from itertools.product(*hop_options)
+        return
+    seen: set = set()
+    min_parallels = min(len(opts) for opts in hop_options)
+    for i in range(min_parallels):
+        combo = tuple(opts[i] for opts in hop_options)
+        if combo not in seen:
+            seen.add(combo)
+            yield combo
+    for combo in itertools.product(*hop_options):
+        if combo in seen:
+            continue
+        yield combo
+
+
 def _enumerate_oms_paths(
     model: NetworkModel, src: str, dst: str, k: int, weight: str = "hops",
     forbidden: frozenset = frozenset(), max_node_paths: Optional[int] = None,
@@ -222,6 +261,21 @@ def _enumerate_oms_paths(
     # is None) is unaffected: per_path_cap falls back to k, identical to
     # today's behavior.
     per_path_cap = max(1, k // max_node_paths) if max_node_paths is not None else k
+    # The per-path cap above closes the "one parallel-heavy node path starves
+    # a distinct bypass node path" bug, but on its own reintroduces a
+    # narrower instance of the SAME wrong-answer class: within a single
+    # (possibly the ONLY) node path, plain odometer order can put that node
+    # path's own most-diverse combinations — e.g. the two SRLG-pure "all
+    # conduit A" / "all conduit B" combos in a working/protection-over-
+    # diverse-conduits topology — near opposite ends of the enumeration, so a
+    # cap smaller than the full product truncates one away even when the
+    # global budget k has room to spare. diagonal_first reorders emission
+    # WITHIN a node path (not across node paths, and not the per_path_cap
+    # value itself) so those extremes are seen first regardless of cap size.
+    # Gated on max_node_paths is not None so compute_paths (which always
+    # passes max_node_paths=None) gets diagonal_first=False and therefore
+    # plain itertools.product order, unchanged from before this fix.
+    diagonal_first = max_node_paths is not None
 
     emitted = 0
     node_paths = nx.shortest_simple_paths(
@@ -241,7 +295,7 @@ def _enumerate_oms_paths(
             hop_options = [_oms_between(model, u, v, by_length=by_length, forbidden=forbidden)
                            for u, v in zip(node_path, node_path[1:])]
             emitted_this_path = 0
-            for combo in itertools.product(*hop_options):
+            for combo in _hop_combos(hop_options, diagonal_first=diagonal_first):
                 yield OmsPath(node_sequence=tuple(node_path), oms_sequence=tuple(combo))
                 emitted += 1
                 emitted_this_path += 1
