@@ -30,11 +30,13 @@ class SnapshotStore:
         return self._current
 
     def create(self) -> str:
+        self.reap()
         sid = uuid.uuid4().hex
         self._store(sid, self._current.clone())
         return sid
 
     def branch(self, parent_id: str) -> str:
+        self.reap()
         parent = self._snapshots[parent_id]
         bid = uuid.uuid4().hex
         new = parent.clone()  # always unfrozen working copy
@@ -71,6 +73,7 @@ class SnapshotStore:
         """Register an externally-constructed model under a fresh id (stores a
         clone, so later mutation of the argument cannot corrupt the snapshot).
         Phase 7 uses this to record a commit's intended end-state for reconcile."""
+        self.reap()
         sid = uuid.uuid4().hex
         self._store(sid, model.clone())
         return sid
@@ -87,6 +90,8 @@ def diff_models(a: NetworkModel, b: NetworkModel) -> dict:
         "fiber_types": _delta(a._fiber_types, b._fiber_types),
         "fibers": _delta(a._fibers, b._fibers),
         "amplifiers": _delta(a._amplifiers, b._amplifiers),
+        "roadms": _delta(a._roadms, b._roadms),
+        "transceivers": _delta(a._transceivers, b._transceivers),
         "oms": _delta(a._oms, b._oms),
         "lightpaths": _delta(a._lightpaths, b._lightpaths),
         "ip_links": _delta(a._ip_links, b._ip_links),

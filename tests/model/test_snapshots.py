@@ -1,7 +1,8 @@
+import time
 import pytest
 from multilayer_optical_mcp.model.assets import ROADM
 from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, Lightpath, TransceiverMode,
+    FiberType, Fiber, Amplifier, OMS, Lightpath, TransceiverMode, Transceiver,
 )
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
@@ -155,6 +156,70 @@ def test_put_registers_external_model():
     sid = store.put(other)
     assert store.get(sid) is not other          # stored a clone, not the live object
     assert "rg9" in store.get(sid)._risk_groups
+
+
+# --- Task 3: TTL reap wiring + ROADM/Transceiver diff keys -----------------
+
+def test_create_reaps_expired_snapshots(monkeypatch):
+    """SnapshotStore.reap() must be called lazily on create() so an expired
+    entry is gone by the time a caller looks for it -- not just reachable by
+    calling reap() directly (which already had its own passing unit test)."""
+    now = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    store = SnapshotStore(initial=_seed(), ttl_seconds=10.0)
+    old = store.create()
+
+    now[0] += 20.0  # advance past the TTL
+    store.create()  # a later mutating call should trigger reap()
+
+    with pytest.raises(KeyError):
+        store.get(old)
+
+
+def test_branch_reaps_expired_snapshots(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    store = SnapshotStore(initial=_seed(), ttl_seconds=10.0)
+    old = store.create()
+
+    now[0] += 5.0
+    keep = store.create()   # still fresh when `old` expires below
+
+    now[0] += 8.0            # `old` (age 13) now past TTL=10; `keep` (age 8) is not
+    store.branch(keep)       # a later mutating call should trigger reap()
+
+    with pytest.raises(KeyError):
+        store.get(old)
+    assert store.get(keep) is not None
+
+
+def test_put_reaps_expired_snapshots(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    store = SnapshotStore(initial=_seed(), ttl_seconds=10.0)
+    old = store.create()
+
+    now[0] += 20.0
+    store.put(_seed())
+
+    with pytest.raises(KeyError):
+        store.get(old)
+
+
+def test_diff_models_reports_roadm_change():
+    base = _seed()
+    modified = base.clone()
+    modified._roadms["roadm_A"] = ROADM(id="roadm_A", target_pch_out_db=-18.0)
+    diff = diff_models(base, modified)
+    assert "roadm_A" in diff["roadms"]["modified"]
+
+
+def test_diff_models_reports_transceiver_add():
+    base = _seed()
+    modified = base.clone()
+    modified.add_transceiver(Transceiver(id="tx1", site="A"))
+    diff = diff_models(base, modified)
+    assert "tx1" in diff["transceivers"]["added"]
 
 
 def test_branch_clones_before_storing_so_restore_reaches_the_branch_point():

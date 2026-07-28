@@ -46,3 +46,19 @@ def test_ttl_reaps_expired():
     store.reap()
     with pytest.raises(KeyError):
         store.get(rid)
+
+
+def test_put_reaps_expired_results(monkeypatch):
+    """put() must call reap() lazily so an expired entry is gone by the next
+    write -- not just reachable via an explicit reap() call (already covered
+    by test_ttl_reaps_expired above)."""
+    now = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    store = QoTResultStore(ttl_seconds=10.0)
+    old = store.put(_bd())
+
+    now[0] += 20.0          # advance past the TTL
+    store.put(_bd())        # a later write should trigger reap()
+
+    with pytest.raises(KeyError):
+        store.get(old)

@@ -18,6 +18,7 @@ class QoTResultStore:
         self._ttl = ttl_seconds
 
     def put(self, breakdown: QoTBreakdown) -> str:
+        self.reap()
         rid = uuid.uuid4().hex
         self._items[rid] = breakdown
         self._created_at[rid] = time.monotonic()
