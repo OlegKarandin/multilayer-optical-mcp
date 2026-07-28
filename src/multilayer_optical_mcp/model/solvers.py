@@ -281,6 +281,21 @@ def _enumerate_oms_paths(
     node_paths = nx.shortest_simple_paths(
         simple, src, dst, weight="weight" if by_length else None)
     node_paths_seen = 0
+    # Node paths whose _hop_combos iterator hit the per_path_cap before
+    # running dry, in the order their node path was first seen. Parked
+    # (node_path, iterator) pairs, not discarded -- the second pass below
+    # resumes each generator exactly where it stopped (no re-emission, no
+    # restart) once every node path has had its fair first share. This is
+    # what closes the index-misaligned regression: diagonal_first only
+    # reorders emission WITHIN a node path's product so INDEX-aligned
+    # extremes (same parallel index at every hop) surface early; when
+    # parallel ordering is not index-aligned across hops (e.g. weight="length"
+    # sorting by physical fiber length rather than a fixed plane/SRLG index),
+    # the genuinely disjoint pair is some other, non-diagonal combo that can
+    # still sit past per_path_cap in a single node path's own enumeration --
+    # draining the SAME iterator further (not re-deriving one) is the only
+    # way to reach it without re-emitting what was already yielded.
+    parked: List[Tuple[Tuple[str, ...], Iterator[Tuple[str, ...]]]] = []
     # nx.shortest_simple_paths is a generator function: its body -- including
     # the NetworkXNoPath-raising internal call -- does not execute until the
     # first next(), so wrapping only its CONSTRUCTION above can never catch
@@ -290,21 +305,54 @@ def _enumerate_oms_paths(
             if emitted >= k:
                 return
             if max_node_paths is not None and node_paths_seen >= max_node_paths:
-                return
+                # Stop considering NEW node paths, but still fall through to
+                # the resumption pass below for node paths already parked.
+                break
             node_paths_seen += 1
             hop_options = [_oms_between(model, u, v, by_length=by_length, forbidden=forbidden)
                            for u, v in zip(node_path, node_path[1:])]
+            combo_iter = _hop_combos(hop_options, diagonal_first=diagonal_first)
             emitted_this_path = 0
-            for combo in _hop_combos(hop_options, diagonal_first=diagonal_first):
+            for combo in combo_iter:
                 yield OmsPath(node_sequence=tuple(node_path), oms_sequence=tuple(combo))
                 emitted += 1
                 emitted_this_path += 1
                 if emitted >= k:
-                    break
+                    return
                 if emitted_this_path >= per_path_cap:
+                    # First pass respects the per-path cap unconditionally
+                    # (preserves the original Task-8 property: one highly-
+                    # parallel node path cannot consume the whole budget
+                    # before other node paths are considered). Park the
+                    # live iterator rather than dropping it -- it may not be
+                    # exhausted, and the resumption pass below may still have
+                    # global budget to drain it further. compute_paths
+                    # (max_node_paths is None) never reaches this branch:
+                    # per_path_cap == k there, so `emitted >= k` above always
+                    # fires first and returns -- `parked` stays empty and this
+                    # function's behaviour is byte-for-byte unchanged.
+                    parked.append((tuple(node_path), combo_iter))
                     break
     except nx.NetworkXNoPath:
-        return
+        pass
+
+    # Second pass: only reachable with something parked, which only happens
+    # when max_node_paths is not None (see comment above) -- so this is a
+    # no-op, zero-overhead for compute_paths. Resume each node path's own
+    # iterator, in first-seen order, continuing exactly where the first pass
+    # left off, until it runs dry or the global budget k is hit. This is the
+    # "budget-draining resumption" that closes the index-misaligned
+    # regression: it may emit MORE than per_path_cap for a given node path --
+    # intentionally, since this only runs after every node path already got
+    # its fair first-pass share and budget still remains.
+    for node_path, combo_iter in parked:
+        if emitted >= k:
+            return
+        for combo in combo_iter:
+            yield OmsPath(node_sequence=node_path, oms_sequence=tuple(combo))
+            emitted += 1
+            if emitted >= k:
+                return
 
 
 def compute_paths(

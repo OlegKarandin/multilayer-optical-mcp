@@ -430,3 +430,77 @@ def test_compute_disjoint_paths_finds_srlg_disjoint_extremes_in_single_node_path
     expected_plane1 = tuple(f"oms-ch{h}-1" for h in range(n_hops))
     pair = {res.path_a.oms_sequence, res.path_b.oms_sequence}
     assert pair == {expected_plane0, expected_plane1}
+
+
+def _model_single_route_length_misaligned_srlg_planes(n_hops: int, parallels_per_hop: int = 2) -> NetworkModel:
+    """Same single-node-path/two-SRLG-plane shape as
+    _model_single_route_alternating_srlg_planes, but the per-hop physical
+    fiber LENGTH is deliberately alternated so plane0's OMS sorts to index 0
+    on even hops and index 1 on odd hops (and plane1 the mirror image) under
+    `_oms_between`'s (length, id) sort with weight="length" -- mirroring the
+    second-round reviewer's "conduit A shorter on even hops, longer on odd
+    hops" repro. Because the parallel-index assignment is NOT index-aligned
+    across hops, neither `_hop_combos`' "all index 0" nor "all index 1"
+    diagonal combo is the genuinely SRLG-disjoint pure-plane0/pure-plane1
+    pair -- both diagonals alternate between plane0 and plane1 hop-to-hop and
+    so touch both SRLGs. Only draining a node path's combo iterator past its
+    first per_path_cap share (budget-draining resumption) reaches the true
+    pair."""
+    n = NetworkModel(modes=ModeRegistry([
+        TransceiverMode(id="100G-QPSK", bitrate_gbps=100.0,
+                        required_gsnr_db=12.0, symbol_rate_baud=32e9,
+                        channel_spacing_hz=50e9),
+    ]))
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+
+    chain_nodes = ["A"] + [f"n{i}" for i in range(1, n_hops)] + ["B"]
+    for node in chain_nodes:
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+
+    plane0_fibers: List[str] = []
+    plane1_fibers: List[str] = []
+    for h in range(n_hops):
+        u, v = chain_nodes[h], chain_nodes[h + 1]
+        # Alternate which plane is physically shorter on this hop, so the
+        # (length, id) sort in _oms_between puts a DIFFERENT plane at index 0
+        # depending on hop parity -- purely a length artifact, nothing to do
+        # with SRLG/plane membership.
+        len0, len1 = (80.0, 90.0) if h % 2 == 0 else (90.0, 80.0)
+        for p, length_km in ((0, len0), (1, len1)):
+            a1, a2 = f"ch{h}_{p}_1", f"ch{h}_{p}_2"
+            fib = f"chfib{h}_{p}"
+            n.add_amplifier(Amplifier(id=a1, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+            n.add_amplifier(Amplifier(id=a2, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+            n.add_fiber(Fiber(id=fib, a_end=a1, z_end=a2, length_km=length_km, type_variety="SSMF"))
+            n.add_oms(OMS(id=f"oms-ch{h}-{p}", src_node_id=u, dst_node_id=v,
+                          elements=(f"roadm_{u}", a1, fib, a2)))
+            if p == 0:
+                plane0_fibers.append(fib)
+            else:
+                plane1_fibers.append(fib)
+    n.add_srlg(SRLG(id="srlg-plane0", asset_ids=tuple(plane0_fibers)))
+    n.add_srlg(SRLG(id="srlg-plane1", asset_ids=tuple(plane1_fibers)))
+    return n
+
+
+def test_compute_disjoint_paths_finds_srlg_disjoint_extremes_despite_length_misaligned_parallel_order():
+    """Regression for the SECOND round of Task-8-fix review: diagonal-first
+    ordering only closes the INDEX-ALIGNED subset of the truncation bug. When
+    parallel-option ordering is NOT index-aligned across hops -- here,
+    weight="length" sorting by physical fiber length puts a different plane
+    at index 0 on even vs. odd hops, with nothing to do with SRLG membership
+    -- the diagonal ("all index 0"/"all index 1") combos are NOT the
+    genuinely disjoint pair, and without budget-draining resumption the true
+    pure-plane0/pure-plane1 pair falls outside the per-node-path cap even
+    though the global emission budget (1024) is nowhere near exhausted at
+    5-7 hops (32/64/128 combos)."""
+    for n_hops in (5, 6, 7):
+        n = _model_single_route_length_misaligned_srlg_planes(n_hops=n_hops, parallels_per_hop=2)
+        res = compute_disjoint_paths(n, "A", "B", basis="srlg", level="link",
+                                     best_effort=False, weight="length")
+        assert res.status is SolverStatus.SOLUTION, f"n_hops={n_hops}"
+        assert res.disjoint is True, f"n_hops={n_hops}"
+        expected_plane0 = tuple(f"oms-ch{h}-0" for h in range(n_hops))
+        expected_plane1 = tuple(f"oms-ch{h}-1" for h in range(n_hops))
+        pair = {res.path_a.oms_sequence, res.path_b.oms_sequence}
+        assert pair == {expected_plane0, expected_plane1}, f"n_hops={n_hops}"
