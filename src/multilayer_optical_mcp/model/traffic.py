@@ -37,6 +37,7 @@ def generate_demands(
     node_mass: Optional[Dict[str, float]] = None,
     mass_jitter: float = 0.15,
     pair_density: Optional[float] = None,
+    protection_constraints: Optional[dict] = None,
 ) -> List[dict]:
     """Emit a gravity-weighted demand list totalling ~`scale` Gbps of offered load.
 
@@ -59,6 +60,15 @@ def generate_demands(
             a threshold, certain) to survive, below-mean pairs are the first to
             drop as pair_density shrinks. `scale`'s "total offered volume"
             contract is preserved by renormalizing over survivors only.
+        protection_constraints: optional disjointness constraints dict
+            (`{"basis": ..., "level": ..., "best_effort": ...}`, the same
+            shape `solve_allocation`'s per-demand `constraints` reads)
+            attached to every PROTECTED demand this call emits. `None`
+            (default) preserves today's behavior: protected demands carry no
+            `"constraints"` key at all, so `_demand_constraints` falls back
+            to `("physical", "link", False)`. Without this, a synthesized
+            operating network can never request srlg/risk_group-basis
+            protection.
 
     Deterministic given (model, seed, all params). Disconnected pairs are skipped.
     """
@@ -130,11 +140,15 @@ def generate_demands(
 
     demands: List[dict] = []
     for i, rec in enumerate(records):
-        demands.append({
+        protected = i in protected_idx
+        d = {
             "id": f"d{i:04d}",
             "src": rec["src"],
             "dst": rec["dst"],
             "demand_gbps": unit_gbps,
-            "protected": i in protected_idx,
-        })
+            "protected": protected,
+        }
+        if protected and protection_constraints is not None:
+            d["constraints"] = protection_constraints
+        demands.append(d)
     return demands

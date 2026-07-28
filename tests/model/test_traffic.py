@@ -190,3 +190,31 @@ def test_pair_density_degenerate_all_dropped_returns_empty_list():
     results = [generate_demands(n, seed=s, scale=3000.0, pair_density=1e-6)
               for s in range(20)]
     assert any(r == [] for r in results)
+
+
+# ------------------------------------------------- protection_constraints
+
+def test_protection_constraints_attach_only_to_protected_demands():
+    """Regression for the audit's Important finding: generate_demands must be
+    able to request a non-default basis/level for every protected demand it
+    emits -- otherwise every synthesized operating network is stuck at
+    physical/link disjointness with no way to ask for srlg/risk_group."""
+    n = _star_model()
+    constraints = {"basis": "risk_group", "level": "link"}
+    demands = generate_demands(n, seed=0, scale=3000.0, protected_fraction=0.5,
+                               protection_constraints=constraints)
+    assert demands   # sanity: the fixture/scale actually produced demands
+    for d in demands:
+        if d["protected"]:
+            assert d.get("constraints") == constraints
+        else:
+            assert "constraints" not in d
+
+
+def test_protection_constraints_default_none_preserves_old_shape():
+    """Backward-compat guard: omitting protection_constraints must reproduce
+    today's exact demand shape (no 'constraints' key at all)."""
+    n = _star_model()
+    demands = generate_demands(n, seed=0, scale=3000.0, protected_fraction=0.5)
+    assert demands
+    assert all("constraints" not in d for d in demands)

@@ -404,8 +404,11 @@ def build_app(*, model: NetworkModel | None = None,
     ) -> dict:
         """Greenfield heuristic: light new lightpaths from a per-site transponder
         count to serve as many weighted demands as possible. Each demand:
-        {id, src, dst, demand_gbps, protected?}. Returns a typed
-        solution/partial/no_solution with placed and unplaced demands.
+        {id, src, dst, demand_gbps, protected?, constraints?}. `constraints`
+        (protected demands only): {basis?, level?, best_effort?} -- basis in
+        {physical, srlg, risk_group, union}, level in {node, link, srlg,
+        risk_group}; defaults to physical/link/false when omitted. Returns a
+        typed solution/partial/no_solution with placed and unplaced demands.
         weights: per-demand priority (demand id -> ordering weight, higher =
         placed first); does not feed evaluate_objective's cost vector."""
         model = snapshots.current()
