@@ -231,6 +231,41 @@ def test_check_disjointness_srlg_basis():
     assert res.shared_groups == ("srlg-shared-duct",)
 
 
+def test_compute_paths_severed_by_avoid_is_typed_no_solution():
+    """Regression for the audit's Critical NetworkXNoPath-escapes finding: a
+    legitimate avoid constraint that severs the ONLY route between src/dst
+    must return a typed NO_SOLUTION, not raise networkx.NetworkXNoPath."""
+    n = _model_importer_single_span()   # A single OMS oms_1_2 between 1 and 2
+    res = compute_paths(n, "1", "2", k=3,
+                        constraints={"avoid": {"assets": ["oms_1_2"]}})
+    assert res.status is SolverStatus.NO_SOLUTION
+    assert res.paths == ()
+
+
+def test_solve_rsa_places_routable_demand_despite_unroutable_sibling():
+    """The same bug at the allocation layer: a batch with one routable demand
+    and one demand severed by avoid must place the routable one, recording
+    the other as unplaced -- not raise and lose the whole batch."""
+    from multilayer_optical_mcp.model.allocation import solve_rsa
+    n = _model_two_paths()   # A<->B via oms-north AND oms-south (two routes)
+
+    def fake_qot(*, oms_sequence, direction, mode_id, loading):
+        from multilayer_optical_mcp.model.qot import QoTState
+        return QoTState(gsnr_db=20.0, osnr_db=22.0, margin_db=8.0)
+
+    demands = [
+        {"id": "d-ok", "src": "A", "dst": "B"},
+        {"id": "d-severed", "src": "A", "dst": "B",
+         "constraints": {"avoid": {"assets": ["oms-north", "oms-south"]}}},
+    ]
+    res = solve_rsa(n, fake_qot, demands)
+    assert res.status is SolverStatus.PARTIAL
+    placed_ids = {p.demand_id for p in res.placements}
+    unplaced_ids = {did for did, _ in res.unplaced}
+    assert placed_ids == {"d-ok"}
+    assert unplaced_ids == {"d-severed"}
+
+
 # ------------------------------------------------------- compute_disjoint_paths
 
 def test_compute_disjoint_paths_physical_finds_pair():

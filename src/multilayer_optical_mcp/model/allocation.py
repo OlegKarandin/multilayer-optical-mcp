@@ -232,12 +232,14 @@ def _assign_on_route(
 def _place_unprotected(
     model, qot, src, dst, state, grid, ref_mode_id, require_gbps,
     fill_policy: FillPolicy = FillPolicy.FULL,
+    constraints: Optional[dict] = None,
 ) -> Optional[SpectrumAssignment]:
     """Among the candidate routes (length-ordered), choose the feasible
     assignment with the lowest slot index — spreading demands across disjoint
     routes at low slots rather than packing higher slots onto one route, which
     keeps total spectrum usage down. Ties keep the shorter (earlier) route."""
-    routes = compute_paths(model, src, dst, _ROUTE_CAP, weight="length").paths
+    routes = compute_paths(model, src, dst, _ROUTE_CAP, weight="length",
+                           constraints=constraints).paths
     best: Optional[SpectrumAssignment] = None
     for route in routes:
         sa = _assign_on_route(model, qot, route, state, grid, ref_mode_id, require_gbps,
@@ -304,6 +306,7 @@ def solve_rsa(
     for d in demands:
         did, src, dst = d["id"], d["src"], d["dst"]
         require = d.get("required_gbps")
+        demand_constraints = d.get("constraints")
         if d.get("protected", False):
             basis, level, be = _demand_constraints(d)
             pair = _place_protected(model, qot, src, dst, work, grid, ref_mode,
@@ -314,7 +317,7 @@ def solve_rsa(
             placements.append(DemandPlacement(did, pair[0], pair[1]))
         else:
             sa = _place_unprotected(model, qot, src, dst, work, grid, ref_mode, require,
-                                    fill_policy)
+                                    fill_policy, constraints=demand_constraints)
             if sa is None:
                 unplaced.append((did, "no feasible route/slot/mode"))
                 continue

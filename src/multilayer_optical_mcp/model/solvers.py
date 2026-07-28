@@ -213,23 +213,27 @@ def _enumerate_oms_paths(
         else:
             simple.add_edge(u, v)
     emitted = 0
+    node_paths = nx.shortest_simple_paths(
+        simple, src, dst, weight="weight" if by_length else None)
+    node_paths_seen = 0
+    # nx.shortest_simple_paths is a generator function: its body -- including
+    # the NetworkXNoPath-raising internal call -- does not execute until the
+    # first next(), so wrapping only its CONSTRUCTION above can never catch
+    # it. The try/except must wrap the iteration itself.
     try:
-        node_paths = nx.shortest_simple_paths(
-            simple, src, dst, weight="weight" if by_length else None)
+        for node_path in node_paths:
+            if max_node_paths is not None and node_paths_seen >= max_node_paths:
+                return
+            node_paths_seen += 1
+            hop_options = [_oms_between(model, u, v, by_length=by_length, forbidden=forbidden)
+                           for u, v in zip(node_path, node_path[1:])]
+            for combo in itertools.product(*hop_options):
+                yield OmsPath(node_sequence=tuple(node_path), oms_sequence=tuple(combo))
+                emitted += 1
+                if emitted >= k:
+                    return
     except nx.NetworkXNoPath:
         return
-    node_paths_seen = 0
-    for node_path in node_paths:
-        if max_node_paths is not None and node_paths_seen >= max_node_paths:
-            return
-        node_paths_seen += 1
-        hop_options = [_oms_between(model, u, v, by_length=by_length, forbidden=forbidden)
-                       for u, v in zip(node_path, node_path[1:])]
-        for combo in itertools.product(*hop_options):
-            yield OmsPath(node_sequence=tuple(node_path), oms_sequence=tuple(combo))
-            emitted += 1
-            if emitted >= k:
-                return
 
 
 def compute_paths(
