@@ -14,8 +14,9 @@ import pytest
 
 from multilayer_optical_mcp.model.assets import (
     ROADM, FiberType, Fiber, Amplifier, OMS, TransceiverMode, Router, IPLink,
-    Lightpath,
+    Lightpath, Direction,
 )
+from multilayer_optical_mcp.gnpy_adapter.loading import LoadingState
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot import QoTState
@@ -98,6 +99,23 @@ class ConstQot:
         return QoTState(gsnr_db=self.g, osnr_db=30.0, margin_db=0.0)
 
 
+def _fake_settle(qot):
+    """GNPy-free settle stub: repopulate every lightpath's QoT via *qot* (the
+    same evaluator the packer used at placement time) instead of skipping
+    settle outright. A bare no-op settle relied on add_lightpath never
+    invalidating a co-tenant's recorded QoT; now that a new lightpath on a
+    shared OMS correctly invalidates its neighbors' stale QoT (S1-7: NLI
+    changes for everyone on that fiber), an earlier-placed lightpath that later
+    gained a co-tenant would read 'unknown' at the end without a real settle
+    pass. This mirrors scenario._default_settle's job without touching GNPy."""
+    def _settle(work: NetworkModel) -> None:
+        for lp in work.list_lightpaths():
+            state = qot(oms_sequence=lp.oms_sequence, direction=Direction.FORWARD,
+                        mode_id=lp.mode_id, loading=LoadingState.empty())
+            work.set_qot_state(lp.id, state)
+    return _settle
+
+
 def _triangle() -> NetworkModel:
     """3-node ring built via the real importer → bidirectional OMS, so demands
     route in both directions and there is path diversity for grooming."""
@@ -117,9 +135,10 @@ def built():
     """One convergent build (target mean util 0.5), shared across the checks below —
     the search runs solve_allocation many times, so build once and assert many."""
     m = _triangle()
+    qot = ConstQot()
     res = build_operating_network(
-        m, seed=0, qot=ConstQot(), target_mean_util=0.5, max_util_cap=0.95,
-        settle=lambda w: None)
+        m, seed=0, qot=qot, target_mean_util=0.5, max_util_cap=0.95,
+        settle=_fake_settle(qot))
     return m, res
 
 

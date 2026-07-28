@@ -31,8 +31,16 @@ def _model() -> NetworkModel:
 
 
 def _add_lp(m: NetworkModel, lp_id: str, mode_id: str, gsnr_db: float | None):
+    """Add a lightpath only -- QoT is seeded separately, after every lightpath
+    on the (shared) OMS has been added. All these lightpaths ride the same
+    single-element oms1, so add_lightpath's own-fiber QoT invalidation (S1-7:
+    a new co-propagating channel changes NLI for its neighbors) would clear an
+    earlier lightpath's seeded state if seeding were interleaved with adds."""
     m.add_lightpath(Lightpath(id=lp_id, oms_sequence=("oms1",), mode_id=mode_id,
                               center_freq_hz=193.4e12))
+
+
+def _seed_qot(m: NetworkModel, lp_id: str, mode_id: str, gsnr_db: float | None):
     if gsnr_db is not None:
         req = m.modes.get(mode_id).required_gsnr_db
         m.set_qot_state(lp_id, QoTState(gsnr_db=gsnr_db, osnr_db=gsnr_db,
@@ -41,11 +49,17 @@ def _add_lp(m: NetworkModel, lp_id: str, mode_id: str, gsnr_db: float | None):
 
 def test_max_feasible_mode_classifies_all_directions():
     m = _model()
-    _add_lp(m, "lp_headroom", "100G", gsnr_db=16.0)   # could reach 400G
-    _add_lp(m, "lp_match", "400G", gsnr_db=16.0)      # already at the ceiling
-    _add_lp(m, "lp_downshift", "400G", gsnr_db=11.0)  # 400G infeasible; 200G is best
-    _add_lp(m, "lp_infeasible", "400G", gsnr_db=3.0)  # below every mode
-    _add_lp(m, "lp_no_qot", "200G", gsnr_db=None)     # no recorded QoT -> omitted
+    lps = [
+        ("lp_headroom", "100G", 16.0),   # could reach 400G
+        ("lp_match", "400G", 16.0),      # already at the ceiling
+        ("lp_downshift", "400G", 11.0),  # 400G infeasible; 200G is best
+        ("lp_infeasible", "400G", 3.0),  # below every mode
+        ("lp_no_qot", "200G", None),     # no recorded QoT -> omitted
+    ]
+    for lp_id, mode_id, _gsnr_db in lps:
+        _add_lp(m, lp_id, mode_id, _gsnr_db)
+    for lp_id, mode_id, gsnr_db in lps:
+        _seed_qot(m, lp_id, mode_id, gsnr_db)
 
     rows = {r.lightpath_id: r for r in max_feasible_mode_view(m)}
 

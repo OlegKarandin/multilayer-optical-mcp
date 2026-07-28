@@ -682,11 +682,27 @@ def recompute_qot_under_loading(
 ) -> dict[str, Tuple[QoTState, str]]:
     """Compute gated QoT for every lightpath in model under *loading*.
 
+    *loading* is honored verbatim (CLAUDE.md's adapter contract: a loading state
+    is a first-class input, not "the current network") — including channels that
+    are not, and never were, provisioned. That is what makes a make-before-break
+    overlap (old ∪ new, both lit on a shared span, *before* either is committed)
+    evaluable without provisioning the new channel first.
+
     Each lightpath's interferer comb is built from *its own* OMS occupancy (the
-    per-OMS spectrum bitmask), intersected with the slots lit by *loading*. This
-    replaces the old global concat that propagated every committed channel
-    through every path (NLI over-count on disjoint fibers) and emitted duplicate
-    same-frequency carriers for wavelength reuse (malformed NLI) — S4-6/S8-5.
+    per-OMS spectrum bitmask) for the portion of *loading* that traces back to a
+    channel already committed elsewhere in the model — that restriction is what
+    keeps a committed channel on a physically disjoint fiber from being counted
+    as an interferer (NLI over-count) or duplicated as a same-frequency carrier
+    (malformed NLI) via ordinary cross-fiber wavelength reuse — S4-6/S8-5,
+    unchanged by this fix. A slot in *loading* that is NOT explained by any
+    committed lightpath anywhere in the model — i.e. a genuinely new,
+    not-yet-provisioned channel — has no known OMS to restrict it to (a bare
+    Channel carries a center frequency, not a path), so it is added to *every*
+    lightpath's interferer comb: the caller constructed this loading set
+    deliberately, and CLAUDE.md's contract is to trust it, not to silently drop
+    the part the model can't corroborate. (Internal callers that need a new
+    channel scoped to one specific OMS provision it onto a clone first, so it
+    becomes a committed, properly-scoped channel — see loading_from_model.)
 
     Writes QoTState on the model and returns {lp_id: (QoTState, result_id)}.
     """
@@ -709,6 +725,13 @@ def recompute_qot_under_loading(
         except ValueError:
             continue  # off-grid channel contributes no grid interferer
 
+    # Slots explained by SOME committed lightpath, on any OMS. Used below to
+    # distinguish "this lit slot is a committed channel, scope it to its real
+    # OMS" from "this lit slot has no committed source, honor it everywhere".
+    known = 0
+    for bits in model_state.values():
+        known |= bits
+
     results: dict[str, Tuple[QoTState, str]] = {}
     for lp in model.list_lightpaths():
         if failed:
@@ -722,7 +745,11 @@ def recompute_qot_under_loading(
                 results[lp.id] = (sentinel, rid)
                 continue
         probe_slot = grid.slot_of(lp.center_freq_hz)
-        occ = occupied_along(model_state, lp.oms_sequence) & lit
+        # Committed channels on lp's own OMS (unchanged, fiber-scoped) OR'd with
+        # lit-but-uncommitted slots (additive, unscoped — see docstring).
+        own_committed = occupied_along(model_state, lp.oms_sequence) & lit
+        uncommitted = lit & ~known & grid.all_slots_mask
+        occ = own_committed | uncommitted
         per_path = _per_path_loading(grid, occ, probe_slot, lp.mode_id)
         state, rid = gated_qot(model=model, store=store,
                                oms_sequence=lp.oms_sequence,

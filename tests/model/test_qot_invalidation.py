@@ -61,3 +61,38 @@ def test_apply_loss_delta_clears_all_qot():
     n.apply_loss_delta("f1", 2.0)
     with pytest.raises(LookupError):
         n.get_qot_state("lp1")
+
+
+def test_add_lightpath_clears_qot_for_lightpath_sharing_the_oms():
+    """Provisioning a new channel changes NLI for every channel already
+    co-propagating on the same OMS -- lp1's recorded QoT is now stale and must
+    read as unknown (LookupError), not the value recorded before lp2 was lit,
+    until the next recompute repopulates it."""
+    n = _model()
+    assert n.get_qot_state("lp1").gsnr_db == 22.0  # sanity: recorded before lp2
+
+    n.add_lightpath(Lightpath(id="lp2", oms_sequence=("oms1",),
+                              mode_id="100G-QPSK", center_freq_hz=193.5e12))
+
+    with pytest.raises(LookupError):
+        n.get_qot_state("lp1")
+    with pytest.raises(LookupError):
+        n.ip_link_capacity_gbps("ip1")
+
+
+def test_remove_lightpath_clears_qot_for_remaining_lightpath_sharing_the_oms():
+    """Tearing down a channel changes NLI for every surviving channel that was
+    co-propagating with it -- the survivor's recorded QoT is stale and must
+    read as unknown until the next recompute."""
+    n = _model()
+    n.add_lightpath(Lightpath(id="lp2", oms_sequence=("oms1",),
+                              mode_id="100G-QPSK", center_freq_hz=193.5e12))
+    # lp2's addition above already invalidated lp1's QoT (see the add test) --
+    # re-seed both so the removal below is the only invalidation under test.
+    n.set_qot_state("lp1", QoTState(gsnr_db=22.0, osnr_db=24.0, margin_db=4.0))
+    n.set_qot_state("lp2", QoTState(gsnr_db=20.0, osnr_db=23.0, margin_db=2.0))
+
+    n.remove_lightpath("lp2")
+
+    with pytest.raises(LookupError):
+        n.get_qot_state("lp1")

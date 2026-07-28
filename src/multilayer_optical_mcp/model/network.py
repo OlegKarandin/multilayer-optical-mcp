@@ -183,6 +183,16 @@ class NetworkModel:
         if self._grid is not None:
             self._grid.slot_of(lp.center_freq_hz)
         self._lightpaths[lp.id] = lp
+        # A new channel changes NLI for every other channel co-propagating on a
+        # shared OMS (more interferers -> lower GSNR for everyone on that
+        # fiber). Unlike apply_nf_delta/apply_loss_delta's S1-7 blunt
+        # clear-all (which would need an elements-membership walk to resolve
+        # crossing here), the affected set is cheap and exact: lp.oms_sequence
+        # is already the crossing membership, so invalidate only lightpaths
+        # that actually share an OMS with the new one -- a lightpath on a
+        # physically disjoint span is untouched. A cleared entry reads as
+        # "unknown" (LookupError), never a stale value.
+        self._invalidate_qot_sharing_oms(lp.oms_sequence, exclude=lp.id)
 
     def get_lightpath(self, lpid: str) -> Lightpath:
         return self._lightpaths[lpid]
@@ -253,10 +263,32 @@ class NetworkModel:
         1). Removing (not sentinelling) frees the lightpath's spectrum slot and
         stops it loading its fibers, which is what make-before-break requires."""
         self._check_mutable()
+        oms_sequence = self._lightpaths[lp_id].oms_sequence
         for link_id in self.ip_links_for_lightpath(lp_id):
             self._ip_links.pop(link_id, None)
         self._lightpaths.pop(lp_id, None)
         self._qot_state.pop(lp_id, None)
+        # Dropping a channel changes NLI for every surviving channel that was
+        # co-propagating with it on a shared OMS -- mirrors add_lightpath's
+        # invalidation (see its comment). A lightpath on a physically disjoint
+        # span is untouched.
+        self._invalidate_qot_sharing_oms(oms_sequence)
+
+    def _invalidate_qot_sharing_oms(
+        self, oms_sequence: Tuple[str, ...], exclude: Optional[str] = None,
+    ) -> None:
+        """Drop recorded QoT for every lightpath that shares at least one OMS
+        with *oms_sequence* (a channel add/remove on those spans). *exclude*
+        skips a given lightpath id (the one just added, which has no prior
+        state to invalidate anyway)."""
+        oms_set = set(oms_sequence)
+        if not oms_set:
+            return
+        for other in self._lightpaths.values():
+            if other.id == exclude:
+                continue
+            if oms_set.intersection(other.oms_sequence):
+                self._qot_state.pop(other.id, None)
 
     # ---------------------------------------------------------------- services / risk
 
