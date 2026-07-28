@@ -39,7 +39,20 @@ class MarginSweepRow:
 
 
 def loading_from_model(model: NetworkModel) -> LoadingState:
-    """One channel per committed lightpath at its center frequency."""
+    """One channel per committed lightpath at its center frequency.
+
+    Deliberately NOT built via LoadingState.union(): this is a network-wide
+    comb spanning every lightpath regardless of which OMS it rides, so two
+    lightpaths legitimately sharing a center frequency on physically disjoint
+    fibers (ordinary wavelength reuse) is expected and must NOT raise here.
+    recompute_qot_under_loading (the sole consumer of this function's output)
+    already documents this: it reduces `loading.channels` to a per-grid-slot
+    occupancy bitmask and intersects it with each lightpath's OWN per-OMS
+    occupancy (S4-6/S8-5) rather than trusting frequency uniqueness across the
+    whole comb, precisely so cross-fiber reuse doesn't look like a clash. A
+    genuine same-fiber, same-slot clash is a different, already-covered check:
+    validate.py's _spectrum_clash_findings (per-OMS occupancy, not this
+    function) and add_lightpath's on-grid check -- see network.py."""
     channels = []
     for lp in model.list_lightpaths():
         mode = model.modes.get(lp.mode_id)

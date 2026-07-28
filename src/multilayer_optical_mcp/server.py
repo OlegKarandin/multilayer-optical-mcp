@@ -93,20 +93,35 @@ def build_app(*, model: NetworkModel | None = None,
         except KeyError as exc:
             return {"error": "unknown or expired snapshot id", "id": str(exc)}
 
-    def _loading_from(channels: list[dict]) -> LoadingState:
-        return LoadingState(
-            channels=tuple(
-                Channel(
-                    center_freq_hz=c["center_freq_hz"],
-                    slot_width_hz=c["slot_width_hz"],
-                    # S2-2: omit or pass null for the tx_power default; a literal
-                    # 0.0 now means 0 dBm, not "don't care".
-                    power_dbm=c.get("power_dbm"),
-                    mode_id=c["mode_id"],
-                )
-                for c in channels
-            )
+    def _channel_from_dict(c: dict) -> Channel:
+        return Channel(
+            center_freq_hz=c["center_freq_hz"],
+            slot_width_hz=c["slot_width_hz"],
+            # S2-2: omit or pass null for the tx_power default; a literal
+            # 0.0 now means 0 dBm, not "don't care".
+            power_dbm=c.get("power_dbm"),
+            mode_id=c["mode_id"],
         )
+
+    def _loading_from(channels: list[dict]) -> LoadingState:
+        return LoadingState(channels=tuple(_channel_from_dict(c) for c in channels))
+
+    def _single_path_loading_from(channels: list[dict]) -> LoadingState:
+        """Like _loading_from, but for callers whose `channels` propagate along
+        ONE physical path (compute_qot, whatif_sensitivity): two carriers at the
+        same frequency on one fiber is a real bug (a malformed SI gnpy would
+        silently mispropagate), unlike recompute_qot_under_loading's network-wide
+        comb, which legitimately tolerates the same frequency reused on disjoint
+        fibers (see whatif.loading_from_model's docstring) -- so this helper, and
+        only this one, folds through LoadingState.union(). A caller-constructed
+        clash -- e.g. a hand-built make-before-break old-U-new comb (CLAUDE.md's
+        loading-state contract: "current U {new_channel}") that accidentally
+        repeats a frequency -- raises here instead of silently corrupting the
+        propagation."""
+        loading = LoadingState.empty()
+        for c in channels:
+            loading = loading.union(LoadingState(channels=(_channel_from_dict(c),)))
+        return loading
 
     @app.tool()
     def compute_qot(
@@ -126,7 +141,7 @@ def build_app(*, model: NetworkModel | None = None,
             oms_sequence=tuple(oms_sequence),
             direction=Direction(direction),
             mode_id=mode_id,
-            loading=_loading_from(loading_channels),
+            loading=_single_path_loading_from(loading_channels),
         )
         return {
             "gsnr_db": state.gsnr_db,
@@ -492,7 +507,7 @@ def build_app(*, model: NetworkModel | None = None,
         res = _whatif_sensitivity(
             model_a, model_b, store=results,
             oms_sequence=tuple(oms_sequence), direction=Direction(direction),
-            mode_id=mode_id, loading=_loading_from(loading_channels),
+            mode_id=mode_id, loading=_single_path_loading_from(loading_channels),
         )
         return sensitivity_result_dict(res)
 
