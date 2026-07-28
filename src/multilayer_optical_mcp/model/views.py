@@ -80,8 +80,9 @@ def services_dict(model: NetworkModel) -> Dict[str, Any]:
             "protection_path": list(svc.protection_path),
         })
         for ip_id in svc.working_path:
-            lp_id = model.get_ip_link(ip_id).lightpath_id
-            grooming[lp_id].append(svc.id)
+            lp_id = model.get_ip_link_lightpath_id(ip_id)
+            if lp_id is not None:
+                grooming[lp_id].append(svc.id)
     return {"services": services, "grooming_map": dict(grooming)}
 
 

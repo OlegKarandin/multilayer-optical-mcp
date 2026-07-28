@@ -199,6 +199,16 @@ class NetworkModel:
     def get_ip_link(self, lid: str) -> IPLink:
         return self._ip_links[lid]
 
+    def get_ip_link_lightpath_id(self, link_id: str) -> Optional[str]:
+        """Resolve an IP link id to its bound lightpath id, or None if the IP
+        link no longer exists (e.g. after remove_lightpath/remove_ip_link left
+        a service's working_path/protection_path pointing at a removed link --
+        a documented, valid state per remove_ip_link's own docstring). Callers
+        walking a service's path must use this instead of a bare
+        get_ip_link(...).lightpath_id, which raises on the dangling case."""
+        link = self._ip_links.get(link_id)
+        return link.lightpath_id if link is not None else None
+
     def list_ip_links(self) -> Tuple[IPLink, ...]:
         return tuple(self._ip_links.values())
 

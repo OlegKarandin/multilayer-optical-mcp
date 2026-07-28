@@ -113,20 +113,26 @@ def oms_seq_node_set(model: NetworkModel, oms_sequence: Tuple[str, ...]) -> Froz
 
 def _path_asset_set(model: NetworkModel, ip_link_ids: Tuple[str, ...]) -> FrozenSet[str]:
     """Expand IP-link-id sequence to the full multi-layer asset set:
-    {ip_link_ids} ∪ {lightpath_ids} ∪ {oms_ids} ∪ {fiber/amp/roadm uids}.
+    {ip_link_ids} ∪ {lightpath_ids} ∪ {oms_ids} ∪ {fiber/amp/roadm uids} ∪
+    {terminal drop ROADM}.
 
     Risk groups may be expressed at any of these layers (fiber-level for a
     storm hitting a span; oms-level for a cable cut; lightpath-level for a
     transponder failure). Including every layer in the asset set makes
-    intersection layer-agnostic.
+    intersection layer-agnostic. Uses lightpath_footprint (not the narrower
+    oms_seq_asset_set) so a risk group/asset query naming a lightpath's own
+    destination ROADM is not silently missed (the importer convention omits
+    the drop ROADM from oms.elements). A dangling ip-link id (removed
+    lightpath/link, a documented valid state) contributes nothing.
     """
     assets: set[str] = set()
     for ip_id in ip_link_ids:
+        lp_id = model.get_ip_link_lightpath_id(ip_id)
+        if lp_id is None:
+            continue
         assets.add(ip_id)
-        link = model.get_ip_link(ip_id)
-        lp = model.get_lightpath(link.lightpath_id)
-        assets.add(lp.id)
-        assets |= oms_seq_asset_set(model, lp.oms_sequence)
+        assets.add(lp_id)
+        assets |= lightpath_footprint(model, model.get_lightpath(lp_id).oms_sequence)
     return frozenset(assets)
 
 

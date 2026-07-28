@@ -112,11 +112,15 @@ def replay(model: NetworkModel, plan: Plan) -> NetworkModel:
 def service_oms_sequence(model: NetworkModel, ip_path: Tuple[str, ...]) -> Tuple[str, ...]:
     """Concatenate the OMS sequences of the lightpaths under an IP path. Used by
     the disjointness-collapse check to map IP working/protection paths to the
-    OMS-sequence form check_disjointness audits."""
+    OMS-sequence form check_disjointness audits. A dangling ip-link id (left
+    by remove_lightpath/remove_ip_link, a documented valid state) contributes
+    no OMS rather than raising."""
     seq: list[str] = []
     for ip_id in ip_path:
-        lp = model.get_lightpath(model.get_ip_link(ip_id).lightpath_id)
-        seq.extend(lp.oms_sequence)
+        lp_id = model.get_ip_link_lightpath_id(ip_id)
+        if lp_id is None:
+            continue
+        seq.extend(model.get_lightpath(lp_id).oms_sequence)
     return tuple(seq)
 
 

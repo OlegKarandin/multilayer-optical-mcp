@@ -39,10 +39,14 @@ def _oms_seq_length_km(model: NetworkModel, oms_sequence) -> float:
 
 
 def _active_working_lightpaths(model, svc):
-    """The lightpath ids under a service's working IP path (its declared intent)."""
+    """The lightpath ids under a service's working IP path (its declared
+    intent). A dangling ip-link id (removed lightpath/link, a documented
+    valid state) contributes nothing rather than raising."""
     out = []
     for ip_id in svc.working_path:
-        out.append(model.get_ip_link(ip_id).lightpath_id)
+        lp_id = model.get_ip_link_lightpath_id(ip_id)
+        if lp_id is not None:
+            out.append(lp_id)
     return out
 
 

@@ -65,8 +65,12 @@ def build_grooming_map(model: NetworkModel) -> GroomingMap:
     rev: Dict[str, list] = {}
 
     for svc in model.list_services():
-        # Get lightpath ids for each IP link in the service's working path
-        lps = tuple(model.get_ip_link(ip).lightpath_id for ip in svc.working_path)
+        # Get lightpath ids for each IP link in the service's working path.
+        # A dangling ip-link id (removed lightpath/link) contributes nothing.
+        lps = tuple(
+            lp_id for lp_id in (model.get_ip_link_lightpath_id(ip) for ip in svc.working_path)
+            if lp_id is not None
+        )
         by_service[svc.id] = lps
 
         # Build reverse mapping: lightpath -> list of service ids
