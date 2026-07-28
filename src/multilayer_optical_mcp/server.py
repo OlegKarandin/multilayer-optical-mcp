@@ -194,7 +194,9 @@ def build_app(*, model: NetworkModel | None = None,
         SetModulationFormat, apply_op,
     )
     from .model.assets import Lightpath as _Lightpath, IPLink as _IPLink
-    from .model.validate import validate_plan as _validate_plan
+    from .model.validate import (
+        validate_plan as _validate_plan, recompute_if_possible as _recompute_if_possible,
+    )
     from .model.commit import (
         commit_plan as _commit_plan, reconcile as _reconcile,
         CommitResult as _CommitResult,
@@ -511,6 +513,15 @@ def build_app(*, model: NetworkModel | None = None,
                 id=ip_link["id"], a_router=ip_link["a_router"],
                 z_router=ip_link["z_router"], lightpath_id=lightpath["id"]))
         apply_op(snapshots.current(), op)
+        # Seed QoT for the freshly-lit lightpath so derived-capacity reads
+        # (ip_link_capacity_gbps, _residual_gbps) report a real value instead
+        # of the "unseeded" state -- the live twin of what commit_plan already
+        # does on its live-commit path. Best-effort: a recompute failure must
+        # not un-report the successful provision.
+        try:
+            _recompute_if_possible(snapshots.current(), results)
+        except Exception:
+            pass
         return {"lightpath_id": op.lightpath.id,
                 "ip_link_id": op.ip_link.id if op.ip_link else None}
 

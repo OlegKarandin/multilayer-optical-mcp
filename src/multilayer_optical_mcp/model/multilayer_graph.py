@@ -111,7 +111,12 @@ def _residual_gbps(model: NetworkModel, lp, load: Dict[str, float]) -> float:
     not the max. A groom onto this lightpath rides one of its bound IP links, and
     at graph-build time we don't know which, so the honest headroom is the tightest
     link's: `max` would report the healthiest link and overstate capacity a
-    saturated sibling link can't actually provide (a confident wrong number)."""
+    saturated sibling link can't actually provide (a confident wrong number).
+
+    A lightpath with no recorded QoT yet (e.g. freshly lit by the live
+    provision_lightpath tool, which does not seed or recompute) reads as zero
+    residual, not a crash -- consistent with the no-IP-link branch below and
+    with ip_routing._link_status's "unknown" (not up, not down) treatment."""
     ip_ids = model.ip_links_for_lightpath(lp.id)
     if not ip_ids:
         # no IP link bound: capacity is mode rate iff margin >= 0
@@ -122,7 +127,10 @@ def _residual_gbps(model: NetworkModel, lp, load: Dict[str, float]) -> float:
         return 0.0 if state.margin_db < 0 else model.modes.get(lp.mode_id).bitrate_gbps
     residual = float("inf")
     for ip_id in ip_ids:
-        cap = model.ip_link_capacity_gbps(ip_id)   # 0.0 when margin<0
+        try:
+            cap = model.ip_link_capacity_gbps(ip_id)   # 0.0 when margin<0
+        except LookupError:
+            cap = 0.0   # no QoT recorded yet -- treat as no residual capacity
         residual = min(residual, cap - load.get(ip_id, 0.0))
     return residual
 

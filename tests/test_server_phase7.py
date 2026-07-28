@@ -146,3 +146,19 @@ def test_commit_plan_tool_never_raises_on_malformed_json():
                           "lightpath": {"id": "lpX"}}]}
     out = _call(app, "commit_plan", plan=malformed, dry_run=True)   # must not raise
     assert out["status"] == "rejected"
+
+
+def test_provision_lightpath_tool_seeds_qot_so_solvers_do_not_crash():
+    """Regression for the audit's Critical finding: after a live
+    provision_lightpath call, build_layered_graph/route_service/
+    compute_restoration/solve_allocation must not raise LookupError."""
+    from multilayer_optical_mcp.model.multilayer_graph import build_layered_graph
+    app = build_app()
+    _seed(app)
+    _call(app, "provision_lightpath",
+          lightpath={"id": "lp1", "oms_sequence": ["omsAB"],
+                     "mode_id": app._snapshots.current().modes.list()[0].id,
+                     "center_freq_hz": 193.4e12},
+          ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
+
+    build_layered_graph(app._snapshots.current())   # must not raise

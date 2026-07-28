@@ -460,3 +460,29 @@ def test_groom_or_new_finds_hybrid_groom_plus_new():
     assert h.reused_lightpaths == ("lp-AM",)
     assert h.new_lightpaths[0].oms_sequence == ("oms-MB",)
     assert h.restored_gbps == 100.0
+
+
+def test_residual_gbps_treats_unseeded_qot_as_zero_not_a_crash():
+    """Regression for the audit's Critical finding: a lightpath with a bound
+    IP link but NO recorded QoT state (the state left by provision_lightpath,
+    a live single-op tool that never seeds or recomputes QoT) must read as
+    zero residual capacity, not raise LookupError -- consistent with the
+    no-IP-link branch three lines above in the same function."""
+    n = NetworkModel(modes=ModeRegistry([
+        TransceiverMode(id="100G", bitrate_gbps=100.0, required_gsnr_db=12.0,
+                        symbol_rate_baud=32e9, channel_spacing_hz=100e9)]))
+    n.register_fiber_type(FiberType("SSMF", 0.2))
+    for a in ("a1", "a2"):
+        n.add_amplifier(Amplifier(id=a, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+    n.add_fiber(Fiber("fAB", "a1", "a2", 80.0, "SSMF"))
+    for node in ("A", "B"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    n.add_oms(OMS("oms-AB", "A", "B", ("roadm_A", "a1", "fAB", "a2")))
+    n.add_lightpath(Lightpath("lp-AB", ("oms-AB",), "100G", 193.4e12))
+    # Deliberately NO n.set_qot_state(...) call -- the unseeded state.
+    n.add_router(Router("R1", "A"))
+    n.add_router(Router("R2", "B"))
+    n.add_ip_link(IPLink("ip-AB", "R1", "R2", "lp-AB"))
+
+    g = build_layered_graph(n)   # must not raise LookupError
+    assert lpe_edges(g) == []    # zero residual -> no LPE edge, same as margin<0
