@@ -38,7 +38,13 @@ class SnapshotStore:
         parent = self._snapshots[parent_id]
         bid = uuid.uuid4().hex
         new = parent.clone()  # always unfrozen working copy
-        self._store(bid, new)
+        # Store an INDEPENDENT clone, not `new` itself: every other writer
+        # (create/restore/put) clones before storing, and branch() must too,
+        # or the stored snapshot and the live working copy are the same
+        # object -- mutating current() after branch() would also silently
+        # mutate the branch's own "point in time" snapshot, making
+        # snapshot_restore(bid) a no-op instead of a real rollback.
+        self._store(bid, new.clone())
         self._current = new
         return bid
 

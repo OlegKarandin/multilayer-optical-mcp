@@ -121,3 +121,26 @@ def test_snapshot_diff_returns_structured_delta():
     assert "lightpaths" in diff
     assert "fibers" in diff
     assert "amplifiers" in diff
+
+
+def test_snapshot_restore_on_expired_id_returns_typed_error():
+    """Regression for the audit's Critical finding: an evicted/unknown
+    snapshot id must return a typed error, not raise KeyError."""
+    from multilayer_optical_mcp.server import build_app
+    app = build_app()
+    out = _call(app, "snapshot_restore", snapshot_id="nope")
+    assert "error" in out
+
+
+def test_snapshot_branch_on_expired_id_returns_typed_error():
+    from multilayer_optical_mcp.server import build_app
+    app = build_app()
+    out = _call(app, "snapshot_branch", parent_id="nope")
+    assert "error" in out
+
+
+def test_snapshot_diff_on_expired_id_returns_typed_error():
+    from multilayer_optical_mcp.server import build_app
+    app = build_app()
+    out = _call(app, "snapshot_diff", a_id="nope", b_id="also-nope")
+    assert "error" in out

@@ -179,8 +179,18 @@ def commit_plan(
 
 def reconcile(store: SnapshotStore, intended_snapshot_id: str) -> DriftReport:
     """Diff store.current() (reality, after a live commit) against the intended
-    end-state recorded at commit time. Empty diff => in_sync."""
-    intended = store.get(intended_snapshot_id)
+    end-state recorded at commit time. Empty diff => in_sync.
+
+    If the intended snapshot has been evicted (the store's cap/TTL bound
+    resource lifecycle doing its job), that is itself reportable drift --
+    reality can no longer be compared against the recorded intent -- not a
+    raised exception."""
+    try:
+        intended = store.get(intended_snapshot_id)
+    except KeyError:
+        return DriftReport(in_sync=False, drift=(
+            Drift(registry="_snapshot_", kind="removed", asset_id=intended_snapshot_id),
+        ))
     diff = diff_models(store.current(), intended)
     drift = drift_from_diff(diff)
     return DriftReport(in_sync=not drift, drift=drift)

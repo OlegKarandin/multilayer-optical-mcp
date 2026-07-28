@@ -40,12 +40,18 @@ def test_branch_is_isolated_from_parent():
     store = SnapshotStore(initial=_seed())
     parent = store.create()
     branch = store.branch(parent)
-    # A branch's working copy is mutated through current(); get() is read-only.
+    # A branch's working copy is mutated through current(). Task 12 fix:
+    # branch() clones AGAIN before storing (like create/restore/put already
+    # do), so the branch's own stored point-in-time snapshot does NOT change
+    # retroactively when current() is mutated afterward -- only current()
+    # itself reflects the live mutation.
     store.current().add_amplifier(Amplifier(id="amp-new",
         type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
     with pytest.raises(KeyError):
         store.get(parent).get_amplifier("amp-new")
-    assert store.get(branch).get_amplifier("amp-new").id == "amp-new"
+    assert store.current().get_amplifier("amp-new").id == "amp-new"
+    with pytest.raises(KeyError):
+        store.get(branch).get_amplifier("amp-new")
 
 
 def test_qot_state_is_carried_into_clone():
@@ -149,3 +155,25 @@ def test_put_registers_external_model():
     sid = store.put(other)
     assert store.get(sid) is not other          # stored a clone, not the live object
     assert "rg9" in store.get(sid)._risk_groups
+
+
+def test_branch_clones_before_storing_so_restore_reaches_the_branch_point():
+    """Regression for the audit's Important branch()-aliasing finding:
+    branch() must clone before storing, like create()/restore()/put() already
+    do, so snapshot_restore(branch_id) rolls back to the BRANCH POINT, not
+    whatever current() has since been mutated into."""
+    store = SnapshotStore(initial=_seed())
+    store.current().set_qot_state("lp1",
+        QoTState(gsnr_db=20.0, osnr_db=22.0, margin_db=1.0))
+    parent = store.create()
+    bid = store.branch(parent)
+
+    # Mutate current() AFTER branching.
+    store.current().set_qot_state("lp1",
+        QoTState(gsnr_db=1.0, osnr_db=1.0, margin_db=-99.0))
+
+    # The branch snapshot must still read the value AT the branch point.
+    assert store.get(bid).get_qot_state("lp1").margin_db == 1.0
+
+    store.restore(bid)
+    assert store.current().get_qot_state("lp1").margin_db == 1.0

@@ -111,8 +111,13 @@ def test_whatif_sensitivity_tool_flags_perturbed_amp():
     mode_id = n.modes.list()[0].id
 
     id_a = _call(app, "snapshot_create")["id"]
-    id_b = _call(app, "snapshot_branch", parent_id=id_a)["id"]
-    app._snapshots.current().apply_nf_delta("a2", 6.0)   # mutate branch b only
+    _call(app, "snapshot_branch", parent_id=id_a)   # move current() onto a working branch
+    app._snapshots.current().apply_nf_delta("a2", 6.0)   # mutate the branch's live working copy
+    # Task 12 fix: branch() now clones independently before storing, so the id
+    # returned by snapshot_branch captures the PRE-mutation branch point, not
+    # whatever current() is later mutated into. Capture the mutated state with
+    # a fresh snapshot_create() instead of relying on the branch id for it.
+    id_b = _call(app, "snapshot_create")["id"]
 
     loading_channels = [{"center_freq_hz": 193.4e12, "slot_width_hz": 100e9,
                          "power_dbm": None, "mode_id": mode_id}]

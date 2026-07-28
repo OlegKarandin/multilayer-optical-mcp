@@ -82,3 +82,24 @@ def test_partial_commit_then_reconcile_surfaces_drift():
     drifted = {(d.registry, d.asset_id) for d in drift.drift}
     assert ("lightpaths", "lpY") in drifted
     assert ("ip_links", "ipY") in drifted
+
+
+def test_reconcile_on_evicted_intended_snapshot_returns_drift_not_raise():
+    """Regression for the audit's Important finding: reconcile() must not
+    raise a bare KeyError when the intended snapshot was evicted."""
+    from multilayer_optical_mcp.model.network import NetworkModel
+    from multilayer_optical_mcp.model.modes import ModeRegistry
+    from multilayer_optical_mcp.model.assets import TransceiverMode
+    from multilayer_optical_mcp.model.snapshots import SnapshotStore
+    from multilayer_optical_mcp.model.commit import reconcile
+
+    base = NetworkModel(modes=ModeRegistry([TransceiverMode(
+        id="400G", bitrate_gbps=400.0, required_gsnr_db=7.1,
+        symbol_rate_baud=87.5e9, channel_spacing_hz=100e9)]))
+    store = SnapshotStore(base, max_snapshots=1)
+    sid = store.put(base.clone())
+    store.put(base.clone())   # evicts sid (max_snapshots=1)
+
+    report = reconcile(store, sid)   # must not raise
+    assert report.in_sync is False
+    assert report.drift and report.drift[0].asset_id == sid

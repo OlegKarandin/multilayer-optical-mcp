@@ -65,18 +65,27 @@ def build_app(*, model: NetworkModel | None = None,
     @app.tool()
     def snapshot_branch(parent_id: str) -> dict:
         """Branch from an existing snapshot for isolated what-if exploration."""
-        return {"id": snapshots.branch(parent_id)}
+        try:
+            return {"id": snapshots.branch(parent_id)}
+        except KeyError:
+            return {"error": "unknown or expired parent_id", "parent_id": parent_id}
 
     @app.tool()
     def snapshot_restore(snapshot_id: str) -> dict:
         """Restore the current model to a previously saved snapshot."""
-        snapshots.restore(snapshot_id)
+        try:
+            snapshots.restore(snapshot_id)
+        except KeyError:
+            return {"error": "unknown or expired snapshot_id", "snapshot_id": snapshot_id}
         return {"restored": snapshot_id}
 
     @app.tool()
     def snapshot_diff(a_id: str, b_id: str) -> dict:
         """Return a structured delta between two snapshots."""
-        return snapshots.diff(a_id, b_id)
+        try:
+            return snapshots.diff(a_id, b_id)
+        except KeyError as exc:
+            return {"error": "unknown or expired snapshot id", "id": str(exc)}
 
     def _loading_from(channels: list[dict]) -> LoadingState:
         return LoadingState(
@@ -149,7 +158,10 @@ def build_app(*, model: NetworkModel | None = None,
     @app.tool()
     def get_qot_breakdown(result_id: str) -> dict:
         """Retrieve the per-element QoT breakdown for a previous compute_qot call."""
-        bd = results.get(result_id)
+        try:
+            bd = results.get(result_id)
+        except KeyError:
+            return {"error": "unknown or expired result_id", "result_id": result_id}
         return {
             "limiting_element_id": bd.limiting_element_id,
             "snapshots": [asdict(s) for s in bd.snapshots],
@@ -451,8 +463,11 @@ def build_app(*, model: NetworkModel | None = None,
         changed — not the cumulative GSNR-after figure, which shifts at every
         element downstream of the real cause too. Read-only; mutates neither
         branch. rows sorted by |gsnr_contribution_delta_db| descending."""
-        model_a = snapshots.get(state_a)
-        model_b = snapshots.get(state_b)
+        try:
+            model_a = snapshots.get(state_a)
+            model_b = snapshots.get(state_b)
+        except KeyError as exc:
+            return {"error": "unknown or expired state id", "id": str(exc)}
         res = _whatif_sensitivity(
             model_a, model_b, store=results,
             oms_sequence=tuple(oms_sequence), direction=Direction(direction),
@@ -589,7 +604,10 @@ def build_app(*, model: NetworkModel | None = None,
         current). Terms are costs except total_margin (a benefit, subtracted).
         weights: per-cost-term weights (e.g. {"transponders": 2.0}); not a
         per-demand priority."""
-        model = snapshots.get(state) if state else snapshots.current()
+        try:
+            model = snapshots.get(state) if state else snapshots.current()
+        except KeyError:
+            return {"error": "unknown or expired state id", "state": state}
         return objective_result_dict(_evaluate_objective(model, weights))
 
     @app.tool()
