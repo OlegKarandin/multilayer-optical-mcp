@@ -68,11 +68,17 @@ def apply_op(model: NetworkModel, op: PlanOp) -> None:
         if op.ip_link is not None and op.ip_link.id in model._ip_links:
             raise PlanError(
                 f"provision: ip_link {op.ip_link.id!r} already exists")
-        model.add_lightpath(op.lightpath)
+        try:
+            model.add_lightpath(op.lightpath)
+        except (ValueError, KeyError) as exc:
+            raise PlanError(f"provision: {exc}") from exc
         if op.ip_link is not None:
             # Bind the IP link to the just-provisioned lightpath, regardless of
             # whatever lightpath_id the caller put on it.
-            model.add_ip_link(replace(op.ip_link, lightpath_id=op.lightpath.id))
+            try:
+                model.add_ip_link(replace(op.ip_link, lightpath_id=op.lightpath.id))
+            except ValueError as exc:
+                raise PlanError(f"provision: {exc}") from exc
     elif isinstance(op, TeardownLightpath):
         if op.lightpath_id not in model._lightpaths:
             raise PlanError(f"teardown: unknown lightpath {op.lightpath_id!r}")
@@ -135,29 +141,37 @@ def plan_from_dict(data: dict) -> Plan:
       {"op": "reroute_service", "service_id": ..., "ip_path": [...],
        "which": "working"|"protection"  # optional, defaults "working"},
       {"op": "set_modulation_format", "lightpath_id": ..., "mode_id": ...}]}
+
+    Raises PlanError (not a raw KeyError) on any missing required key, so a
+    malformed plan is a typed, structured failure at every call site --
+    including the two independent server.py call sites (validate_plan,
+    commit_plan) that evaluate this function before their own bodies start.
     """
     ops: list[PlanOp] = []
-    for raw in data.get("ops", []):
-        kind = raw["op"]
-        if kind == "provision_lightpath":
-            lp = raw["lightpath"]
-            lightpath = Lightpath(
-                id=lp["id"], oms_sequence=tuple(lp["oms_sequence"]),
-                mode_id=lp["mode_id"], center_freq_hz=lp["center_freq_hz"])
-            ipl = raw.get("ip_link")
-            ip_link = None if ipl is None else IPLink(
-                id=ipl["id"], a_router=ipl["a_router"], z_router=ipl["z_router"],
-                lightpath_id=lightpath.id)
-            ops.append(ProvisionLightpath(lightpath=lightpath, ip_link=ip_link))
-        elif kind == "teardown_lightpath":
-            ops.append(TeardownLightpath(lightpath_id=raw["lightpath_id"]))
-        elif kind == "reroute_service":
-            ops.append(RerouteService(service_id=raw["service_id"],
-                                      ip_path=tuple(raw["ip_path"]),
-                                      which=raw.get("which", "working")))
-        elif kind == "set_modulation_format":
-            ops.append(SetModulationFormat(lightpath_id=raw["lightpath_id"],
-                                           mode_id=raw["mode_id"]))
-        else:
-            raise PlanError(f"unknown op kind {kind!r}")
+    try:
+        for raw in data.get("ops", []):
+            kind = raw["op"]
+            if kind == "provision_lightpath":
+                lp = raw["lightpath"]
+                lightpath = Lightpath(
+                    id=lp["id"], oms_sequence=tuple(lp["oms_sequence"]),
+                    mode_id=lp["mode_id"], center_freq_hz=lp["center_freq_hz"])
+                ipl = raw.get("ip_link")
+                ip_link = None if ipl is None else IPLink(
+                    id=ipl["id"], a_router=ipl["a_router"], z_router=ipl["z_router"],
+                    lightpath_id=lightpath.id)
+                ops.append(ProvisionLightpath(lightpath=lightpath, ip_link=ip_link))
+            elif kind == "teardown_lightpath":
+                ops.append(TeardownLightpath(lightpath_id=raw["lightpath_id"]))
+            elif kind == "reroute_service":
+                ops.append(RerouteService(service_id=raw["service_id"],
+                                          ip_path=tuple(raw["ip_path"]),
+                                          which=raw.get("which", "working")))
+            elif kind == "set_modulation_format":
+                ops.append(SetModulationFormat(lightpath_id=raw["lightpath_id"],
+                                               mode_id=raw["mode_id"]))
+            else:
+                raise PlanError(f"unknown op kind {kind!r}")
+    except KeyError as exc:
+        raise PlanError(f"malformed plan: missing key {exc}") from exc
     return Plan(ops=tuple(ops))

@@ -107,3 +107,42 @@ def test_commit_live_requires_confirm_then_reconcile_in_sync():
     drift = _call(app, "reconcile", intended_snapshot_id=done["intended_snapshot_id"])
     assert drift["in_sync"] is True
     assert drift["drift"] == []
+
+
+def test_validate_plan_tool_never_raises_on_bad_reference():
+    """Regression for the audit's Critical finding: ProvisionLightpath's
+    reference errors (unknown OMS/mode) must come back as a typed
+    invalid_plan violation, not escape validate_plan raw."""
+    app = build_app()
+    _seed(app)
+    bad_plan = {"ops": [{"op": "provision_lightpath",
+                         "lightpath": {"id": "lpX", "oms_sequence": ["oms-ghost"],
+                                       "mode_id": "no-such-mode",
+                                       "center_freq_hz": 193.4e12}}]}
+    out = _call(app, "validate_plan", plan=bad_plan)   # must not raise
+    assert out["ok"] is False
+    assert any(v["type"] == "invalid_plan" for v in out["violations"])
+
+
+def test_validate_plan_tool_never_raises_on_malformed_json():
+    """Regression for the audit's Critical finding: plan_from_dict's raw
+    KeyError on a missing required key must not escape validate_plan."""
+    app = build_app()
+    _seed(app)
+    malformed = {"ops": [{"op": "provision_lightpath",
+                          "lightpath": {"id": "lpX"}}]}   # missing oms_sequence etc.
+    out = _call(app, "validate_plan", plan=malformed)   # must not raise
+    assert out["ok"] is False
+    assert any(v["type"] == "invalid_plan" for v in out["violations"])
+
+
+def test_commit_plan_tool_never_raises_on_malformed_json():
+    """Regression for the audit's Critical finding: commit_plan has its OWN
+    independent instance of the malformed-plan-JSON gap (a separate call
+    site from validate_plan's)."""
+    app = build_app()
+    _seed(app)
+    malformed = {"ops": [{"op": "provision_lightpath",
+                          "lightpath": {"id": "lpX"}}]}
+    out = _call(app, "commit_plan", plan=malformed, dry_run=True)   # must not raise
+    assert out["status"] == "rejected"

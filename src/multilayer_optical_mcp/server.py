@@ -195,7 +195,10 @@ def build_app(*, model: NetworkModel | None = None,
     )
     from .model.assets import Lightpath as _Lightpath, IPLink as _IPLink
     from .model.validate import validate_plan as _validate_plan
-    from .model.commit import commit_plan as _commit_plan, reconcile as _reconcile
+    from .model.commit import (
+        commit_plan as _commit_plan, reconcile as _reconcile,
+        CommitResult as _CommitResult,
+    )
     from .model.views import (
         validation_report_dict, commit_result_dict, drift_report_dict,
         objective_result_dict, route_service_result_dict,
@@ -482,9 +485,18 @@ def build_app(*, model: NetworkModel | None = None,
         with state_index and a `transient` flag for the make-before-break window.
         Read-only: ground truth is never mutated. NB: QoT is quasi-static; this
         does not certify the switching instant (the EDFA transient is out of scope)."""
-        report = _validate_plan(
-            snapshots.current(), plan_from_dict(plan), store=results,
-            basis=basis, level=level, dropped_tolerance_gbps=dropped_tolerance_gbps)
+        try:
+            parsed = plan_from_dict(plan)
+            report = _validate_plan(
+                snapshots.current(), parsed, store=results,
+                basis=basis, level=level, dropped_tolerance_gbps=dropped_tolerance_gbps)
+        except Exception as exc:
+            return {
+                "ok": False, "num_states": 0,
+                "violations": [{"type": "invalid_plan", "state_index": 0,
+                                "asset_id": None, "transient": False,
+                                "detail": {"message": str(exc)}}],
+            }
         return validation_report_dict(report)
 
     @app.tool()
@@ -529,8 +541,15 @@ def build_app(*, model: NetworkModel | None = None,
         confirm=True, then actuates; status is 'rejected' (violations),
         'requires_approval' (unconfirmed), 'committed', or
         'committed_with_failures' (control-plane partial failure — call reconcile)."""
+        try:
+            parsed = plan_from_dict(plan)
+        except Exception as exc:
+            return commit_result_dict(_CommitResult(
+                status="rejected", dry_run=dry_run, applied_ops=0, failed_ops=0,
+                intended_snapshot_id=None, validation=None,
+                diff={"error": str(exc)}))
         result = _commit_plan(
-            snapshots, plan_from_dict(plan), store_results=results,
+            snapshots, parsed, store_results=results,
             dry_run=dry_run, confirm=confirm, basis=basis, level=level,
             dropped_tolerance_gbps=dropped_tolerance_gbps)
         return commit_result_dict(result)
