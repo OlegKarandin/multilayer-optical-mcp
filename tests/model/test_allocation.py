@@ -156,3 +156,19 @@ def test_solve_allocation_threads_one_grid_through_layered_and_placement(monkeyp
 
     assert len(seen_grids) >= 2
     assert all(g is seen_grids[0] for g in seen_grids)
+
+
+def test_pack_records_unplaced_on_service_id_collision():
+    """Regression for the audit's Important finding: _pack must not crash
+    when a demand id collides with an existing service id -- it must record
+    the demand as unplaced with a clear reason."""
+    from multilayer_optical_mcp.model.assets import Service
+
+    n = _two_routes()
+    n.add_service(Service(id="d1", src_router="r_A", dst_router="r_Z",
+                          demand_gbps=10.0, working_path=()))
+
+    demands = [{"id": "d1", "src": "A", "dst": "Z", "demand_gbps": 100.0}]
+    result, _work = solve_allocation_model(n, _hi_qot(), demands, spare_inventory={"A": 10, "Z": 10})
+    assert result.unplaced and result.unplaced[0][0] == "d1"
+    assert "exist" in result.unplaced[0][1] or "collide" in result.unplaced[0][1]

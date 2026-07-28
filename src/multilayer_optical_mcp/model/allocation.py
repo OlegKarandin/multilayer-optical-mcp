@@ -448,7 +448,11 @@ def _pack(
         svc = Service(id=did, src_router=site_to_router[src],
                       dst_router=site_to_router[dst], demand_gbps=gbps,
                       working_path=())
-        work.add_service(svc)
+        try:
+            work.add_service(svc)
+        except ValueError:
+            unplaced.append((did, "demand id collides with an existing service"))
+            continue
 
         # Rebuilt every iteration, not hoisted above the loop: `work`'s loading
         # changes each time a demand is placed (a new lightpath lit or a

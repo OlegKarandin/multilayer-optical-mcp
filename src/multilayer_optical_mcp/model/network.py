@@ -242,6 +242,8 @@ class NetworkModel:
 
     def add_service(self, s: Service) -> None:
         self._check_mutable()
+        if s.id in self._services:
+            raise ValueError(f"service {s.id!r} already exists")
         for ip in s.working_path:
             if ip not in self._ip_links:
                 raise ValueError(f"Service {s.id!r}: unknown IP link {ip!r} in working_path")

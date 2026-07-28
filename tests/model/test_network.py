@@ -135,3 +135,14 @@ def test_set_service_protection_path_rejects_non_contiguous_path():
     n.add_ip_link(IPLink(id="ip2", a_router="R-B", z_router="R-C", lightpath_id="lp2"))
     with pytest.raises(ValueError, match="does not connect"):
         n.set_service_protection_path("svc", ("ip2",))
+
+
+def test_add_service_rejects_duplicate_id():
+    """Regression for the audit's Important finding: add_service must not
+    silently overwrite an existing same-id service's paths."""
+    n = _model_with_service()   # already defines service "svc" with working_path=("ip1",)
+    with pytest.raises(ValueError, match="already exists"):
+        n.add_service(Service(id="svc", src_router="R-A", dst_router="R-B",
+                              demand_gbps=999.0, working_path=()))
+    # The original service must be untouched.
+    assert n.get_service("svc").working_path == ("ip1",)
