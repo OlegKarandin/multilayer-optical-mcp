@@ -212,6 +212,17 @@ def _enumerate_oms_paths(
                 simple.add_edge(u, v, weight=w)
         else:
             simple.add_edge(u, v)
+    # When max_node_paths bounds the number of distinct node paths considered
+    # (compute_disjoint_paths' case), also cap emissions PER node path at an
+    # even share of the total budget k -- otherwise a single node path with
+    # many parallel OMS (emissions exponential in hop count) can alone
+    # consume the entire k-emission window before a later, topologically
+    # distinct node path (e.g. a fully node-disjoint bypass) is ever reached,
+    # silently starving disjoint-pair search. compute_paths (max_node_paths
+    # is None) is unaffected: per_path_cap falls back to k, identical to
+    # today's behavior.
+    per_path_cap = max(1, k // max_node_paths) if max_node_paths is not None else k
+
     emitted = 0
     node_paths = nx.shortest_simple_paths(
         simple, src, dst, weight="weight" if by_length else None)
@@ -222,16 +233,22 @@ def _enumerate_oms_paths(
     # it. The try/except must wrap the iteration itself.
     try:
         for node_path in node_paths:
+            if emitted >= k:
+                return
             if max_node_paths is not None and node_paths_seen >= max_node_paths:
                 return
             node_paths_seen += 1
             hop_options = [_oms_between(model, u, v, by_length=by_length, forbidden=forbidden)
                            for u, v in zip(node_path, node_path[1:])]
+            emitted_this_path = 0
             for combo in itertools.product(*hop_options):
                 yield OmsPath(node_sequence=tuple(node_path), oms_sequence=tuple(combo))
                 emitted += 1
+                emitted_this_path += 1
                 if emitted >= k:
-                    return
+                    break
+                if emitted_this_path >= per_path_cap:
+                    break
     except nx.NetworkXNoPath:
         return
 

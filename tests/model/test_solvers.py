@@ -299,3 +299,54 @@ def test_compute_disjoint_paths_best_effort_returns_partial_min_overlap():
     pair = {res.path_a.oms_sequence, res.path_b.oms_sequence}
     assert pair == {("oms-north",), ("oms-south",)}
     assert res.shared_groups == ("rg-storm-cone",)
+
+
+def _model_exponential_parallels_plus_bypass(n_hops: int, parallels_per_hop: int) -> NetworkModel:
+    """A node-chain A->n1->...->n(k-1)->B with `parallels_per_hop` parallel OMS
+    on EVERY hop (one node path alone emits parallels_per_hop**n_hops combos),
+    plus a fully node-disjoint, one-hop-longer bypass route sharing no
+    intermediate node with the chain. With parallels_per_hop=2, n_hops=10:
+    the chain alone emits 2**10=1024 == _DISJOINT_EMISSION_CAP combos, so a
+    GLOBAL emission counter never reaches the bypass node path at all."""
+    n = NetworkModel(modes=ModeRegistry([
+        TransceiverMode(id="100G-QPSK", bitrate_gbps=100.0,
+                        required_gsnr_db=12.0, symbol_rate_baud=32e9,
+                        channel_spacing_hz=50e9),
+    ]))
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+
+    chain_nodes = ["A"] + [f"n{i}" for i in range(1, n_hops)] + ["B"]
+    bypass_nodes = ["A"] + [f"b{i}" for i in range(1, n_hops + 1)] + ["B"]
+    for node in set(chain_nodes) | set(bypass_nodes):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+
+    for h in range(n_hops):
+        u, v = chain_nodes[h], chain_nodes[h + 1]
+        for p in range(parallels_per_hop):
+            a1, a2 = f"ch{h}_{p}_1", f"ch{h}_{p}_2"
+            fib = f"chfib{h}_{p}"
+            n.add_amplifier(Amplifier(id=a1, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+            n.add_amplifier(Amplifier(id=a2, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+            n.add_fiber(Fiber(id=fib, a_end=a1, z_end=a2, length_km=80.0, type_variety="SSMF"))
+            n.add_oms(OMS(id=f"oms-ch{h}-{p}", src_node_id=u, dst_node_id=v,
+                          elements=(f"roadm_{u}", a1, fib, a2)))
+
+    for h in range(len(bypass_nodes) - 1):
+        u, v = bypass_nodes[h], bypass_nodes[h + 1]
+        a1, a2 = f"by{h}_1", f"by{h}_2"
+        fib = f"byfib{h}"
+        n.add_amplifier(Amplifier(id=a1, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+        n.add_amplifier(Amplifier(id=a2, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+        n.add_fiber(Fiber(id=fib, a_end=a1, z_end=a2, length_km=80.0, type_variety="SSMF"))
+        n.add_oms(OMS(id=f"oms-by{h}", src_node_id=u, dst_node_id=v,
+                      elements=(f"roadm_{u}", a1, fib, a2)))
+    return n
+
+
+def test_compute_disjoint_paths_finds_bypass_despite_exponential_parallels():
+    """Regression for the audit's Critical emission-cap-starvation finding."""
+    n = _model_exponential_parallels_plus_bypass(n_hops=10, parallels_per_hop=2)
+    res = compute_disjoint_paths(n, "A", "B", basis="physical", level="link",
+                                 best_effort=False)
+    assert res.status is SolverStatus.SOLUTION
+    assert res.disjoint is True
