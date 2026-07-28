@@ -676,6 +676,43 @@ def _per_path_loading(grid, occ_mask: int, probe_slot: int, mode_id: str) -> Loa
     return LoadingState(channels)
 
 
+def unattributed_channel_freqs_hz(model: NetworkModel, loading: LoadingState) -> Tuple[float, ...]:
+    """Frequencies in *loading* not explained by any committed lightpath.
+
+    These are the channels recompute_qot_under_loading broadcasts as an
+    interferer to EVERY lightpath in the model (no OMS to scope them to —
+    see that function's docstring). Exposed so a caller can see when this
+    happened, since it's not visible from the per-lightpath results alone.
+
+    Read-only, side-effect-free duplicate of the same lit/known/uncommitted
+    computation recompute_qot_under_loading performs internally — kept
+    byte-identical in logic so the two never silently diverge.
+    """
+    from ..model.spectrum import SpectrumGrid, build_spectrum_state
+
+    grid = SpectrumGrid.default()
+    model_state = build_spectrum_state(model, grid)
+    known = 0
+    for bits in model_state.values():
+        known |= bits
+    lit = 0
+    for ch in loading.channels:
+        try:
+            lit |= 1 << grid.slot_of(ch.center_freq_hz)
+        except ValueError:
+            continue
+    uncommitted = lit & ~known & grid.all_slots_mask
+
+    freqs = []
+    bits = uncommitted
+    while bits:
+        low = bits & -bits
+        slot = low.bit_length() - 1
+        freqs.append(grid.freq(slot))
+        bits ^= low
+    return tuple(freqs)
+
+
 def recompute_qot_under_loading(
     *, model: NetworkModel, store: QoTResultStore, loading: LoadingState,
     cache: Optional[QoTCache] = None,
@@ -695,14 +732,34 @@ def recompute_qot_under_loading(
     as an interferer (NLI over-count) or duplicated as a same-frequency carrier
     (malformed NLI) via ordinary cross-fiber wavelength reuse — S4-6/S8-5,
     unchanged by this fix. A slot in *loading* that is NOT explained by any
-    committed lightpath anywhere in the model — i.e. a genuinely new,
-    not-yet-provisioned channel — has no known OMS to restrict it to (a bare
+    committed lightpath anywhere in the model — i.e. not corroborated by
+    anything currently committed — has no known OMS to restrict it to (a bare
     Channel carries a center frequency, not a path), so it is added to *every*
     lightpath's interferer comb: the caller constructed this loading set
     deliberately, and CLAUDE.md's contract is to trust it, not to silently drop
     the part the model can't corroborate. (Internal callers that need a new
     channel scoped to one specific OMS provision it onto a clone first, so it
-    becomes a committed, properly-scoped channel — see loading_from_model.)
+    becomes a committed, properly-scoped channel — see loading_from_model.) Use
+    `unattributed_channel_freqs_hz` to see which frequencies (if any) triggered
+    this broadcast for a given call.
+
+    KNOWN LIMITATION — same-frequency reroute / make-before-break is NOT
+    resolved by this function when the new channel's frequency coincides with
+    a channel still committed elsewhere in the model. Concretely: an old
+    lightpath occupies frequency F on OMS-A; the caller's *loading* includes F
+    meaning "a new, not-yet-provisioned channel at F on OMS-B" (a different
+    fiber). Because F is still in `known` (the old lightpath on OMS-A hasn't
+    been torn down), that slot is classified as "committed, scope to its real
+    OMS" (OMS-A) rather than "uncommitted, broadcast everywhere" — so OMS-B's
+    lightpaths never see it at all. This is silent: no error, no signal, just
+    a QoT result that doesn't include the intended new channel. It cannot be
+    resolved in general without adding OMS/path information to
+    `Channel`/`LoadingState` (out of scope here) — a bare frequency cannot
+    distinguish "legitimately reused where it already is" from "meant to move
+    somewhere new that happens to share a frequency". For that specific case
+    today, callers should use `compute_qot` on the new lightpath's own intended
+    path instead, which (per the exact per-path channel comb fix) validates and
+    honors an exact per-path channel comb with no such ambiguity.
 
     Writes QoTState on the model and returns {lp_id: (QoTState, result_id)}.
     """

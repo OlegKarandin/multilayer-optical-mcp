@@ -24,6 +24,7 @@ from .gnpy_adapter.loading import Channel, LoadingState
 from .gnpy_adapter.adapter import (
     compute_qot as _compute_qot,
     recompute_qot_under_loading as _recompute,
+    unattributed_channel_freqs_hz as _unattributed_channel_freqs_hz,
 )
 
 
@@ -157,14 +158,21 @@ def build_app(*, model: NetworkModel | None = None,
         """Recompute gated QoT for every lightpath in the current model under the given loading.
 
         loading_channels: list of {center_freq_hz, slot_width_hz, power_dbm, mode_id}.
-        Returns a dict keyed by lightpath id.
+        Returns a dict keyed by lightpath id, plus a "_broadcast_to_all_lightpaths_hz"
+        key listing any frequencies in loading_channels not explained by an already-
+        committed lightpath: those are broadcast as an interferer to every lightpath
+        in the model (no OMS to scope them to — see recompute_qot_under_loading's
+        docstring in gnpy_adapter/adapter.py for why, and its documented limitation
+        for same-frequency reroutes).
         """
+        loading = _loading_from(loading_channels)
         out = _recompute(
             model=snapshots.current(),
             store=results,
-            loading=_loading_from(loading_channels),
+            loading=loading,
         )
-        return {
+        broadcast_hz = _unattributed_channel_freqs_hz(snapshots.current(), loading)
+        result = {
             lp: {
                 "gsnr_db": s.gsnr_db,
                 "osnr_db": s.osnr_db,
@@ -175,6 +183,8 @@ def build_app(*, model: NetworkModel | None = None,
             }
             for lp, (s, rid) in out.items()
         }
+        result["_broadcast_to_all_lightpaths_hz"] = list(broadcast_hz)
+        return result
 
     @app.tool()
     def get_qot_breakdown(result_id: str) -> dict:

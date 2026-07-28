@@ -30,7 +30,7 @@ def _model() -> NetworkModel:
     return m
 
 
-def _add_lp(m: NetworkModel, lp_id: str, mode_id: str, gsnr_db: float | None):
+def _add_lp(m: NetworkModel, lp_id: str, mode_id: str):
     """Add a lightpath only -- QoT is seeded separately, after every lightpath
     on the (shared) OMS has been added. All these lightpaths ride the same
     single-element oms1, so add_lightpath's own-fiber QoT invalidation (S1-7:
@@ -57,7 +57,7 @@ def test_max_feasible_mode_classifies_all_directions():
         ("lp_no_qot", "200G", None),     # no recorded QoT -> omitted
     ]
     for lp_id, mode_id, _gsnr_db in lps:
-        _add_lp(m, lp_id, mode_id, _gsnr_db)
+        _add_lp(m, lp_id, mode_id)
     for lp_id, mode_id, gsnr_db in lps:
         _seed_qot(m, lp_id, mode_id, gsnr_db)
 
