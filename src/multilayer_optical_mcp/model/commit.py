@@ -127,6 +127,16 @@ def commit_plan(
             return CommitResult(status="rejected", dry_run=True, applied_ops=0,
                                 failed_ops=0, intended_snapshot_id=None,
                                 validation=report, diff={"error": str(exc)})
+        # Same post-op recompute the live path runs on `intended` below, but here
+        # on the throwaway `work` clone. Without it, `work._qot_state` is just
+        # whatever `current` already had cached, so the returned diff's
+        # "qot_state" entry would omit exactly the QoT delta a real commit would
+        # produce -- an operator previewing the plan gets an incomplete picture.
+        # Best-effort and never persisted: `work` is discarded after the diff.
+        try:
+            recompute(work, store_results)
+        except Exception:
+            pass
         return CommitResult(status="dry_run", dry_run=True, applied_ops=len(plan.ops),
                             failed_ops=0, intended_snapshot_id=None,
                             validation=report, diff=diff_models(current, work))

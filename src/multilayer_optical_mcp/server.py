@@ -43,6 +43,18 @@ def build_app(*, model: NetworkModel | None = None,
                                    max_snapshots=64, ttl_seconds=3600)
     if results is None:
         results = QoTResultStore(max_results=512, ttl_seconds=600)
+    # One shared, content-addressed HarvestCache for the whole server, not one
+    # per tool call. Its key (adapter.harvest_cache_key: path + direction +
+    # mode + physical fingerprint pulled fresh from whichever `model` is
+    # passed at call time) already encodes every input that determines the
+    # harvested GSNR vector, so a mutated amp/fiber (inject_degradation) or a
+    # different snapshot/branch flips the key instead of hitting a stale
+    # entry -- the same no-invalidation-needed contract QoTCache already
+    # relies on (see qot_results.HarvestCache docstring). A fresh instance per
+    # call defeats the whole point: solve_rsa/solve_allocation/
+    # compute_restoration/route_service each probe the same paths repeatedly
+    # within and across calls, and a per-call cache starts cold every time.
+    harvest_cache = HarvestCache()
 
     @app.tool()
     def get_transceiver_modes() -> list[dict]:
@@ -437,7 +449,7 @@ def build_app(*, model: NetworkModel | None = None,
         the demand asked to avoid. The top-level `constraints` parameter above
         is currently unused/reserved, not wired to per-demand constraints."""
         model = snapshots.current()
-        qot = make_adapter_evaluator(model, results, harvest_cache=HarvestCache())
+        qot = make_adapter_evaluator(model, results, harvest_cache=harvest_cache)
         return placement_result_dict(
             _solve_rsa(model, qot, demands, objective=objective, constraints=constraints))
 
@@ -455,7 +467,7 @@ def build_app(*, model: NetworkModel | None = None,
         weights: per-demand priority (demand id -> ordering weight, higher =
         placed first); does not feed evaluate_objective's cost vector."""
         model = snapshots.current()
-        qot = make_adapter_evaluator(model, results, harvest_cache=HarvestCache())
+        qot = make_adapter_evaluator(model, results, harvest_cache=harvest_cache)
         return allocation_result_dict(
             _solve_allocation(model, qot, demands, spare_inventory, weights=weights))
 
@@ -530,7 +542,7 @@ def build_app(*, model: NetworkModel | None = None,
         Read-only: returns typed candidates (full + degraded) with status
         solution/partial/no_solution. Does not mutate or commit anything."""
         model = snapshots.current()
-        qot = make_adapter_evaluator(model, results, harvest_cache=HarvestCache())
+        qot = make_adapter_evaluator(model, results, harvest_cache=harvest_cache)
         res = _compute_restoration(model, qot, service_id, avoid=avoid)
         return restoration_result_dict(res)
 
@@ -639,7 +651,7 @@ def build_app(*, model: NetworkModel | None = None,
         7-term objective scalar (e.g. {"transponders": 2.0}); not a per-demand
         priority."""
         model = snapshots.current()
-        qot = make_adapter_evaluator(model, results, harvest_cache=HarvestCache())
+        qot = make_adapter_evaluator(model, results, harvest_cache=harvest_cache)
         res = _route_service(model, qot, service_id, protected=protected, basis=basis,
                              level=level, best_effort=best_effort, avoid=avoid, weights=weights)
         return route_service_result_dict(res)

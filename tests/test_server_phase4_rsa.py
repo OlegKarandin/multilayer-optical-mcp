@@ -88,6 +88,43 @@ def test_solve_rsa_places_demand_with_real_gnpy_mode():
     assert p["working"]["gsnr_db"] >= 7.1  # clears at least the lowest mode
 
 
+def test_solve_rsa_shares_harvest_cache_across_tool_calls(monkeypatch):
+    """§5 regression: solve_rsa used to build a fresh HarvestCache() inside the
+    tool body, so it started cold on every call -- two back-to-back calls for
+    the same demand over an unchanged model would each miss and re-harvest
+    from scratch. build_app now constructs one HarvestCache and threads it
+    through every call; a second identical solve_rsa call should find its
+    probe already harvested."""
+    from multilayer_optical_mcp.model.qot_results import HarvestCache
+
+    app, _ = _seed_app()
+
+    hits: list[bool] = []
+    original_get = HarvestCache.get
+
+    def spy_get(self, key):
+        result = original_get(self, key)
+        hits.append(result is not None)
+        return result
+
+    monkeypatch.setattr(HarvestCache, "get", spy_get)
+
+    demand = {"id": "d1", "src": "A", "dst": "Z"}
+
+    out1 = _call(app, "solve_rsa", demands=[demand])
+    assert out1["status"] == "solution"
+    assert hits and not any(hits)   # first call: cache starts empty, all misses
+
+    hits.clear()
+    out2 = _call(app, "solve_rsa", demands=[demand])
+    assert out2["status"] == "solution"
+    # Second call over the SAME unchanged model reuses the first call's
+    # harvested comb -- proof the cache instance, not just its behavior,
+    # is shared across tool invocations (a coincidentally-identical fresh
+    # cache would show only misses here too).
+    assert hits and any(hits)
+
+
 def test_solve_allocation_greenfield_with_inventory():
     app, _ = _seed_app()
     out = _call(app, "solve_allocation",

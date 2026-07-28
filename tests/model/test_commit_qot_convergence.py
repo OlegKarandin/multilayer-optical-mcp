@@ -3,7 +3,9 @@ import pytest
 from multilayer_optical_mcp.model.assets import Lightpath, IPLink, Router
 from multilayer_optical_mcp.model.qot_results import QoTResultStore
 from multilayer_optical_mcp.model.snapshots import SnapshotStore
-from multilayer_optical_mcp.model.plan import Plan, ProvisionLightpath, apply_op
+from multilayer_optical_mcp.model.plan import (
+    Plan, ProvisionLightpath, SetModulationFormat, apply_op,
+)
 from multilayer_optical_mcp.model.commit import commit_plan
 from multilayer_optical_mcp.model.validate import recompute_if_possible
 from multilayer_optical_mcp.model.objective import evaluate_objective
@@ -67,6 +69,48 @@ def test_committed_qot_matches_independent_recompute():
         oracle.get_qot_state("lpX").margin_db
     obj = evaluate_objective(live)
     assert obj.total_margin == live.get_qot_state("lpX").margin_db
+
+
+def test_dry_run_diff_includes_qot_delta():
+    """§5 regression: dry_run must run the same post-op recompute the live path
+    does (on its own throwaway clone), so the returned diff carries the QoT
+    delta a real commit would actually produce -- not just the structural
+    (lightpaths/ip_links) change."""
+    store = SnapshotStore(_base())
+    results = QoTResultStore()
+
+    # Seed one live lightpath so there is a pre-existing GSNR to perturb.
+    commit_plan(store, _provision_one(), store_results=results,
+               dry_run=False, confirm=True)
+    baseline = store.current().get_qot_state("lpX")
+
+    # Dry-run a downshift 400G->200G. Mode determines the channel's baud rate,
+    # which is part of the loading fed to GNPy (build_si_for_loading), so this
+    # is a genuine loading change -- not a label swap -- and it moves GSNR: a
+    # narrower channel sees less noise bandwidth (verified: ~19.4dB -> ~22.3dB
+    # on this fixture's single 80km span).
+    downshift = Plan(ops=(SetModulationFormat(lightpath_id="lpX", mode_id="200G"),))
+    result = commit_plan(store, downshift, store_results=results, dry_run=True)
+
+    assert result.status == "dry_run"
+    # Ground truth is untouched by the dry run.
+    assert store.current().get_qot_state("lpX") == baseline
+    assert store.current()._lightpaths["lpX"].mode_id == "400G"
+
+    # Independent oracle: apply the same op to a fresh clone and recompute
+    # directly -- the computation the fix makes dry_run perform internally.
+    oracle = store.current().clone()
+    apply_op(oracle, SetModulationFormat(lightpath_id="lpX", mode_id="200G"))
+    recompute_if_possible(oracle, QoTResultStore())
+    oracle_gsnr = oracle.get_qot_state("lpX").gsnr_db
+    assert oracle_gsnr != baseline.gsnr_db   # sanity: the op really moves GSNR
+
+    # lpX's recorded QoT shifted ("modified") -- exactly the delta a real
+    # commit would report, and what dry_run was silently dropping before the
+    # fix (before, it would show up ONLY in "lightpaths", never "qot_state").
+    qot_delta = result.diff["qot_state"]
+    assert "lpX" in qot_delta["modified"]
+    assert "lpX" in result.diff["lightpaths"]["modified"]
 
 
 def test_recompute_seam_can_be_disabled():
