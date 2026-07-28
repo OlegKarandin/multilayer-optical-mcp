@@ -67,6 +67,17 @@ def test_compute_paths_tool_no_solution():
     assert out["paths"] == []
 
 
+def test_compute_paths_tool_rejects_k_below_one():
+    """Task-8-fix reviewer's Minor #3: k=0 previously fell through the solver
+    unvalidated and came back as a misleading typed NO_SOLUTION (a route
+    exists; the caller just asked for zero of them). Guarded at the tool
+    boundary instead of overloading NO_SOLUTION's meaning."""
+    import pytest
+    app = _seed_app()
+    with pytest.raises(ValueError, match="k must be"):
+        _call(app, "compute_paths", src="A", dst="B", k=0)
+
+
 def test_check_disjointness_tool_risk_group_catch():
     """Same pair, physically disjoint but caught under a freshly-injected
     risk group spanning both spans."""

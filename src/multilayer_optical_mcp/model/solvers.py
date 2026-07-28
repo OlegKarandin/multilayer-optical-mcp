@@ -338,21 +338,39 @@ def _enumerate_oms_paths(
 
     # Second pass: only reachable with something parked, which only happens
     # when max_node_paths is not None (see comment above) -- so this is a
-    # no-op, zero-overhead for compute_paths. Resume each node path's own
-    # iterator, in first-seen order, continuing exactly where the first pass
-    # left off, until it runs dry or the global budget k is hit. This is the
-    # "budget-draining resumption" that closes the index-misaligned
-    # regression: it may emit MORE than per_path_cap for a given node path --
-    # intentionally, since this only runs after every node path already got
-    # its fair first-pass share and budget still remains.
-    for node_path, combo_iter in parked:
-        if emitted >= k:
-            return
-        for combo in combo_iter:
+    # no-op, zero-overhead for compute_paths. Resume every parked node path's
+    # own iterator ROUND-ROBIN -- one next() per still-live iterator per
+    # sweep, in first-parked order -- continuing until every iterator is
+    # exhausted or the global budget k is hit.
+    #
+    # Third-round-review fix: an earlier version of this resumption drained
+    # each parked iterator SEQUENTIALLY (parked[0] fully to exhaustion or
+    # budget-out, THEN parked[1], ...). That reintroduced the same
+    # wrong-answer bug class a third time with no fairness discipline: a
+    # single early, combo-rich parked node path (e.g. a "trunk" route sorting
+    # first with a large parallel product) could consume ALL remaining
+    # budget during its own drain, starving every LATER parked node path's
+    # resumption completely -- even when total emissions were far under k and
+    # a genuinely disjoint pair sat in the starved node path, past its own
+    # per_path_cap share. Round-robin gives each still-live parked iterator
+    # one emission per sweep, so no single node path can monopolize the
+    # resumption budget at another's expense; a node path is only dropped
+    # from rotation once ITS OWN iterator is exhausted (StopIteration), never
+    # because a sibling iterator used up the shared budget first.
+    live = list(parked)
+    while live and emitted < k:
+        still_live: List[Tuple[Tuple[str, ...], Iterator[Tuple[str, ...]]]] = []
+        for node_path, combo_iter in live:
+            if emitted >= k:
+                break
+            try:
+                combo = next(combo_iter)
+            except StopIteration:
+                continue
             yield OmsPath(node_sequence=node_path, oms_sequence=tuple(combo))
             emitted += 1
-            if emitted >= k:
-                return
+            still_live.append((node_path, combo_iter))
+        live = still_live
 
 
 def compute_paths(

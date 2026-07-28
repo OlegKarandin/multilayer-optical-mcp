@@ -323,6 +323,14 @@ def build_app(*, model: NetworkModel | None = None,
     ) -> dict:
         """k-shortest OMS routes from src to dst over the optical layer.
         Returns a typed status; no route yields status 'no_solution'."""
+        if k < 1:
+            # Task-8-fix reviewer's Minor #3: k=0 falls through the solver's
+            # `if emitted >= k: return` on its very first check, yielding an
+            # empty path tuple -- which compute_paths then reports as typed
+            # NO_SOLUTION. That status means "no route exists," which is false
+            # when k=0 simply asked for none; guard the nonsensical input at
+            # the tool boundary instead of overloading NO_SOLUTION's meaning.
+            raise ValueError(f"k must be >= 1, got {k!r}")
         res = _compute_paths(snapshots.current(), src, dst, k, constraints)
         return routing_result_dict(res)
 

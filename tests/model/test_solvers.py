@@ -504,3 +504,228 @@ def test_compute_disjoint_paths_finds_srlg_disjoint_extremes_despite_length_misa
         expected_plane1 = tuple(f"oms-ch{h}-1" for h in range(n_hops))
         pair = {res.path_a.oms_sequence, res.path_b.oms_sequence}
         assert pair == {expected_plane0, expected_plane1}, f"n_hops={n_hops}"
+
+
+# ------------------------------------------ round-robin resumption (round 3)
+
+def _model_trunk_and_planes_shared_stem(
+    trunk_hops: int, planes_hops: int, parallels_per_hop: int = 2,
+) -> NetworkModel:
+    """Reviewer's exact THIRD-round repro: a shared stem A->S, then from S two
+    parallel S->B routes:
+
+    - "trunk": `trunk_hops` hops x `parallels_per_hop` parallels, physically
+      SHORT per hop (2km) so it sorts FIRST under weight="length" node-path
+      ordering. With trunk_hops=10, parallels=2 this is 1024 combos -- the
+      entire global emission budget (_DISJOINT_EMISSION_CAP).
+    - "planes": `planes_hops` hops, length-misaligned parallel SRLG planes
+      (mirrors `_model_single_route_length_misaligned_srlg_planes`) so its
+      only genuinely SRLG-disjoint pair (pure-plane0 vs pure-plane1) is NOT
+      the diagonal-first extremes and needs the whole remaining per-node-path
+      budget drained to reach -- but it is physically SHORT (mostly 80-90km
+      per hop) relative to nothing else, so it sorts SECOND, well after trunk.
+
+    Every trunk fiber (both parallel indices, every hop) is a member of BOTH
+    srlg-plane0 AND srlg-plane1 (in addition to planes' own fibers each being
+    a member of exactly one) -- so ANY trunk combo always carries both plane
+    labels and can never be SRLG-disjoint from anything (another trunk combo,
+    or any planes combo, pure or mixed). The ONLY possible SRLG-disjoint pair
+    in the whole candidate set is planes' own pure-plane0 vs pure-plane1
+    extremes -- reachable only if planes' iterator is drained past its own
+    first-pass share, which is exactly what resumption must deliver fairly."""
+    n = NetworkModel(modes=ModeRegistry([
+        TransceiverMode(id="100G-QPSK", bitrate_gbps=100.0,
+                        required_gsnr_db=12.0, symbol_rate_baud=32e9,
+                        channel_spacing_hz=50e9),
+    ]))
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    n.add_roadm(ROADM(id="roadm_A"))
+    n.add_roadm(ROADM(id="roadm_S"))
+    n.add_roadm(ROADM(id="roadm_B"))
+
+    # Shared stem A->S: single OMS, SRLG-free (physical sharing at this hop
+    # must not itself register as an SRLG correlation for this test's basis).
+    n.add_amplifier(Amplifier(id="stemA1", type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+    n.add_amplifier(Amplifier(id="stemA2", type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+    n.add_fiber(Fiber(id="fib-stem", a_end="stemA1", z_end="stemA2", length_km=1.0, type_variety="SSMF"))
+    n.add_oms(OMS(id="oms-stem", src_node_id="A", dst_node_id="S",
+                  elements=("roadm_A", "stemA1", "fib-stem", "stemA2")))
+
+    trunk_fibers: List[str] = []
+    trunk_chain = ["S"] + [f"tk{i}" for i in range(1, trunk_hops)] + ["B"]
+    for node in trunk_chain[1:-1]:
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    for h in range(trunk_hops):
+        u, v = trunk_chain[h], trunk_chain[h + 1]
+        for p in range(parallels_per_hop):
+            a1, a2 = f"tk{h}_{p}_1", f"tk{h}_{p}_2"
+            fib = f"tkfib{h}_{p}"
+            n.add_amplifier(Amplifier(id=a1, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+            n.add_amplifier(Amplifier(id=a2, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+            n.add_fiber(Fiber(id=fib, a_end=a1, z_end=a2, length_km=2.0, type_variety="SSMF"))
+            n.add_oms(OMS(id=f"oms-tk{h}-{p}", src_node_id=u, dst_node_id=v,
+                          elements=(f"roadm_{u}", a1, fib, a2)))
+            trunk_fibers.append(fib)
+
+    plane0_fibers: List[str] = []
+    plane1_fibers: List[str] = []
+    planes_chain = ["S"] + [f"pl{i}" for i in range(1, planes_hops)] + ["B"]
+    for node in planes_chain[1:-1]:
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    for h in range(planes_hops):
+        u, v = planes_chain[h], planes_chain[h + 1]
+        len0, len1 = (80.0, 90.0) if h % 2 == 0 else (90.0, 80.0)
+        for p, length_km in ((0, len0), (1, len1)):
+            a1, a2 = f"pl{h}_{p}_1", f"pl{h}_{p}_2"
+            fib = f"plfib{h}_{p}"
+            n.add_amplifier(Amplifier(id=a1, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+            n.add_amplifier(Amplifier(id=a2, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+            n.add_fiber(Fiber(id=fib, a_end=a1, z_end=a2, length_km=length_km, type_variety="SSMF"))
+            n.add_oms(OMS(id=f"oms-pl{h}-{p}", src_node_id=u, dst_node_id=v,
+                          elements=(f"roadm_{u}", a1, fib, a2)))
+            if p == 0:
+                plane0_fibers.append(fib)
+            else:
+                plane1_fibers.append(fib)
+
+    n.add_srlg(SRLG(id="srlg-plane0", asset_ids=tuple(plane0_fibers) + tuple(trunk_fibers)))
+    n.add_srlg(SRLG(id="srlg-plane1", asset_ids=tuple(plane1_fibers) + tuple(trunk_fibers)))
+    return n
+
+
+def test_compute_disjoint_paths_round_robin_resumption_closes_greedy_drain_starvation():
+    """Regression for the THIRD round of Task-8-fix review: the round-2 fix's
+    "budget-draining resumption" reintroduced the SAME wrong-answer bug class
+    a third time by draining parked node paths SEQUENTIALLY (one fully to
+    exhaustion/budget-out, then the next) with no fairness discipline.
+
+    Reviewer's exact repro: shared stem A->S, then two parallel S->B routes --
+    a combo-rich "trunk" (10 hops x 2 parallels = 1024 combos, sorts first
+    under weight="length") and a shorter, length-misaligned "planes" route (6
+    hops x 2 parallels = 64 combos) whose only SRLG-disjoint pair (pure-plane0
+    vs pure-plane1) sits past its own first-pass share and needs resumption to
+    reach (mirrors the round-2 fixture/test above). Under the OLD sequential
+    resumption, trunk is parked first and its 992 remaining combos alone
+    consume the ENTIRE leftover global budget (32+960=992 additional
+    emissions) before planes -- parked second -- is ever resumed at all, so
+    the genuinely disjoint pair is never in the candidate set: a false
+    NO_SOLUTION even though only 96 of the 1024-emission budget was actually
+    needed. Round-robin resumption (one next() per still-live parked iterator
+    per sweep) gives planes a fair, interleaved share of the resumption
+    budget, fully draining its 32 remaining combos within the first 32 sweeps
+    -- long before trunk or the global budget is exhausted."""
+    trunk_hops, planes_hops = 10, 6
+    n = _model_trunk_and_planes_shared_stem(trunk_hops=trunk_hops, planes_hops=planes_hops,
+                                            parallels_per_hop=2)
+    res = compute_disjoint_paths(n, "A", "B", basis="srlg", level="link",
+                                 best_effort=False, weight="length")
+    assert res.status is SolverStatus.SOLUTION
+    assert res.disjoint is True
+    expected_plane0 = ("oms-stem",) + tuple(f"oms-pl{h}-0" for h in range(planes_hops))
+    expected_plane1 = ("oms-stem",) + tuple(f"oms-pl{h}-1" for h in range(planes_hops))
+    pair = {res.path_a.oms_sequence, res.path_b.oms_sequence}
+    assert pair == {expected_plane0, expected_plane1}
+
+
+# ---------------------------- saturated-budget diagonal-first (Important #2)
+
+def _model_saturated_budget_diagonal_extremes(
+    n_hops: int = 6, parallels_per_hop: int = 2, n_filler_routes: int = 31,
+) -> NetworkModel:
+    """32 fully node-disjoint parallel A->B routes: 1 "target" route plus
+    `n_filler_routes` fillers, each with `parallels_per_hop` parallel OMS on
+    every hop (n_hops=6, parallels=2 -> 64 combos per route -- more than
+    per_path_cap=32, so every route's first pass is genuinely truncated).
+    With exactly 32 routes and per_path_cap=32
+    (== _DISJOINT_EMISSION_CAP // _DISJOINT_CANDIDATE_CAP), the first pass
+    alone emits exactly 32*32=1024==_DISJOINT_EMISSION_CAP -- the global
+    budget is entirely exhausted WITHIN the first pass, so the second-pass
+    resumption (round-robin or the old sequential drain, doesn't matter which)
+    never runs at all. This isolates diagonal-first ordering as the ONLY
+    mechanism that can still deliver a genuinely disjoint pair.
+
+    The target route's fibers carry parallel-index-PURE SRLG membership
+    (index 0 -> srlg-0 only, index 1 -> srlg-1 only, mirroring
+    `_model_single_route_alternating_srlg_planes`), while EVERY filler
+    route's fibers (both parallel indices, all hops) belong to BOTH srlg-0
+    AND srlg-1 -- so a filler combo always carries {srlg-0, srlg-1} and can
+    never be disjoint from anything (itself, another filler, or either of the
+    target's extremes), and the target's own "mixed" combos (touching both
+    indices across hops) also always carry both labels. The ONLY possible
+    disjoint pair in the whole candidate set is the target route's own two
+    pure extremes (all-index-0 vs all-index-1) -- reachable ONLY because
+    diagonal_first puts both within the first TWO emissions of the target's
+    own per-path budget, regardless of where in the 32-route processing
+    order the target sits."""
+    n = NetworkModel(modes=ModeRegistry([
+        TransceiverMode(id="100G-QPSK", bitrate_gbps=100.0,
+                        required_gsnr_db=12.0, symbol_rate_baud=32e9,
+                        channel_spacing_hz=50e9),
+    ]))
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    n.add_roadm(ROADM(id="roadm_A"))
+    n.add_roadm(ROADM(id="roadm_B"))
+
+    target_fibers0: List[str] = []
+    target_fibers1: List[str] = []
+    filler_fibers: List[str] = []
+
+    def _build_route(route_key: str, both_labels: bool) -> None:
+        chain = ["A"] + [f"{route_key}_{i}" for i in range(1, n_hops)] + ["B"]
+        for node in chain[1:-1]:
+            n.add_roadm(ROADM(id=f"roadm_{node}"))
+        for h in range(n_hops):
+            u, v = chain[h], chain[h + 1]
+            for p in range(parallels_per_hop):
+                a1, a2 = f"{route_key}_ch{h}_{p}_1", f"{route_key}_ch{h}_{p}_2"
+                fib = f"{route_key}_chfib{h}_{p}"
+                n.add_amplifier(Amplifier(id=a1, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+                n.add_amplifier(Amplifier(id=a2, type_variety="advanced_toy", gain_db=20.0, nf_db=5.5))
+                n.add_fiber(Fiber(id=fib, a_end=a1, z_end=a2, length_km=80.0, type_variety="SSMF"))
+                n.add_oms(OMS(id=f"oms-{route_key}-{h}-{p}", src_node_id=u, dst_node_id=v,
+                              elements=(f"roadm_{u}", a1, fib, a2)))
+                if both_labels:
+                    filler_fibers.append(fib)
+                elif p == 0:
+                    target_fibers0.append(fib)
+                else:
+                    target_fibers1.append(fib)
+
+    _build_route("tg", both_labels=False)
+    for i in range(n_filler_routes):
+        _build_route(f"fl{i}", both_labels=True)
+
+    n.add_srlg(SRLG(id="srlg-0", asset_ids=tuple(target_fibers0) + tuple(filler_fibers)))
+    n.add_srlg(SRLG(id="srlg-1", asset_ids=tuple(target_fibers1) + tuple(filler_fibers)))
+    return n
+
+
+def test_compute_disjoint_paths_finds_srlg_disjoint_extremes_under_saturated_budget():
+    """Important #2 (third-round review): the round-1 index-aligned test
+    (`test_compute_disjoint_paths_finds_srlg_disjoint_extremes_in_single_node_path`
+    above) no longer isolates diagonal-first ordering as its guard, because
+    with only ONE node path ever parked, budget-draining resumption --
+    sequential OR round-robin -- drains the ENTIRE remaining product
+    regardless of internal ordering, so the "all-index-1" extreme would be
+    found via resumption alone even if diagonal_first did nothing at all.
+    Diagonal-first is load-bearing ONLY when the global emission budget is
+    exhausted entirely within the first pass (>=32 node paths each with >=32
+    combos, so 32*32==1024==k leaves nothing for resumption to run at all).
+    This test builds exactly that regime and confirms the target route's own
+    SRLG-pure index-aligned extremes are still found."""
+    from multilayer_optical_mcp.model.solvers import _DISJOINT_EMISSION_CAP, _DISJOINT_CANDIDATE_CAP
+    n_hops, parallels_per_hop, n_filler_routes = 6, 2, 31
+    assert n_filler_routes + 1 == _DISJOINT_CANDIDATE_CAP
+    per_path_cap = _DISJOINT_EMISSION_CAP // _DISJOINT_CANDIDATE_CAP
+    assert _DISJOINT_CANDIDATE_CAP * per_path_cap == _DISJOINT_EMISSION_CAP
+    assert parallels_per_hop ** n_hops > per_path_cap   # every route's first pass is truncated
+
+    n = _model_saturated_budget_diagonal_extremes(n_hops=n_hops, parallels_per_hop=parallels_per_hop,
+                                                   n_filler_routes=n_filler_routes)
+    res = compute_disjoint_paths(n, "A", "B", basis="srlg", level="link", best_effort=False)
+    assert res.status is SolverStatus.SOLUTION
+    assert res.disjoint is True
+    expected_pure0 = tuple(f"oms-tg-{h}-0" for h in range(n_hops))
+    expected_pure1 = tuple(f"oms-tg-{h}-1" for h in range(n_hops))
+    pair = {res.path_a.oms_sequence, res.path_b.oms_sequence}
+    assert pair == {expected_pure0, expected_pure1}
