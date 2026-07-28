@@ -1,6 +1,6 @@
 import pytest
 
-from multilayer_optical_mcp.model.assets import Lightpath, IPLink
+from multilayer_optical_mcp.model.assets import Lightpath, IPLink, Router
 from multilayer_optical_mcp.model.qot_results import QoTResultStore
 from multilayer_optical_mcp.model.snapshots import SnapshotStore
 from multilayer_optical_mcp.model.plan import Plan, ProvisionLightpath, apply_op
@@ -14,6 +14,8 @@ def _base():
     """One synthesizable A<->B span (oms1 + paired reverse oms1_rev)."""
     m = new_model()
     add_bidir_span(m, "A", "B", "oms1")
+    m.add_router(Router(id="rA", site="A"))
+    m.add_router(Router(id="rB", site="B"))
     return m
 
 

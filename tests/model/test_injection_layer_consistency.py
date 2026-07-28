@@ -2,7 +2,7 @@
 on a branch, while leaving ground truth untouched.
 """
 import math
-from multilayer_optical_mcp.model.assets import IPLink, Lightpath, Router, Service
+from multilayer_optical_mcp.model.assets import IPLink, Lightpath, Service
 from multilayer_optical_mcp.model.qot_results import QoTResultStore
 from multilayer_optical_mcp.model.snapshots import SnapshotStore
 from multilayer_optical_mcp.model.whatif import (
@@ -30,8 +30,9 @@ def _ip_over_optical():
         mode_id=MODE,
         center_freq_hz=193.4e12,
     ))
-    m.add_router(Router(id="router_0", site="0"))
-    m.add_router(Router(id="router_1", site="1"))
+    # router_0/router_1 are already registered by model_from_abstract_graph
+    # (via _one_edge_model) -- re-adding them would now raise (duplicate-id
+    # guard, Task 1 finding 4).
     m.add_ip_link(IPLink(
         id="ip0",
         a_router="router_0",

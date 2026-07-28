@@ -28,6 +28,8 @@ def _model():
     for node in ("A", "B"):
         m.add_roadm(ROADM(id=f"roadm_{node}"))
     m.add_oms(OMS(id="omsAB", src_node_id="A", dst_node_id="B", elements=("roadm_A", "a1", "fAB")))
+    m.add_router(Router(id="rA", site="A"))
+    m.add_router(Router(id="rB", site="B"))
     return m
 
 
@@ -115,8 +117,6 @@ def test_provision_duplicate_lightpath_id_raises_plan_error():
 
 def _model_with_service():
     m = _model()
-    m.add_router(Router(id="rA", site="A"))
-    m.add_router(Router(id="rB", site="B"))
     apply_op(m, ProvisionLightpath(
         lightpath=Lightpath(id="lp1", oms_sequence=("omsAB",), mode_id="400G",
                             center_freq_hz=193.4e12),

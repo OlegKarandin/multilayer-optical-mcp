@@ -99,6 +99,8 @@ class NetworkModel:
         self._check_mutable()
         if f.type_variety not in self._fiber_types:
             raise ValueError(f"unknown fiber type {f.type_variety!r}")
+        if f.id in self._fibers:
+            raise ValueError(f"fiber {f.id!r} already exists")
         self._fibers[f.id] = f
 
     def get_fiber(self, fid: str) -> Fiber:
@@ -108,6 +110,8 @@ class NetworkModel:
 
     def add_amplifier(self, a: Amplifier) -> None:
         self._check_mutable()
+        if a.id in self._amplifiers:
+            raise ValueError(f"amplifier {a.id!r} already exists")
         self._amplifiers[a.id] = a
 
     def get_amplifier(self, aid: str) -> Amplifier:
@@ -117,10 +121,14 @@ class NetworkModel:
 
     def add_roadm(self, r: ROADM) -> None:
         self._check_mutable()
+        if r.id in self._roadms:
+            raise ValueError(f"ROADM {r.id!r} already exists")
         self._roadms[r.id] = r
 
     def add_transceiver(self, t: Transceiver) -> None:
         self._check_mutable()
+        if t.id in self._transceivers:
+            raise ValueError(f"transceiver {t.id!r} already exists")
         self._transceivers[t.id] = t
 
     def has_roadm(self, rid: str) -> bool:
@@ -130,6 +138,8 @@ class NetworkModel:
 
     def add_oms(self, oms: OMS) -> None:
         self._check_mutable()
+        if oms.id in self._oms:
+            raise ValueError(f"OMS {oms.id!r} already exists")
         for el in oms.elements:
             if (el not in self._fibers
                     and el not in self._amplifiers
@@ -149,6 +159,8 @@ class NetworkModel:
 
     def add_lightpath(self, lp: Lightpath) -> None:
         self._check_mutable()
+        if lp.id in self._lightpaths:
+            raise ValueError(f"lightpath {lp.id!r} already exists")
         self.modes.get(lp.mode_id)  # raises KeyError if unknown mode
         for oms_id in lp.oms_sequence:
             if oms_id not in self._oms:
@@ -182,6 +194,8 @@ class NetworkModel:
 
     def add_router(self, r: Router) -> None:
         self._check_mutable()
+        if r.id in self._routers:
+            raise ValueError(f"router {r.id!r} already exists")
         self._routers[r.id] = r
 
     def get_router(self, rid: str) -> Router:
@@ -194,6 +208,12 @@ class NetworkModel:
         self._check_mutable()
         if link.lightpath_id not in self._lightpaths:
             raise ValueError(f"unknown lightpath {link.lightpath_id!r}")
+        if link.a_router not in self._routers:
+            raise ValueError(f"IP link {link.id!r}: unknown a_router {link.a_router!r}")
+        if link.z_router not in self._routers:
+            raise ValueError(f"IP link {link.id!r}: unknown z_router {link.z_router!r}")
+        if link.id in self._ip_links:
+            raise ValueError(f"IP link {link.id!r} already exists")
         self._ip_links[link.id] = link
 
     def get_ip_link(self, lid: str) -> IPLink:
@@ -241,6 +261,7 @@ class NetworkModel:
     # ---------------------------------------------------------------- services / risk
 
     def add_service(self, s: Service) -> None:
+        from .ip_routing import is_contiguous_path
         self._check_mutable()
         if s.id in self._services:
             raise ValueError(f"service {s.id!r} already exists")
@@ -250,6 +271,21 @@ class NetworkModel:
         for ip in s.protection_path:
             if ip not in self._ip_links:
                 raise ValueError(f"Service {s.id!r}: unknown IP link {ip!r} in protection_path")
+        # S1-8 (creation-time counterpart): the setters already forbid a
+        # non-contiguous path on every later mutation; without this check a
+        # service could be *created* with one and never be re-validated.
+        # Empty paths are legal (a demand not yet routed) and skip the check,
+        # matching set_service_working_path/protection_path's own contract.
+        if s.working_path and not is_contiguous_path(self, s.src_router, s.dst_router, s.working_path):
+            raise ValueError(
+                f"Service {s.id!r}: working_path does not connect "
+                f"{s.src_router!r}->{s.dst_router!r}"
+            )
+        if s.protection_path and not is_contiguous_path(self, s.src_router, s.dst_router, s.protection_path):
+            raise ValueError(
+                f"Service {s.id!r}: protection_path does not connect "
+                f"{s.src_router!r}->{s.dst_router!r}"
+            )
         self._services[s.id] = s
 
     def get_service(self, sid: str) -> Service:
@@ -301,6 +337,8 @@ class NetworkModel:
 
     def add_srlg(self, g: SRLG) -> None:
         self._check_mutable()
+        if g.id in self._srlgs:
+            raise ValueError(f"SRLG {g.id!r} already exists")
         self._srlgs[g.id] = g
 
     def get_srlg(self, gid: str) -> SRLG:

@@ -4,7 +4,7 @@ between them — break-before-make drops a service transiently; reordering to
 make-before-break clears it. Deterministic and physics-free (the drop comes from
 sequencing, not from a marginal QoT — both spans carry comfortably-positive margin).
 """
-from multilayer_optical_mcp.model.assets import Lightpath, IPLink, Service
+from multilayer_optical_mcp.model.assets import Lightpath, IPLink, Router, Service
 from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model.qot_results import QoTResultStore
 from multilayer_optical_mcp.model.plan import (
@@ -24,6 +24,8 @@ def _two_path_model():
     add_bidir_span(m, "A", "B", "omsAB")
     add_bidir_span(m, "A", "C", "omsAC")
     add_bidir_span(m, "C", "B", "omsCB")
+    m.add_router(Router(id="rA", site="A"))
+    m.add_router(Router(id="rB", site="B"))
     m.add_lightpath(Lightpath(id="lpOld", oms_sequence=("omsAB",), mode_id="400G",
                               center_freq_hz=193.4e12))
     m.add_lightpath(Lightpath(id="lpNew", oms_sequence=("omsAC", "omsCB"), mode_id="400G",
@@ -95,6 +97,8 @@ def _migration_model():
     add_bidir_span(m, "A", "B", "omsAB")
     add_bidir_span(m, "A", "C", "omsAC")
     add_bidir_span(m, "C", "B", "omsCB")
+    m.add_router(Router(id="rA", site="A"))
+    m.add_router(Router(id="rB", site="B"))
     m.add_lightpath(Lightpath(id="lpOld", oms_sequence=("omsAB",), mode_id="400G",
                               center_freq_hz=193.4e12))
     m.add_ip_link(IPLink(id="ipOld", a_router="rA", z_router="rB", lightpath_id="lpOld"))

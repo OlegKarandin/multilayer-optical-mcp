@@ -1,4 +1,4 @@
-from multilayer_optical_mcp.model.assets import Lightpath, IPLink
+from multilayer_optical_mcp.model.assets import Lightpath, IPLink, Router
 from multilayer_optical_mcp.model.qot_results import QoTResultStore
 from multilayer_optical_mcp.model.snapshots import SnapshotStore
 from multilayer_optical_mcp.model.plan import Plan, ProvisionLightpath, TeardownLightpath
@@ -13,6 +13,8 @@ def _base():
     add_bidir_span(m, "A", "B", "oms1")
     add_bidir_span(m, "A", "C", "omsAC")
     add_bidir_span(m, "C", "B", "omsCB")
+    m.add_router(Router(id="rA", site="A"))
+    m.add_router(Router(id="rB", site="B"))
     return m
 
 

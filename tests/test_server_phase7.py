@@ -1,7 +1,7 @@
 import pytest
 
 from multilayer_optical_mcp.server import build_app
-from multilayer_optical_mcp.model.assets import FiberType
+from multilayer_optical_mcp.model.assets import FiberType, Router
 from multilayer_optical_mcp.model.qot import QoTState
 from tests.phase7_topology import add_bidir_span
 
@@ -16,6 +16,8 @@ def _seed(app):
     n = app._snapshots.current()
     n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
     add_bidir_span(n, "A", "B", "omsAB")
+    n.add_router(Router(id="rA", site="A"))
+    n.add_router(Router(id="rB", site="B"))
     return n
 
 

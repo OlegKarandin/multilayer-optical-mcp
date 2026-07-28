@@ -269,6 +269,8 @@ def _model_with_service():
     m.add_oms(_OMS(id="omsAB", src_node_id="A", dst_node_id="B", elements=("roadm_A", "a1", "fAB")))
     m.add_lightpath(_LP(id="lpAB", oms_sequence=("omsAB",),
                         mode_id="400G@7.1dB", center_freq_hz=193.4e12))
+    m.add_router(Router(id="rA", site="A"))
+    m.add_router(Router(id="rB", site="B"))
     m.add_ip_link(_IPLink(id="ipAB", a_router="rA", z_router="rB", lightpath_id="lpAB"))
     m.add_service(_Svc(id="svc", src_router="rA", dst_router="rB",
                        demand_gbps=100.0, working_path=("ipAB",)))

@@ -2,7 +2,7 @@ from dataclasses import replace
 
 import pytest
 
-from multilayer_optical_mcp.model.assets import Lightpath, IPLink, Service
+from multilayer_optical_mcp.model.assets import Lightpath, IPLink, Router, Service
 from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model.qot_results import QoTResultStore
 from multilayer_optical_mcp.model.plan import (
@@ -21,6 +21,8 @@ def _ip_over_optical(margin_db=2.0, demand=300.0):
     synthesizable bidirectional span A<->B."""
     m = new_model()
     add_bidir_span(m, "A", "B", "omsAB")
+    m.add_router(Router(id="rA", site="A"))
+    m.add_router(Router(id="rB", site="B"))
     m.add_lightpath(Lightpath(id="lpAB", oms_sequence=("omsAB",), mode_id="400G",
                               center_freq_hz=193.4e12))
     m.add_ip_link(IPLink(id="ipAB", a_router="rA", z_router="rB", lightpath_id="lpAB"))
