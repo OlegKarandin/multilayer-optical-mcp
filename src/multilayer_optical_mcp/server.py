@@ -64,7 +64,13 @@ def build_app(*, model: NetworkModel | None = None,
 
     @app.tool()
     def snapshot_branch(parent_id: str) -> dict:
-        """Branch from an existing snapshot for isolated what-if exploration."""
+        """Branch from an existing snapshot for isolated what-if exploration.
+
+        The returned id names the branch POINT: a frozen, immutable snapshot of
+        the parent state at this instant. It is not a live handle — `current()`
+        switches onto a fresh working copy, but mutating that copy does not
+        change what this id refers to. To capture the branch's state after
+        mutating it, call snapshot_create() again to get a new id."""
         try:
             return {"id": snapshots.branch(parent_id)}
         except KeyError:
@@ -347,7 +353,7 @@ def build_app(*, model: NetworkModel | None = None,
             # NO_SOLUTION. That status means "no route exists," which is false
             # when k=0 simply asked for none; guard the nonsensical input at
             # the tool boundary instead of overloading NO_SOLUTION's meaning.
-            raise ValueError(f"k must be >= 1, got {k!r}")
+            return {"error": "k must be >= 1", "k": k}
         res = _compute_paths(snapshots.current(), src, dst, k, constraints)
         return routing_result_dict(res)
 
@@ -370,7 +376,13 @@ def build_app(*, model: NetworkModel | None = None,
     ) -> dict:
         """Find a disjoint pair src->dst under a basis/level. status 'solution'
         for a fully-disjoint pair, 'partial' for the best-effort minimum-overlap
-        pair, 'no_solution' when none disjoint and best_effort is false."""
+        pair, 'no_solution' when none disjoint and best_effort is false.
+
+        Caveat: 'no_solution' can also mean the search was truncated by the
+        solver's internal candidate/emission caps before exhaustively proving
+        infeasibility, not only that no disjoint pair exists — do not read it
+        as full-confidence proof of infeasibility on a very large or
+        highly-parallel topology."""
         res = _compute_disjoint_paths(
             snapshots.current(), src, dst, basis, level, best_effort)
         return disjointness_result_dict(res)
@@ -392,7 +404,13 @@ def build_app(*, model: NetworkModel | None = None,
     ) -> dict:
         """Route + spectrum-assign optical demands. Each demand:
         {id, src, dst, protected?, required_gbps?, constraints?}. Mode falls out
-        of the GNPy GSNR on the chosen route (highest feasible bitrate)."""
+        of the GNPy GSNR on the chosen route (highest feasible bitrate).
+
+        Known limitation: a demand's `constraints` (e.g. `avoid`) are honored
+        for unprotected placement but NOT for the protection leg of a
+        protected demand — its protection route can still traverse an asset
+        the demand asked to avoid. The top-level `constraints` parameter above
+        is currently unused/reserved, not wired to per-demand constraints."""
         model = snapshots.current()
         qot = make_adapter_evaluator(model, results, harvest_cache=HarvestCache())
         return placement_result_dict(

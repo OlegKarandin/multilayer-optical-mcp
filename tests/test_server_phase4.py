@@ -71,11 +71,12 @@ def test_compute_paths_tool_rejects_k_below_one():
     """Task-8-fix reviewer's Minor #3: k=0 previously fell through the solver
     unvalidated and came back as a misleading typed NO_SOLUTION (a route
     exists; the caller just asked for zero of them). Guarded at the tool
-    boundary instead of overloading NO_SOLUTION's meaning."""
-    import pytest
+    boundary instead of overloading NO_SOLUTION's meaning. Returns a typed
+    error (matching the snapshot_* tools' convention) instead of raising."""
     app = _seed_app()
-    with pytest.raises(ValueError, match="k must be"):
-        _call(app, "compute_paths", src="A", dst="B", k=0)
+    out = _call(app, "compute_paths", src="A", dst="B", k=0)
+    assert "error" in out
+    assert out["k"] == 0
 
 
 def test_check_disjointness_tool_risk_group_catch():

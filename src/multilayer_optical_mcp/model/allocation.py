@@ -296,7 +296,15 @@ def solve_rsa(
 
     `fill_policy` picks the acceptance-probe reference loading (FULL default, for
     margin-stable, order-independent mode selection; ACTUAL is available for
-    order-dependent probing against only what's actually lit — see FillPolicy)."""
+    order-dependent probing against only what's actually lit — see FillPolicy).
+
+    Known limitation: a demand's `constraints` (e.g. `avoid`) are honored for
+    UNPROTECTED placement (`_place_unprotected` passes them to `compute_paths`)
+    but NOT for the protection leg of a protected demand (`_place_protected`
+    calls `compute_disjoint_paths` without them) — a protected demand's
+    protection route can still traverse an asset the demand asked to avoid.
+    The top-level `constraints` parameter on this function is also currently
+    unused/reserved and is not wired to per-demand constraints."""
     grid = SpectrumGrid.default()
     work = build_spectrum_state(model, grid)
     ref_mode = model.modes.list()[0].id

@@ -446,7 +446,14 @@ def compute_disjoint_paths(
     correlated physical assets the SRLG actually covers. Documented rather than
     weighted by asset count: the cap-32 candidate window (_DISJOINT_CANDIDATE_CAP)
     already makes an exact severity ranking unreliable, so a naive weighting
-    would be false precision."""
+    would be false precision.
+
+    Caveat: NO_SOLUTION does not always mean "proven infeasible." When the
+    candidate space exceeds `_DISJOINT_EMISSION_CAP`/`_DISJOINT_CANDIDATE_CAP`,
+    the search is truncated before it can exhaustively rule out a disjoint
+    pair, and a truncated search returns the same NO_SOLUTION as a proven one.
+    On a very large or highly-parallel topology, a NO_SOLUTION result should
+    not be read as full-confidence proof that no disjoint pair exists."""
     avoid_assets, avoid_srlgs, avoid_rgs = _avoid_sets(constraints)
     forbidden = forbidden_oms(model, avoid_assets, avoid_srlgs, avoid_rgs)
     cands = list(_enumerate_oms_paths(model, src, dst, _DISJOINT_EMISSION_CAP,
