@@ -1,8 +1,27 @@
 from __future__ import annotations
+import math
 from collections import defaultdict
 from typing import Any, Dict, List
 from .network import NetworkModel
 from . import ip_routing as _ipr
+
+
+def _safe_float(x):
+    """JSON-safety boundary for QoT-derived floats. `-inf` is used internally
+    as the failed-asset margin sentinel (whatif.inject_failure) so the
+    margin-feasibility gate reads it as infeasible; `+inf`/NaN also occur
+    (no-noise GSNR, missing-baseline margin_before). Python's json module
+    happily emits the bare `Infinity`/`-Infinity`/`NaN` tokens, which are not
+    valid JSON per RFC 8259 and a strict client parser rejects. Replace a
+    non-finite float with a same-named JSON string sentinel here, at the
+    serialization boundary, so callers doing real math on QoTState/DegradationRow
+    fields upstream keep working with actual +-inf/NaN; only the outgoing dict
+    is sanitized. Finite floats and non-float values pass through unchanged."""
+    if isinstance(x, float) and not math.isfinite(x):
+        if x != x:  # NaN is the only float that is not equal to itself
+            return "NaN"
+        return "Infinity" if x > 0 else "-Infinity"
+    return x
 
 
 def _fiber(f) -> dict:
@@ -52,8 +71,8 @@ def lightpaths_dict(model: NetworkModel) -> List[dict]:
     for lp in model.list_lightpaths():
         try:
             qs = model.get_qot_state(lp.id)
-            qot = {"gsnr_db": qs.gsnr_db, "osnr_db": qs.osnr_db,
-                   "margin_db": qs.margin_db,
+            qot = {"gsnr_db": _safe_float(qs.gsnr_db), "osnr_db": _safe_float(qs.osnr_db),
+                   "margin_db": _safe_float(qs.margin_db),
                    "mode_feasible": qs.mode_feasible,
                    "limiting_element_id": qs.limiting_element_id}
         except LookupError:
@@ -257,8 +276,8 @@ def affected_services_dict(model: NetworkModel, asset_id: str) -> Dict[str, Any]
 
 def margin_sweep_dict(rows) -> dict:
     return {"fragile": [
-        {"lightpath_id": r.lightpath_id, "margin_db": r.margin_db,
-         "gsnr_db": r.gsnr_db, "mode_feasible": r.mode_feasible} for r in rows]}
+        {"lightpath_id": r.lightpath_id, "margin_db": _safe_float(r.margin_db),
+         "gsnr_db": _safe_float(r.gsnr_db), "mode_feasible": r.mode_feasible} for r in rows]}
 
 
 def max_feasible_mode_dict(rows) -> List[dict]:
@@ -275,8 +294,8 @@ def degradation_report_dict(report) -> dict:
         "loss_delta": report.loss_delta,
         "crossings": list(report.crossings),
         "rows": [
-            {"lightpath_id": r.lightpath_id, "margin_before": r.margin_before,
-             "margin_after": r.margin_after, "feasible_before": r.feasible_before,
+            {"lightpath_id": r.lightpath_id, "margin_before": _safe_float(r.margin_before),
+             "margin_after": _safe_float(r.margin_after), "feasible_before": r.feasible_before,
              "feasible_after": r.feasible_after, "crossed": r.crossed,
              "within_threshold": r.within_threshold} for r in report.rows],
     }

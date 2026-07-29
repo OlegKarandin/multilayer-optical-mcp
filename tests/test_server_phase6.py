@@ -1,4 +1,5 @@
 # tests/test_server_phase6.py
+import json
 import math
 import pytest
 from multilayer_optical_mcp.server import build_app, MOD_FORMATS_YAML
@@ -14,6 +15,22 @@ from multilayer_optical_mcp.model.qot_results import QoTResultStore
 def _call(app, name, **kwargs):
     """Invoke a registered FastMCP tool's underlying function directly."""
     return app._tool_manager._tools[name].fn(**kwargs)
+
+
+def _assert_json_finite(obj):
+    """Recursively assert no non-finite float survives a json.dumps/json.loads
+    round-trip. Python's json.loads is lenient (it parses the bare Infinity/
+    -Infinity/NaN tokens json.dumps emits by default), so equality after a
+    round-trip alone wouldn't catch a leak -- walk the reloaded structure and
+    require every float to be finite."""
+    if isinstance(obj, float):
+        assert math.isfinite(obj), f"non-finite float leaked through JSON: {obj!r}"
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            _assert_json_finite(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            _assert_json_finite(v)
 
 
 def _seed_branch_with_lightpath(app):
@@ -93,6 +110,94 @@ def test_inject_failure_tool_multiple_assets():
     out = _call(app, "inject_failure", asset_ids=["fAB", "fBC"])
     assert set(out["downed_lightpaths"]) == {"lpAB", "lpBC"}
     assert set(out["failed_assets"]) == {"fAB", "fBC"}
+
+
+# ---------------------------------------------------------------------------
+# Task 13: non-finite floats (-inf QoT sentinel) sanitized to JSON-safe
+# string tokens ("Infinity" / "-Infinity" / "NaN") at the serialization
+# boundary in model/views.py, so json.dumps never emits the raw invalid
+# Infinity/-Infinity/NaN tokens RFC 8259 forbids.
+# ---------------------------------------------------------------------------
+
+
+def test_get_lightpaths_sanitizes_failed_asset_margin():
+    app = build_app()
+    _seed_branch_with_lightpath(app)
+    # inject_failure is physics-free: it writes the real -inf QoT sentinel
+    # directly (see whatif.inject_failure), no GNPy call or mocking involved.
+    _call(app, "inject_failure", asset_ids=["fAB"])
+
+    out = _call(app, "get_lightpaths")
+    lp = next(r for r in out if r["id"] == "lpAB")
+    assert lp["qot"]["margin_db"] == "-Infinity"
+    assert lp["qot"]["gsnr_db"] == "-Infinity"
+    assert lp["qot"]["osnr_db"] == "-Infinity"
+
+    payload = json.dumps(out)
+    _assert_json_finite(json.loads(payload))
+
+
+def test_whatif_margin_threshold_sweep_sanitizes_failed_asset_margin():
+    app = build_app()
+    _seed_branch_with_lightpath(app)
+    _call(app, "inject_failure", asset_ids=["fAB"])
+
+    out = _call(app, "whatif_margin_threshold_sweep", threshold_db=0.0)
+    row = next(r for r in out["fragile"] if r["lightpath_id"] == "lpAB")
+    assert row["margin_db"] == "-Infinity"
+    assert row["gsnr_db"] == "-Infinity"
+
+    payload = json.dumps(out)
+    _assert_json_finite(json.loads(payload))
+
+
+def _seed_gnpy_app_with_two_amp_lightpath():
+    """A real, GNPy-propagatable one-lightpath network built via the importer
+    (model_from_abstract_graph gives every OMS a paired reverse leg, which
+    gated_qot's backward propagation requires -- see the C2 reverse-OMS memory
+    note), so inject_degradation's internal recompute_qot_under_loading runs
+    actual physics rather than reading a manually-set QoTState. Mirrors
+    tests/model/test_whatif.py's _one_edge_model + _live_model_one_lightpath."""
+    from multilayer_optical_mcp.model.topology_import import model_from_abstract_graph
+    modes = load_modulation_formats(MOD_FORMATS_YAML)
+    base = model_from_abstract_graph({
+        "nodes": [{"id": 0}, {"id": 1}],
+        "edges": [{"src": 0, "dst": 1, "length_km": 160.0, "num_spans": 2,
+                   "span_lengths_km": [80.0, 80.0], "fiber_type": "SSMF",
+                   "amplifier_nf_db": [5.5, 5.5]}],
+    }, modes=modes)
+    mode_id = modes.list()[0].id
+    base.add_lightpath(Lightpath(id="lp0", oms_sequence=("oms_0_1",),
+                                 mode_id=mode_id, center_freq_hz=193.4e12))
+    return build_app(model=base), mode_id
+
+
+def test_inject_degradation_sanitizes_nonfinite_margin_before():
+    app, mode_id = _seed_gnpy_app_with_two_amp_lightpath()
+    loading_channels = [{"center_freq_hz": 193.4e12, "slot_width_hz": 100e9,
+                         "power_dbm": None, "mode_id": mode_id}]
+    # Seed a real, finite baseline via an actual GNPy recompute.
+    _call(app, "recompute_qot_under_loading", loading_channels=loading_channels)
+    assert math.isfinite(app._snapshots.current().get_qot_state("lp0").margin_db)
+
+    # inject_failure writes the real -inf QoT sentinel for lp0 (it crosses
+    # fiber_0_1_0, on oms_0_1) via production code -- not a mocked value.
+    _call(app, "inject_failure", asset_ids=["fiber_0_1_0"])
+    assert math.isinf(app._snapshots.current().get_qot_state("lp0").margin_db)
+
+    # inject_degradation's internal recompute must not resurrect a failed
+    # lightpath (see test_failure_and_degradation_compose in
+    # tests/model/test_whatif.py), so both margin_before and margin_after
+    # come back as the -inf sentinel here -- genuinely produced, not mocked.
+    # Degrade the OTHER amp (amp_0_1_1) so the perturbation itself isn't what
+    # causes the non-finite value; the failed sentinel is.
+    out = _call(app, "inject_degradation", asset_id="amp_0_1_1", nf_delta=1.0)
+    row = next(r for r in out["rows"] if r["lightpath_id"] == "lp0")
+    assert row["margin_before"] == "-Infinity"
+    assert row["margin_after"] == "-Infinity"
+
+    payload = json.dumps(out)
+    _assert_json_finite(json.loads(payload))
 
 
 def test_whatif_sensitivity_tool_flags_perturbed_amp():
