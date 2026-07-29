@@ -347,12 +347,23 @@ def whatif_sensitivity(
     Sign/decomposition caveat: rows localize which element's OWN parameters
     changed between the two branches — they are not a decomposition of
     `delta_gsnr_db` and do not sum or reconcile to it, and a given row's sign
-    can differ from `delta_gsnr_db`'s sign. This is visible for a pure loss
-    injection: attenuation itself is GSNR-neutral at the point of injection, so
-    the actual GSNR damage from a loss delta shows up as a downstream
-    element's own (physically unchanged) parameters interacting with a
-    different incoming signal level, which can localize to a row whose sign
-    reads positive even though the overall change is a degradation."""
+    can differ from `delta_gsnr_db`'s sign. Confirmed empirically for a pure
+    loss injection (+4 dB on one fiber, 10-span model, delta_gsnr_db=-0.366):
+    the only nonzero `gsnr_contribution_delta_db` row is the perturbed
+    fiber's OWN row (here +0.044), not a downstream one — every other row,
+    including the very next amp, reads exactly 0.0 on `gsnr_contribution_delta_db`,
+    which is the isolation working as intended. That row's sign can read
+    positive because a fiber with more loss delivers a weaker signal into the
+    next span, and a weaker signal generates less NLI at that point —
+    attenuation reduces nonlinear interference locally even though it
+    degrades the whole path. The actual whole-path degradation instead shows
+    up on the downstream amp's row as a shift in
+    `ase_contribution_delta_db` / `nli_contribution_delta_db` (here +4.0 /
+    +4.0, matching the +4 dB loss delta): `design_network` re-targets that
+    amp's gain to compensate for the weaker input, which is a real change to
+    its operating point, not a leftover of the perturbed element — while its
+    `gsnr_contribution_delta_db` correctly stays 0.0, since ITS OWN
+    parameters relative to what design_network re-derives are unchanged."""
     state_a, rid_a = compute_qot(model=model_a, store=store, oms_sequence=oms_sequence,
                                  direction=direction, mode_id=mode_id, loading=loading)
     state_b, rid_b = compute_qot(model=model_b, store=store, oms_sequence=oms_sequence,

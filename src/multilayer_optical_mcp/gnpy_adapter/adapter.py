@@ -584,18 +584,24 @@ def _resolve_unpropagated_path(
     per ``NetworkModel`` instance in a ``WeakKeyDictionary``; on a cache hit it
     returns the SAME ``network`` object and SAME element instances as a prior
     call for that model. What actually makes reusing those objects safe across
-    calls is narrower and more specific than "always fresh": ``build_gnpy_network``
-    calls ``_restore_design_gains`` on EVERY call, hit or miss, which resets
-    ``Edfa.effective_gain`` back to its design-time value before returning. A
-    grep of ``gnpy/core/elements.py`` for self-referential ``self.*`` writes in
-    the ``__call__``/``propagate``/``interpol_params`` methods turns up exactly
+    calls is narrower and more specific than "always fresh": on a cache HIT,
+    ``build_gnpy_network`` calls ``_restore_design_gains`` before returning,
+    which resets ``Edfa.effective_gain`` back to its design-time value; on a
+    cache MISS it builds a brand-new network and runs ``gnpy_design_network``
+    on it instead, which reaches the same design-time operating point by
+    construction (there is nothing propagated yet to restore from). Either
+    way — restored on a hit, freshly designed on a miss — the returned EDFAs
+    are at their design-time operating point. A grep of
+    ``gnpy/core/elements.py`` for self-referential ``self.*`` writes in the
+    ``__call__``/``propagate``/``interpol_params`` methods turns up exactly
     one accumulating (as opposed to overwriting) statement:
     ``elements.py``'s ``self.effective_gain = min(self.effective_gain, ...)`` on
     the EDFA saturation path. Every other ``self.*`` write in those methods is a
     pure overwrite derived from the current ``SpectralInformation``, not an
     accumulation. So the real invariant that keeps two different histories from
-    desyncing when objects ARE reused is "gains are restored on every
-    ``build_gnpy_network`` call, and no other element state accumulates across
+    desyncing when objects ARE reused is "gains are at their design-time value
+    at the start of every ``build_gnpy_network`` call (via restore-on-hit or
+    fresh-design-on-miss), and no other element state accumulates across
     calls" — not "elements are always freshly built".
 
     Separately, ``SpectralInformation.__call__`` implementations do NOT
