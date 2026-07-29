@@ -148,3 +148,63 @@ def test_level_node_is_never_weaker_than_level_link():
     # node-level must be a superset of link-level (link keys use the same
     # "phys:" namespace under both levels).
     assert link_keys <= node_keys
+
+
+def _model_three_node_chain() -> NetworkModel:
+    """A->B->C chain (two single-hop OMS legs). Node B is a real, physical
+    leg boundary that is only sometimes a service's TRUE endpoint -- e.g. a
+    demand that actually spans the whole A->C journey treats B as an interior
+    waypoint, not a mandated shared endpoint, for the leg A->B alone."""
+    n = NetworkModel(modes=ModeRegistry([
+        TransceiverMode(id="100G-QPSK", bitrate_gbps=100.0,
+                        required_gsnr_db=12.0, symbol_rate_baud=32e9,
+                        channel_spacing_hz=50e9),
+    ]))
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    for node in ("A", "B", "C"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    for amp_id in ("ampAB1", "ampAB2", "ampBC1", "ampBC2"):
+        n.add_amplifier(Amplifier(id=amp_id, type_variety="advanced_toy",
+                                  gain_db=20.0, nf_db=5.5))
+    n.add_fiber(Fiber(id="fiber-A-B", a_end="ampAB1", z_end="ampAB2",
+                      length_km=80.0, type_variety="SSMF"))
+    n.add_fiber(Fiber(id="fiber-B-C", a_end="ampBC1", z_end="ampBC2",
+                      length_km=80.0, type_variety="SSMF"))
+    n.add_oms(OMS(id="oms-A-B", src_node_id="A", dst_node_id="B",
+                  elements=("roadm_A", "ampAB1", "fiber-A-B", "ampAB2")))
+    n.add_oms(OMS(id="oms-B-C", src_node_id="B", dst_node_id="C",
+                  elements=("roadm_B", "ampBC1", "fiber-B-C", "ampBC2")))
+    return n
+
+
+def test_path_basis_keys_includes_own_terminal_roadm_when_not_a_true_endpoint():
+    """Regression: path_basis_keys previously built its physical footprint
+    from oms_seq_asset_set, which -- by its own docstring -- never includes
+    an OMS-sequence's terminal (destination) ROADM. A risk-group/SRLG naming
+    ONLY that terminal ROADM could then never register as a correlation,
+    regardless of whether it was actually this path's own mandated endpoint
+    or a genuinely distinct, relevant asset. The fix switches to
+    lightpath_footprint (which does include the terminal ROADM) with the
+    exclusion applied afterward, so only a NON-endpoint terminal ROADM newly
+    registers -- a real endpoint stays excluded (unactionable, per
+    test_disjointness_endpoints.py's
+    test_srlg_over_only_endpoint_roadm_does_not_collapse).
+
+    oms-A-B's positional terminal is roadm_B. With explicit endpoints=
+    ("A","C") -- the true demand spans the whole A->C journey, of which this
+    leg is only the first hop -- B is NOT a true endpoint of this leg, so a
+    risk group naming only roadm_B must now register."""
+    n = _model_three_node_chain()
+    n.define_risk_group(rg_id="rg-on-B", asset_ids=("roadm_B",))
+
+    non_endpoint = path_basis_keys(n, ("oms-A-B",), basis="risk_group",
+                                   level="risk_group", endpoints=("A", "C"))
+    assert non_endpoint == frozenset({"rg:rg-on-B"})
+
+    # Contrast: when B genuinely IS this leg's own endpoint (default
+    # positional inference -- oms-A-B's own src/dst are A/B), the group must
+    # stay excluded: an SRLG/risk-group over only a mandated shared endpoint
+    # is unactionable and must not collapse disjointness.
+    own_endpoint = path_basis_keys(n, ("oms-A-B",), basis="risk_group",
+                                   level="risk_group")
+    assert own_endpoint == frozenset()

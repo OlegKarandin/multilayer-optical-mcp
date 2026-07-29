@@ -231,6 +231,80 @@ def test_check_disjointness_srlg_basis():
     assert res.shared_groups == ("srlg-shared-duct",)
 
 
+def _model_shared_interior_node() -> NetworkModel:
+    """A-M1-B (path_a's true route) and A-M2-M1-B (path_b's true route via a
+    span-DISTINCT parallel M1->B leg, omsM1B2) -- both genuinely transit node
+    M1, but never share a fiber/amp/OMS, so only a correct node-level read
+    (not any accidental link-level overlap) can catch the correlation.
+    Mirrors test_multilayer_disjoint.py's diamond+hybrid fixture (the already-
+    fixed layered-engine sibling of this bug) minus the layered-graph/
+    Placement machinery -- check_disjointness only needs raw OMS-sequences."""
+    n = NetworkModel(modes=ModeRegistry([
+        TransceiverMode(id="100G-QPSK", bitrate_gbps=100.0,
+                        required_gsnr_db=12.0, symbol_rate_baud=32e9,
+                        channel_spacing_hz=50e9),
+    ]))
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    for node in ("A", "B", "M1", "M2"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    for amp_id in ("aAM1a", "aAM1b", "aM1Ba", "aM1Bb", "aAM2a", "aAM2b",
+                   "aM2M1a", "aM2M1b", "aM1Ba2", "aM1Bb2"):
+        n.add_amplifier(Amplifier(id=amp_id, type_variety="advanced_toy",
+                                  gain_db=20.0, nf_db=5.5))
+    n.add_fiber(Fiber(id="fAM1", a_end="aAM1a", z_end="aAM1b",
+                      length_km=60.0, type_variety="SSMF"))
+    n.add_fiber(Fiber(id="fM1B", a_end="aM1Ba", z_end="aM1Bb",
+                      length_km=60.0, type_variety="SSMF"))
+    n.add_fiber(Fiber(id="fAM2", a_end="aAM2a", z_end="aAM2b",
+                      length_km=60.0, type_variety="SSMF"))
+    n.add_fiber(Fiber(id="fM2M1", a_end="aM2M1a", z_end="aM2M1b",
+                      length_km=40.0, type_variety="SSMF"))
+    n.add_fiber(Fiber(id="fM1B2", a_end="aM1Ba2", z_end="aM1Bb2",
+                      length_km=60.0, type_variety="SSMF"))
+    n.add_oms(OMS(id="omsAM1", src_node_id="A", dst_node_id="M1",
+                  elements=("roadm_A", "aAM1a", "fAM1", "aAM1b")))
+    n.add_oms(OMS(id="omsM1B", src_node_id="M1", dst_node_id="B",
+                  elements=("roadm_M1", "aM1Ba", "fM1B", "aM1Bb")))
+    n.add_oms(OMS(id="omsAM2", src_node_id="A", dst_node_id="M2",
+                  elements=("roadm_A", "aAM2a", "fAM2", "aAM2b")))
+    n.add_oms(OMS(id="omsM2M1", src_node_id="M2", dst_node_id="M1",
+                  elements=("roadm_M2", "aM2M1a", "fM2M1", "aM2M1b")))
+    n.add_oms(OMS(id="omsM1B2", src_node_id="M1", dst_node_id="B",
+                  elements=("roadm_M1", "aM1Ba2", "fM1B2", "aM1Bb2")))
+    return n
+
+
+def test_check_disjointness_endpoints_kwarg_fixes_shared_interior_node():
+    """Regression for the flat-engine sibling of the ALREADY-FIXED layered-
+    engine bug (multilayer_disjoint.placement_footprint_keys/disjoint_pairs'
+    `endpoints` kwarg, see test_multilayer_disjoint.py's
+    test_hybrid_placement_endpoint_exclusion_needs_explicit_endpoints and
+    test_route_service_and_check_disjointness_agree_on_hybrid_placements).
+
+    path_a's true physical route is A->M1->B, but is handed to
+    check_disjointness with its legs concatenated in "M1->B leg first" order
+    -- exactly how a caller assembling a reused leg + a new-run leg in
+    storage (not travel) order would build it. Without explicit endpoints,
+    check_disjointness's positional inference reads path_a's own mandated
+    endpoints off oms_sequence[0].src/oms_sequence[-1].dst = {omsM1B.src=M1,
+    omsAM1.dst=M1} = {M1} -- wrongly excluding the one node the two paths
+    actually share, and wrongly keeping A/B (not this ordering's own
+    endpoints) in its key set instead. That flips the verdict to a falsely
+    certified disjoint=True at level='node'."""
+    n = _model_shared_interior_node()
+    path_a = ("omsM1B", "omsAM1")                    # true route A->M1->B, wrong order
+    path_b = ("omsAM2", "omsM2M1", "omsM1B2")         # true route A->M2->M1->B, correct order
+
+    broken = check_disjointness(n, path_a, path_b, basis="physical", level="node")
+    assert broken.disjoint is True, broken.shared_assets   # the bug: falsely disjoint
+
+    fixed = check_disjointness(n, path_a, path_b, basis="physical", level="node",
+                               endpoints_a=("A", "B"), endpoints_b=("A", "B"))
+    assert fixed.disjoint is False
+    assert "M1" in fixed.shared_assets            # node-level: shared interior node
+    assert "roadm_M1" in fixed.shared_assets       # phys floor: shared terminal ROADM
+
+
 def test_compute_paths_severed_by_avoid_is_typed_no_solution():
     """Regression for the audit's Critical NetworkXNoPath-escapes finding: a
     legitimate avoid constraint that severs the ONLY route between src/dst

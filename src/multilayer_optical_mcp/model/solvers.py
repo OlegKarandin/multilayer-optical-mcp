@@ -409,12 +409,30 @@ def check_disjointness(
     path_b: Sequence[str],
     basis: str,
     level: str,
+    *,
+    endpoints_a: "tuple[str, str] | None" = None,
+    endpoints_b: "tuple[str, str] | None" = None,
 ) -> DisjointnessResult:
     """Audit whether two existing OMS-sequence paths are disjoint under a named
     basis/level. Returns shared assets/groups when they are not. Always a
-    SOLUTION (the audit computed an answer); `disjoint` carries the verdict."""
-    keys_a = path_basis_keys(model, tuple(path_a), basis=basis, level=level)
-    keys_b = path_basis_keys(model, tuple(path_b), basis=basis, level=level)
+    SOLUTION (the audit computed an answer); `disjoint` carries the verdict.
+
+    `endpoints_a`/`endpoints_b`, when given as (src_node, dst_node), are passed
+    through to path_basis_keys VERBATIM instead of letting each path infer its
+    own endpoint exclusions positionally from its own oms_sequence[0]/[-1].
+    Positional inference is only correct when a path's OMS-sequence happens to
+    be laid out starting exactly at its true demand source and ending exactly
+    at its true demand destination; a caller that has the true endpoints
+    on hand (e.g. a service's src_router/dst_router resolved to optical nodes)
+    should pass them explicitly -- mirrors multilayer_disjoint.placement_
+    footprint_keys/disjoint_pairs' `endpoints` kwarg, the fix for the identical
+    mechanism in the layered engine. Omitted (None), the prior positional-
+    inference behavior is preserved for callers with no service/demand context
+    (e.g. the raw MCP audit tool given two arbitrary OMS-sequences)."""
+    keys_a = path_basis_keys(model, tuple(path_a), basis=basis, level=level,
+                             endpoints=endpoints_a)
+    keys_b = path_basis_keys(model, tuple(path_b), basis=basis, level=level,
+                             endpoints=endpoints_b)
     shared = keys_a & keys_b
     shared_assets, shared_groups = split_shared_keys(shared)
     return DisjointnessResult(

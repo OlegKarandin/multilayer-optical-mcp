@@ -168,7 +168,16 @@ def path_basis_keys(
     # Exclude the path's own endpoints under EVERY basis: an endpoint shared by
     # both paths is mandated by the demand, not a routing correlation, so it must
     # not intersect for physical, srlg, risk_group, or union.
-    phys = oms_seq_asset_set(model, oms_sequence) - endpoint_roadms
+    #
+    # Uses lightpath_footprint (not the narrower oms_seq_asset_set) so the
+    # path's own TERMINAL drop ROADM -- omitted from oms.elements by the
+    # importer convention (see lightpath_footprint's docstring) -- is present
+    # to intersect against. endpoint_roadms already correctly names that
+    # terminal ROADM when it IS this path's own true endpoint (subtracted
+    # below), so a NON-endpoint terminal ROADM (e.g. one path's destination
+    # that isn't the other path's, or an SRLG/risk-group asset naming it) now
+    # correctly registers instead of silently never intersecting.
+    phys = lightpath_footprint(model, oms_sequence) - endpoint_roadms
     keys: set[str] = set()
 
     def add_physical() -> None:

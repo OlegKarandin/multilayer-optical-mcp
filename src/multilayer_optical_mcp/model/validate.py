@@ -157,7 +157,16 @@ def _disjointness_findings(model: NetworkModel, basis: str, level: str) -> List[
             continue
         a = service_oms_sequence(model, svc.working_path)
         b = service_oms_sequence(model, svc.protection_path)
-        res = check_disjointness(model, a, b, basis, level)
+        # Thread the service's TRUE optical endpoints through explicitly rather
+        # than letting check_disjointness infer each path's endpoints
+        # positionally from its own oms_sequence[0]/[-1] -- same mechanism/fix
+        # as multilayer_disjoint.disjoint_pairs' `endpoints` kwarg. Working and
+        # protection share the same demand, hence the same true endpoints; the
+        # router->optical-node resolution mirrors route_service.py's src/dst.
+        endpoints = (model.get_router(svc.src_router).site,
+                     model.get_router(svc.dst_router).site)
+        res = check_disjointness(model, a, b, basis, level,
+                                 endpoints_a=endpoints, endpoints_b=endpoints)
         if not res.disjoint:
             out.append((ViolationType.DISJOINTNESS_COLLAPSE, svc.id,
                         {"basis": basis, "level": level,
