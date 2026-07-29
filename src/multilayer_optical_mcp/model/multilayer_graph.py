@@ -37,12 +37,20 @@ Stage 7 assumptions (recorded explicitly, from the inspection roadmap):
   run is one lambda end-to-end, never converted mid-path.
 - A returned candidate does NOT commit to a specific wavelength; provisioning
   must re-run spectrum assignment before actually lighting a new run.
-- New-lightpath runs within ONE placement are assumed OMS-disjoint (S7-10):
-  `_build_loading` QoTs each new run against the committed spectrum snapshot
-  only, ignoring channels that OTHER new runs in the same placement would
-  light. Harmless today because successive runs in one placement are
-  separated by grooming hops on different OMS (no shared-fiber NLI between
-  them) — an unstated precondition, not a proof.
+- New-lightpath runs within ONE placement are NOT assumed OMS-disjoint (S7-10,
+  fixed): the WLIN/WLOUT node-split means two grooming-separated runs in the
+  same placement CAN legitimately share a physical OMS (one originates onto
+  it, another re-enters it later via EXPRESS at a different wavelength) — the
+  audit's "assumed OMS-disjoint, unstated precondition" turned out false, and
+  was reproduced with the real GNPy adapter on a mesh fixture (~0.03 dB
+  optimism on an 800 km / 10-span shared OMS under FillPolicy.ACTUAL,
+  2026-07-29). `_build_loading` alone QoTs a new run against the committed
+  `spectrum` snapshot only, which never includes an uncommitted sibling run
+  from the same placement; `place_demands` now adds each OMS-overlapping
+  sibling's own wavelength as an extra neighbor channel before either run is
+  QoT'd. Skipped under FULL (the sibling's slot is already in the dense
+  comb; adding it again would duplicate a frequency) — the bug was
+  ACTUAL-specific.
 - `build_layered_graph` and `place_demands` each independently accept a `grid`
   parameter (S7-12, fixed): every caller that invokes both for the same
   placement (`route_service.route_service`, `allocation`'s per-demand loop)
@@ -412,6 +420,7 @@ def place_demands(
     `_build_loading` (defaults to FULL — see FillPolicy)."""
     from .allocation import _build_loading, _best_feasible_mode
     from .spectrum import FillPolicy
+    from ..gnpy_adapter.loading import Channel, LoadingState
     if fill_policy is None:
         fill_policy = FillPolicy.FULL
     grid = grid or SpectrumGrid.default()
@@ -463,13 +472,47 @@ def place_demands(
             realized: List[NewLightpathRun] = []
             feasible = True
             new_cap = float("inf")
-            # S7-10: each new run is QoT'd against the committed `spectrum`
-            # snapshot only — a run does not see the channels any OTHER new
-            # run in this same placement would light on a shared OMS. See the
-            # module docstring's Stage 7 assumptions (OMS-disjoint runs).
-            for oms_seq, lam, run_src, run_dst in new_runs:
+            # S7-10 (fixed): a new run is QoT'd against the committed `spectrum`
+            # snapshot, which never sees a co-located SIBLING new run in this
+            # same placement — those aren't committed either. Under FULL this
+            # is harmless (every non-probe slot is already lit in the probe
+            # comb, sibling or not). Under ACTUAL it was a real, measured
+            # optimism (see the module docstring's Stage 7 assumptions):
+            # `_build_loading` only sees already-occupied slots, so a sibling
+            # run sharing an OMS with this one (the WLIN/WLOUT+EXPRESS node-
+            # split lets that happen — a run can re-enter a physical span an
+            # earlier sibling already used, at a different wavelength) was
+            # invisible to this run's probe, and vice versa. Fixed by adding
+            # each overlapping sibling's own wavelength as an extra neighbor
+            # channel before either is QoT'd — order-independent (every run
+            # sees every co-located sibling that shares an OMS with it,
+            # regardless of loop order), and skipped under FULL, where the
+            # sibling's slot is already included in the dense comb and adding
+            # it again would duplicate a frequency.
+            for idx, (oms_seq, lam, run_src, run_dst) in enumerate(new_runs):
                 loading = _build_loading(grid, spectrum, oms_seq, lam, ref_mode,
                                          fill_policy)
+                if fill_policy is not FillPolicy.FULL:
+                    oms_set = set(oms_seq)
+                    sibling_lams = {
+                        sib_lam
+                        for j, (sib_oms_seq, sib_lam, _, _) in enumerate(new_runs)
+                        if j != idx and oms_set.intersection(sib_oms_seq)
+                    }
+                    if sibling_lams:
+                        # Defensive dedup: a sibling's slot could coincide with a
+                        # frequency `_build_loading` already added from the
+                        # committed spectrum (e.g. already occupied on a
+                        # DIFFERENT hop of this run's own multi-hop oms_sequence)
+                        # — avoid emitting two carriers at the same frequency.
+                        have = {c.center_freq_hz for c in loading.channels}
+                        extra = tuple(
+                            Channel(grid.freq(sl), grid.spacing_hz, None, ref_mode)
+                            for sl in sibling_lams
+                            if grid.freq(sl) not in have
+                        )
+                        if extra:
+                            loading = LoadingState(loading.channels + extra)
                 mode, gsnr = _best_feasible_mode(model, qot, oms_seq, loading, ref_mode)
                 if mode is None:
                     feasible = False
