@@ -39,10 +39,23 @@ class ViolationType(str, Enum):
 
 @dataclass(frozen=True)
 class Violation:
+    """A single typed finding from validate_plan. `detail`'s keys are
+    type-specific remediation context (Decision 4, module docstring) -- e.g.
+    IP_LINK_OVERLOAD's "offload_gbps" (offered_gbps - capacity_gbps) and
+    PROTECTION_OVERSUBSCRIBED's "overflow_gbps" (working + reserved -
+    capacity) are computed differently and are NOT interchangeable across
+    violation types; read the finding-builder for the type in question
+    (_ip_findings, _protection_oversubscription_findings, etc.) to see its
+    exact keys."""
     type: ViolationType
     state_index: int                 # which intermediate state (0 = after first op)
     asset_id: Optional[str]
-    transient: bool                  # present here but not at the committed endpoint
+    # True iff this finding is absent at the final state AND the final state
+    # actually evaluated this finding type (see _CHECKED_ALL/_CHECKED_CLASH_ONLY
+    # and the `transient` computation in validate_plan) -- a finding whose type
+    # went unevaluated at the final state (e.g. short-circuited by a spectrum
+    # clash) is left non-transient rather than assumed resolved.
+    transient: bool
     detail: dict
 
 
@@ -137,7 +150,7 @@ def _ip_findings(model: NetworkModel, dropped_tolerance_gbps: float) -> List[_Fi
             "capacity_gbps": u.capacity_gbps,
             # Distinct key from PROTECTION_OVERSUBSCRIBED's "overflow_gbps" -- the
             # two use different formulas (offered-capacity here vs.
-            # working+reserved-capacity there); see Violation.detail docstring.
+            # working+reserved-capacity there); see the Violation docstring.
             "offload_gbps": u.offered_gbps - u.capacity_gbps,   # how much to offload
         }))
     # simulate_ip_routing is failover-aware: it already classifies every lost

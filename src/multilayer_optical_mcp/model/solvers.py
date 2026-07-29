@@ -392,7 +392,10 @@ def compute_paths(
     constraints: Optional[dict] = None, weight: str = "hops",
 ) -> RoutingResult:
     """k-shortest OMS routes src->dst (`weight` ∈ {"hops", "length"}). No route
-    -> typed NO_SOLUTION."""
+    -> typed NO_SOLUTION. Assets in `model.failed_assets()` are automatically
+    excluded from the search graph, on top of any explicit `constraints["avoid"]`
+    (see `_avoid_sets`) -- a route this call would have returned before an
+    `inject_failure` may no longer appear."""
     avoid_assets, avoid_srlgs, avoid_rgs = _avoid_sets(model, constraints)
     forbidden = forbidden_oms(model, avoid_assets, avoid_srlgs, avoid_rgs)
     paths = tuple(_enumerate_oms_paths(model, src, dst, k, weight=weight, forbidden=forbidden))
@@ -470,7 +473,9 @@ def compute_disjoint_paths(
     fully-disjoint pair as SOLUTION; with best_effort=True returns the
     minimum-overlap pair as PARTIAL when no fully-disjoint pair exists; with
     best_effort=False and none disjoint, NO_SOLUTION. `weight` ∈ {"hops",
-    "length"} orders candidate routes.
+    "length"} orders candidate routes. Assets in `model.failed_assets()` are
+    automatically excluded from the search graph, on top of any explicit
+    `constraints["avoid"]` (see `_avoid_sets`).
 
     S6-8: "minimum-overlap" (best_effort) minimizes the COUNT of shared
     namespaced keys (`len(shared)`), not physical severity — one shared SRLG
