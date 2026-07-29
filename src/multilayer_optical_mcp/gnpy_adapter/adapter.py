@@ -577,17 +577,39 @@ def _resolve_unpropagated_path(
     rather than a shared refactor of it: this function backs
     ``isolate_element_contribution`` (Task 14's hybrid-swap sensitivity trace),
     and ``compute_qot``/``harvest_qot`` must keep their existing behavior for
-    their many other callers untouched. Every call builds brand-new gnpy element
-    instances — never reuses one from a previous call — because gnpy elements
-    carry in-place-mutable state (e.g. EDFA saturation/gain via power_mode) and
-    ``SpectralInformation.__call__`` implementations mutate the SI object they
-    are given in place (``elements.py``'s ``Fiber``/``Roadm``/``Edfa`` write
-    through property setters on the SAME object, not a copy — see
-    ``gnpy.core.info.SpectralInformation.apply_attenuation_db`` etc.), so an
-    already-propagated element or SI reused across two different histories
-    would silently desync from the trace it is meant to reproduce.
+    their many other callers untouched.
+
+    NOTE this does NOT always build brand-new gnpy element instances.
+    ``build_gnpy_network`` (``synthesize.py``) caches the synthesized network
+    per ``NetworkModel`` instance in a ``WeakKeyDictionary``; on a cache hit it
+    returns the SAME ``network`` object and SAME element instances as a prior
+    call for that model. What actually makes reusing those objects safe across
+    calls is narrower and more specific than "always fresh": ``build_gnpy_network``
+    calls ``_restore_design_gains`` on EVERY call, hit or miss, which resets
+    ``Edfa.effective_gain`` back to its design-time value before returning. A
+    grep of ``gnpy/core/elements.py`` for self-referential ``self.*`` writes in
+    the ``__call__``/``propagate``/``interpol_params`` methods turns up exactly
+    one accumulating (as opposed to overwriting) statement:
+    ``elements.py``'s ``self.effective_gain = min(self.effective_gain, ...)`` on
+    the EDFA saturation path. Every other ``self.*`` write in those methods is a
+    pure overwrite derived from the current ``SpectralInformation``, not an
+    accumulation. So the real invariant that keeps two different histories from
+    desyncing when objects ARE reused is "gains are restored on every
+    ``build_gnpy_network`` call, and no other element state accumulates across
+    calls" — not "elements are always freshly built".
+
+    Separately, ``SpectralInformation.__call__`` implementations do NOT
+    uniformly mutate the SI object in place. ``Fiber``/``Roadm``/``Fused``/
+    ``Transceiver.__call__`` all call ``self.propagate(spectral_info)`` and
+    return the SAME object, mutated via property setters. ``Edfa.__call__``
+    does not: it does
+    ``spectral_info = demuxed_spectral_information(spectral_info, band)`` and
+    returns a genuinely NEW object. This is harmless for the loop above (it
+    always does ``si = el(si)``, so both same-object-mutated and
+    new-object-returned cases work), but the SI contract is per-element-type,
+    not a blanket in-place guarantee.
     """
-    from .synthesize import build_gnpy_network, gnpy_design_network
+    from .synthesize import build_gnpy_network
     eqpt, network = build_gnpy_network(model)
 
     if direction == Direction.BACKWARD:

@@ -367,9 +367,14 @@ def test_sensitivity_isolates_downstream_leak_on_multispan_path():
     downstream_ids = ["amp_0_1_1", "amp_0_1_2", "amp_0_1_3", "amp_0_1_9"]
     for eid in downstream_ids:
         row = next(r for r in res.rows if r.element_id == eid)
-        assert abs(row.gsnr_contribution_delta_db) < 1e-6, (
+        # Isolated deltas for untouched downstream elements are exactly 0.0 by
+        # construction (identical physics replayed through the same code path
+        # produces bit-identical floats), not merely small -- a tight bound
+        # here (rather than the old 1e-6) is what would actually catch a
+        # future partial regression in the isolation swap.
+        assert row.gsnr_contribution_delta_db == 0.0, (
             f"{eid} leaked {row.gsnr_contribution_delta_db!r} dB from the "
-            f"upstream perturbation instead of isolating to ~0"
+            f"upstream perturbation instead of isolating to exactly 0"
         )
 
     # Sanity: the perturbed element's own isolated delta is clearly separated

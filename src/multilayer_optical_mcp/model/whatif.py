@@ -329,7 +329,30 @@ def whatif_sensitivity(
     `isolate_element_contribution` replays model_a's OWN trace up to that
     position, then substitutes ONLY model_b's version of that one element, and
     the row compares model_a's baseline delta at that position to THIS
-    isolated delta — not to model_b's own (leaky) cumulative trace value."""
+    isolated delta — not to model_b's own (leaky) cumulative trace value.
+
+    Known blind spot (pre-existing, not introduced by Task 14 — pre-fix, this
+    case misattributed the delta to the wrong element; post-fix nothing is
+    misattributed, it is simply silent): a perturbation whose only effect is at
+    the very first noise-introducing element in the chain (e.g. a booster amp
+    right after the launch transceiver) can show `gsnr_contribution_delta_db`
+    as 0.0 on EVERY row, even though `delta_gsnr_db` (the whole-path summary
+    above) is nonzero. That element's `gsnr_delta_db` is `-inf` in both
+    branches (the adapter's own `prev_gsnr_db` starts at `+inf`), and
+    `_safe_delta`'s `-inf == -inf -> 0.0` handling collapses the row. When this
+    happens, `ase_contribution_delta_db` / `nli_contribution_delta_db` on the
+    same row still correctly pinpoint the perturbed element (both are plain
+    finite-value deltas, not gated by the same infinity collapse).
+
+    Sign/decomposition caveat: rows localize which element's OWN parameters
+    changed between the two branches — they are not a decomposition of
+    `delta_gsnr_db` and do not sum or reconcile to it, and a given row's sign
+    can differ from `delta_gsnr_db`'s sign. This is visible for a pure loss
+    injection: attenuation itself is GSNR-neutral at the point of injection, so
+    the actual GSNR damage from a loss delta shows up as a downstream
+    element's own (physically unchanged) parameters interacting with a
+    different incoming signal level, which can localize to a row whose sign
+    reads positive even though the overall change is a degradation."""
     state_a, rid_a = compute_qot(model=model_a, store=store, oms_sequence=oms_sequence,
                                  direction=direction, mode_id=mode_id, loading=loading)
     state_b, rid_b = compute_qot(model=model_b, store=store, oms_sequence=oms_sequence,
@@ -344,6 +367,14 @@ def whatif_sensitivity(
         isolated = isolate_element_contribution(
             model_a=model_a, model_b=model_b, oms_sequence=oms_sequence,
             direction=direction, mode_id=mode_id, loading=loading, position=position)
+        assert isolated.element_id == eid, (
+            f"isolate_element_contribution resolved position {position} to "
+            f"element {isolated.element_id!r}, but the main propagation "
+            f"(compute_qot on model_a) resolved the same position to {eid!r}. "
+            "isolate_element_contribution independently re-resolves the path "
+            "via _resolve_unpropagated_path rather than reusing compute_qot's "
+            "resolution; this guards against the two paths silently drifting."
+        )
         rows.append(AssetSensitivityRow(
             element_id=eid,
             gsnr_contribution_delta_db=_safe_delta(snap_a.gsnr_delta_db,
