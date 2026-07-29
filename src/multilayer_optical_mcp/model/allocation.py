@@ -256,9 +256,10 @@ def _place_protected(
     model, qot, src, dst, state, grid, ref_mode_id, require_gbps,
     basis, level, best_effort,
     fill_policy: FillPolicy = FillPolicy.FULL,
+    constraints: Optional[dict] = None,
 ) -> Optional[Tuple[SpectrumAssignment, SpectrumAssignment]]:
     dr = compute_disjoint_paths(model, src, dst, basis, level, best_effort,
-                                weight="length")
+                                weight="length", constraints=constraints)
     if dr.path_a is None or dr.path_b is None:
         return None
     trial = dict(state)  # tentative: only commit if both legs place
@@ -298,12 +299,13 @@ def solve_rsa(
     margin-stable, order-independent mode selection; ACTUAL is available for
     order-dependent probing against only what's actually lit — see FillPolicy).
 
-    Known limitation: a demand's `constraints` (e.g. `avoid`) are honored for
+    A demand's own `constraints` (e.g. `avoid`) are honored for both
     UNPROTECTED placement (`_place_unprotected` passes them to `compute_paths`)
-    but NOT for the protection leg of a protected demand (`_place_protected`
-    calls `compute_disjoint_paths` without them) — a protected demand's
-    protection route can still traverse an asset the demand asked to avoid.
-    The top-level `constraints` parameter on this function is also currently
+    and the working+protection pair of a protected demand (`_place_protected`
+    passes them to `compute_disjoint_paths`).
+
+    Known limitation: the top-level `constraints` parameter on THIS function
+    (as opposed to each demand's own `constraints` dict) is currently
     unused/reserved and is not wired to per-demand constraints."""
     grid = SpectrumGrid.default()
     work = build_spectrum_state(model, grid)
@@ -318,7 +320,8 @@ def solve_rsa(
         if d.get("protected", False):
             basis, level, be = _demand_constraints(d)
             pair = _place_protected(model, qot, src, dst, work, grid, ref_mode,
-                                    require, basis, level, be, fill_policy)
+                                    require, basis, level, be, fill_policy,
+                                    constraints=demand_constraints)
             if pair is None:
                 unplaced.append((did, "no disjoint feasible pair"))
                 continue

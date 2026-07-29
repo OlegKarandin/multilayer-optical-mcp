@@ -473,11 +473,13 @@ def build_app(*, model: NetworkModel | None = None,
         {id, src, dst, protected?, required_gbps?, constraints?}. Mode falls out
         of the GNPy GSNR on the chosen route (highest feasible bitrate).
 
-        Known limitation: a demand's `constraints` (e.g. `avoid`) are honored
-        for unprotected placement but NOT for the protection leg of a
-        protected demand — its protection route can still traverse an asset
-        the demand asked to avoid. The top-level `constraints` parameter above
-        is currently unused/reserved, not wired to per-demand constraints."""
+        A demand's own `constraints` (e.g. `avoid`) are honored for both
+        unprotected placement and the working+protection pair of a protected
+        demand.
+
+        Known limitation: the top-level `constraints` parameter above (as
+        opposed to each demand's own `constraints` dict) is currently
+        unused/reserved, not wired to per-demand constraints."""
         model = snapshots.current()
         qot = make_adapter_evaluator(model, results, harvest_cache=harvest_cache)
         return placement_result_dict(

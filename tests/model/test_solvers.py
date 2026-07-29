@@ -415,6 +415,52 @@ def test_solve_rsa_places_routable_demand_despite_unroutable_sibling():
     assert unplaced_ids == {"d-severed"}
 
 
+def test_solve_rsa_protected_demand_honors_avoid_constraint():
+    """Regression: `_place_protected` must thread a demand's own `constraints`
+    into `compute_disjoint_paths`, exactly as `_place_unprotected` already
+    threads them into `compute_paths`.
+
+    `_model_two_paths()` has exactly two A->B routes (oms-north, oms-south),
+    so the ONLY possible disjoint working+protection pair is
+    (oms-north, oms-south). Pre-fix, `_place_protected` ignored `constraints`
+    and would still find and USE that pair even though the demand asked to
+    avoid oms-north -- a real wrong-answer counter-example, not just an
+    exception check. Post-fix, oms-north is pruned before disjoint-pair
+    search, leaving only one surviving route -- no pair of two can be formed,
+    so the demand must come back typed `unplaced` (no exception, no pair that
+    silently crosses the avoided asset)."""
+    from multilayer_optical_mcp.model.allocation import solve_rsa
+    n = _model_two_paths()   # A<->B via oms-north AND oms-south (two routes)
+
+    def fake_qot(*, oms_sequence, direction, mode_id, loading):
+        from multilayer_optical_mcp.model.qot import QoTState
+        return QoTState(gsnr_db=20.0, osnr_db=22.0, margin_db=8.0)
+
+    demands = [
+        {"id": "d-prot", "src": "A", "dst": "B", "protected": True,
+         "constraints": {"avoid": {"assets": ["oms-north"]}}},
+    ]
+    res = solve_rsa(n, fake_qot, demands)
+    assert res.status is SolverStatus.NO_SOLUTION
+    assert res.placements == ()
+    unplaced_ids = {did for did, _ in res.unplaced}
+    assert unplaced_ids == {"d-prot"}
+
+    # Sanity check on the premise: without the avoid constraint, the SAME
+    # topology/demand-shape DOES place the protected pair using oms-north --
+    # confirms the NO_SOLUTION above is caused by honoring `avoid`, not by
+    # some unrelated infeasibility.
+    demands_unconstrained = [
+        {"id": "d-prot", "src": "A", "dst": "B", "protected": True},
+    ]
+    res_unconstrained = solve_rsa(n, fake_qot, demands_unconstrained)
+    assert res_unconstrained.status is SolverStatus.SOLUTION
+    placement = res_unconstrained.placements[0]
+    used_oms = set(placement.working.oms_path.oms_sequence) | \
+        set(placement.protection.oms_path.oms_sequence)
+    assert used_oms == {"oms-north", "oms-south"}
+
+
 # ------------------------------------------------------- compute_disjoint_paths
 
 def test_compute_disjoint_paths_physical_finds_pair():
