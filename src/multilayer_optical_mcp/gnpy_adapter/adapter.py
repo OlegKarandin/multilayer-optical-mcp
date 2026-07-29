@@ -561,6 +561,202 @@ def compute_qot(
     return state, result_id
 
 
+def _resolve_unpropagated_path(
+    model: NetworkModel,
+    oms_sequence: Tuple[str, ...],
+    direction: Direction,
+    loading_for_gnpy: LoadingState,
+    mode,
+):
+    """Build a FRESH gnpy network from *model* and resolve *oms_sequence* to the
+    ordered (uid, element) list plus the launch-primed SI, WITHOUT running the
+    per-element propagation loop.
+
+    Deliberately a standalone duplicate of ``_propagate_loading``'s setup half
+    (path/ROADM/drop-ROADM resolution, SI construction, launch-transceiver feed)
+    rather than a shared refactor of it: this function backs
+    ``isolate_element_contribution`` (Task 14's hybrid-swap sensitivity trace),
+    and ``compute_qot``/``harvest_qot`` must keep their existing behavior for
+    their many other callers untouched. Every call builds brand-new gnpy element
+    instances — never reuses one from a previous call — because gnpy elements
+    carry in-place-mutable state (e.g. EDFA saturation/gain via power_mode) and
+    ``SpectralInformation.__call__`` implementations mutate the SI object they
+    are given in place (``elements.py``'s ``Fiber``/``Roadm``/``Edfa`` write
+    through property setters on the SAME object, not a copy — see
+    ``gnpy.core.info.SpectralInformation.apply_attenuation_db`` etc.), so an
+    already-propagated element or SI reused across two different histories
+    would silently desync from the trace it is meant to reproduce.
+    """
+    from .synthesize import build_gnpy_network, gnpy_design_network
+    eqpt, network = build_gnpy_network(model)
+
+    if direction == Direction.BACKWARD:
+        rev_seq = reverse_oms_sequence(model, oms_sequence)
+        if rev_seq is None:
+            raise ValueError(
+                f"backward QoT requires a paired reverse OMS for every leg of "
+                f"{oms_sequence!r}, but none was found. Build the model via the "
+                f"importer (model_from_abstract_graph) or register reverse-"
+                f"direction OMS so each (src,dst) has a (dst,src) counterpart."
+            )
+        uids = resolve_oms_path_to_uids(model, rev_seq)
+    else:
+        uids = resolve_oms_path_to_uids(model, oms_sequence)
+
+    elements = _path_elements(network, uids)
+
+    # S4-4: append the terminal drop ROADM, exactly as _propagate_loading does.
+    drop_roadm = _roadm_successor(network, elements[-1]) if elements else None
+    if drop_roadm is not None and drop_roadm.uid not in uids:
+        uids = uids + (drop_roadm.uid,)
+        elements = elements + [drop_roadm]
+
+    si = build_si_for_loading(loading_for_gnpy, baud_rate=mode.symbol_rate_baud,
+                              roll_off=mode.roll_off)
+
+    by_uid = {n.uid: n for n in network.nodes}
+    uids_list = list(uids)
+    launch_trx = _find_launch_transceiver(network, uids_list, by_uid)
+    if launch_trx is not None:
+        si = launch_trx(si)
+
+    return network, uids_list, elements, si
+
+
+def isolate_element_contribution(
+    *,
+    model_a: NetworkModel,
+    model_b: NetworkModel,
+    oms_sequence: Tuple[str, ...],
+    direction: Direction,
+    mode_id: str,
+    loading: LoadingState,
+    position: int,
+    center_freq_hz: Optional[float] = None,
+) -> ElementSnapshot:
+    """Isolate one element's OWN marginal GSNR contribution, free of downstream
+    leakage, via a hybrid-propagation swap (Task 14).
+
+    ``whatif_sensitivity`` diffs two branches' full propagations element by
+    element. Even though each element's stored ``gsnr_delta_db`` is already a
+    marginal (hop-to-hop) figure, it still depends on the *input* SI arriving
+    at that element -- which is the product of everything propagated upstream.
+    So a perturbation at one element echoes as a smaller, spurious delta at
+    every element downstream of it, even when those elements' own physical
+    parameters are identical in both branches (confirmed empirically: a +4 dB
+    NF bump on the first amp of a 10-span OMS shows -1.53 dB at that amp, but
+    also +0.29 dB / +0.19 dB / ... at untouched downstream amps).
+
+    This function answers a narrower question: "if ONLY this element's own
+    parameters had model_b's values, holding every upstream element's own
+    contribution fixed at model_a's trace, what would THIS element's own
+    marginal gsnr_delta_db be?" It propagates *model_a*'s own elements for
+    every position strictly before *position*, then substitutes *model_b*'s
+    version of the element AT *position* for the final step, and returns the
+    resulting snapshot. Comparing this isolated value to model_a's own
+    baseline delta at *position* (as ``whatif_sensitivity`` does) yields ~0 for
+    an untouched element (model_b's version has identical physics, so the
+    hybrid trace is indistinguishable from model_a's own) regardless of what
+    changed upstream, and the element's true own-contribution shift when
+    *position* is the perturbed element itself.
+
+    Requires model_a and model_b to resolve to the identical physical path
+    (element uids) -- true for any pair of branches related by
+    inject_degradation, which perturbs impairment parameters only, never
+    topology. Raises ValueError if the resolved paths differ.
+    """
+    mode = model_a.modes.get(mode_id)  # raises KeyError if unknown; shared by both models
+
+    # ---- probe selection: mirrors compute_qot's probe-selection block ----
+    if center_freq_hz is not None:
+        probe = next(
+            (c for c in loading.channels if c.center_freq_hz == center_freq_hz), None
+        )
+        if probe is None:
+            raise ValueError(
+                f"loading has no channel at center_freq {center_freq_hz:.6e} Hz"
+            )
+    else:
+        probe = next((c for c in loading.channels if c.mode_id == mode_id), None)
+        if probe is None:
+            raise ValueError(
+                f"loading does not include a channel for mode {mode_id!r}"
+            )
+
+    loading_for_gnpy = _ensure_min_two_channels(loading, probe.center_freq_hz)
+    loading_for_gnpy = LoadingState(
+        channels=tuple(sorted(loading_for_gnpy.channels,
+                              key=lambda c: c.center_freq_hz)))
+    probe_idx = _find_probe_index(loading_for_gnpy, probe.center_freq_hz)
+
+    net_a, uids_a, elements_a, si = _resolve_unpropagated_path(
+        model_a, oms_sequence, direction, loading_for_gnpy, mode)
+    net_b, uids_b, elements_b, _si_b = _resolve_unpropagated_path(
+        model_b, oms_sequence, direction, loading_for_gnpy, mode)
+
+    if uids_a != uids_b:
+        raise ValueError(
+            "isolate_element_contribution requires model_a and model_b to "
+            "resolve the identical physical path (same OMS/element uids); got "
+            f"{uids_a!r} vs {uids_b!r}. inject_degradation only perturbs "
+            "impairment parameters, never topology -- a mismatch here means "
+            "the two models are not comparable branches of the same network."
+        )
+    if not (0 <= position < len(uids_a)):
+        raise IndexError(
+            f"position {position} out of range for path of length {len(uids_a)}"
+        )
+
+    from gnpy.core.elements import Roadm as _GnpyRoadm
+
+    prev_gsnr_db = math.inf
+    snapshot: Optional[ElementSnapshot] = None
+    for i in range(0, position + 1):
+        if i == position:
+            uid, el, net = uids_b[i], elements_b[i], net_b
+        else:
+            uid, el, net = uids_a[i], elements_a[i], net_a
+
+        if isinstance(el, _GnpyRoadm):
+            from_uid = (
+                uids_a[i - 1] if i > 0
+                else _trx_neighbor_uid(net, el, predecessor=True)
+            )
+            to_uid = (
+                uids_a[i + 1] if i < len(uids_a) - 1
+                else _trx_neighbor_uid(net, el, predecessor=False)
+            )
+            if (from_uid is not None and to_uid is not None
+                    and any(rp.from_degree == from_uid and rp.to_degree == to_uid
+                            for rp in el.roadm_paths)):
+                si = el(si, degree=to_uid, from_degree=from_uid)
+        else:
+            si = el(si)
+
+        gsnr_db, osnr_db = _extract_gsnr_osnr(si, probe_idx)
+        ase_w = float(si.ase[probe_idx])
+        nli_w = float(si.nli[probe_idx])
+        ase_contrib_db = 10.0 * math.log10(ase_w) if ase_w > 0.0 else -math.inf
+        nli_contrib_db = 10.0 * math.log10(nli_w) if nli_w > 0.0 else -math.inf
+        gsnr_delta_db = gsnr_db - prev_gsnr_db
+
+        if i == position:
+            snapshot = ElementSnapshot(
+                element_id=uid,
+                gsnr_db_after=gsnr_db,
+                osnr_db_after=osnr_db,
+                gsnr_delta_db=gsnr_delta_db,
+                ase_contribution_db=ase_contrib_db,
+                nli_contribution_db=nli_contrib_db,
+            )
+
+        if math.isfinite(gsnr_db):
+            prev_gsnr_db = gsnr_db
+
+    assert snapshot is not None  # loop always runs position+1 >= 1 iterations
+    return snapshot
+
+
 def harvest_cache_key(
     model: NetworkModel, oms_sequence: Tuple[str, ...], direction: Direction,
     mode_id: str,

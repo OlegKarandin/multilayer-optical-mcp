@@ -23,7 +23,9 @@ from dataclasses import dataclass
 from typing import List, Tuple
 
 from ..gnpy_adapter.loading import Channel, LoadingState
-from ..gnpy_adapter.adapter import compute_qot, recompute_qot_under_loading
+from ..gnpy_adapter.adapter import (
+    compute_qot, recompute_qot_under_loading, isolate_element_contribution,
+)
 from .network import NetworkModel
 from .qot import QoTState
 from .qot_results import QoTResultStore
@@ -314,25 +316,43 @@ def whatif_sensitivity(
     element downstream of the real cause too, echoing it rather than isolating
     it). Read-only: computes QoT fresh on each model, mutates neither. Both
     result_ids remain retrievable afterward via get_qot_breakdown (same
-    `store` for both calls)."""
+    `store` for both calls).
+
+    Task 14: a naive diff of model_a's and model_b's own per-element
+    gsnr_delta_db (each already a marginal, hop-to-hop figure) still leaks —
+    every element AFTER the real perturbation receives a different *input* SI
+    in model_b's propagation than in model_a's, even when that downstream
+    element's own physical parameters are unchanged, so its own marginal delta
+    shifts too (confirmed empirically: a +4 dB NF bump on one amp showed the
+    correct -1.53 dB there, but also a leaked +0.29 dB / +0.19 dB at untouched
+    downstream amps). Per-row isolation fixes this: for each element position,
+    `isolate_element_contribution` replays model_a's OWN trace up to that
+    position, then substitutes ONLY model_b's version of that one element, and
+    the row compares model_a's baseline delta at that position to THIS
+    isolated delta — not to model_b's own (leaky) cumulative trace value."""
     state_a, rid_a = compute_qot(model=model_a, store=store, oms_sequence=oms_sequence,
                                  direction=direction, mode_id=mode_id, loading=loading)
     state_b, rid_b = compute_qot(model=model_b, store=store, oms_sequence=oms_sequence,
                                  direction=direction, mode_id=mode_id, loading=loading)
-    by_id_a = {s.element_id: s for s in store.get(rid_a).snapshots}
+    snapshots_a = store.get(rid_a).snapshots
     by_id_b = {s.element_id: s for s in store.get(rid_b).snapshots}
-    rows = [
-        AssetSensitivityRow(
+    rows = []
+    for position, snap_a in enumerate(snapshots_a):
+        eid = snap_a.element_id
+        if eid not in by_id_b:
+            continue
+        isolated = isolate_element_contribution(
+            model_a=model_a, model_b=model_b, oms_sequence=oms_sequence,
+            direction=direction, mode_id=mode_id, loading=loading, position=position)
+        rows.append(AssetSensitivityRow(
             element_id=eid,
-            gsnr_contribution_delta_db=_safe_delta(by_id_a[eid].gsnr_delta_db,
-                                                    sb.gsnr_delta_db),
-            ase_contribution_delta_db=_safe_delta(by_id_a[eid].ase_contribution_db,
-                                                   sb.ase_contribution_db),
-            nli_contribution_delta_db=_safe_delta(by_id_a[eid].nli_contribution_db,
-                                                   sb.nli_contribution_db),
-        )
-        for eid, sb in by_id_b.items() if eid in by_id_a
-    ]
+            gsnr_contribution_delta_db=_safe_delta(snap_a.gsnr_delta_db,
+                                                    isolated.gsnr_delta_db),
+            ase_contribution_delta_db=_safe_delta(snap_a.ase_contribution_db,
+                                                   isolated.ase_contribution_db),
+            nli_contribution_delta_db=_safe_delta(snap_a.nli_contribution_db,
+                                                   isolated.nli_contribution_db),
+        ))
     rows.sort(key=lambda r: abs(r.gsnr_contribution_delta_db), reverse=True)
     return SensitivityResult(
         delta_margin_db=state_b.margin_db - state_a.margin_db,

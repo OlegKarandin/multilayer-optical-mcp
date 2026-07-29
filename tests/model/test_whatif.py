@@ -315,3 +315,66 @@ def test_sensitivity_identical_branches_are_all_zero():
                              mode_id=MODE, loading=loading)
     assert res.delta_margin_db == pytest.approx(0.0, abs=1e-9)
     assert all(abs(r.gsnr_contribution_delta_db) < 1e-9 for r in res.rows)
+
+
+# ---------------------------------------------------------------------------
+# Task 14: whatif_sensitivity per-element isolation (no downstream leak)
+# ---------------------------------------------------------------------------
+
+
+def _multispan_model(num_spans: int = 10, span_km: float = 80.0):
+    """A longer OMS than _one_edge_model's 2-span toy: Task 6's investigation
+    found the standard 2-span toy topology's NLI sensitivity to be near-zero,
+    but the leak this test targets is an ASE-ratio/logarithmic effect (an
+    element's own marginal dB delta depends on the noise arriving at it, not
+    on NLI cross-talk specifically), so it is visible even on a modest span
+    count -- 10 spans (800 km) mirrors the audit's own reproduction and gives
+    a comfortably measurable signal."""
+    return model_from_abstract_graph({
+        "nodes": [{"id": 0}, {"id": 1}],
+        "edges": [{"src": 0, "dst": 1, "length_km": span_km * num_spans,
+                   "num_spans": num_spans,
+                   "span_lengths_km": [span_km] * num_spans, "fiber_type": "SSMF",
+                   "amplifier_nf_db": [5.5] * num_spans}],
+    }, modes=_reg())
+
+
+def test_sensitivity_isolates_downstream_leak_on_multispan_path():
+    """Reproduces the audit's exact finding: perturbing the FIRST (most
+    upstream) amp's NF by +4 dB on a 10-span OMS must show a real, dominant
+    delta at that amp, but the naive (pre-fix) diff also leaked a smaller,
+    spurious delta onto every UNTOUCHED downstream amp (+0.29 dB / +0.19 dB /
+    ... measured pre-fix). The existing test above only ever perturbs the
+    LAST amp and checks an upstream neighbor, which is trivially isolated
+    (nothing upstream of the perturbation could leak) and would never have
+    caught this. This test perturbs the FIRST amp and checks DOWNSTREAM
+    untouched amps instead."""
+    model_a = _multispan_model(10)
+    model_b = model_a.clone()
+    model_b.apply_nf_delta("amp_0_1_0", 4.0)  # most upstream amp only
+
+    store = QoTResultStore()
+    loading = LoadingState(channels=(Channel(193.4e12, 100e9, None, MODE),))
+    res = whatif_sensitivity(model_a, model_b, store=store,
+                             oms_sequence=("oms_0_1",), direction=Direction.FORWARD,
+                             mode_id=MODE, loading=loading)
+
+    perturbed = next(r for r in res.rows if r.element_id == "amp_0_1_0")
+    assert perturbed.gsnr_contribution_delta_db == pytest.approx(-1.534694, abs=1e-3)
+
+    # Downstream, untouched amps must now be isolated (~0), not leaking a
+    # fraction of the upstream perturbation.
+    downstream_ids = ["amp_0_1_1", "amp_0_1_2", "amp_0_1_3", "amp_0_1_9"]
+    for eid in downstream_ids:
+        row = next(r for r in res.rows if r.element_id == eid)
+        assert abs(row.gsnr_contribution_delta_db) < 1e-6, (
+            f"{eid} leaked {row.gsnr_contribution_delta_db!r} dB from the "
+            f"upstream perturbation instead of isolating to ~0"
+        )
+
+    # Sanity: the perturbed element's own isolated delta is clearly separated
+    # from (much larger in magnitude than) any downstream row.
+    assert abs(perturbed.gsnr_contribution_delta_db) > 1.0
+    for eid in downstream_ids:
+        row = next(r for r in res.rows if r.element_id == eid)
+        assert abs(row.gsnr_contribution_delta_db) < abs(perturbed.gsnr_contribution_delta_db)
