@@ -7,6 +7,8 @@ legacy intents (greenfield consumes transponders; scarce inventory -> partial; n
 inventory -> no_solution; protected consumes more and yields two disjoint legs;
 protected insufficient -> unplaced) against the new AllocationResult shape.
 """
+import pytest
+
 from multilayer_optical_mcp.model.assets import ROADM
 from multilayer_optical_mcp.model.assets import (
     FiberType, Fiber, Amplifier, OMS, SRLG, TransceiverMode, Router,
@@ -209,3 +211,173 @@ def test_pack_leaves_no_phantom_service_for_unreachable_demand():
     assert result.placements == ()
     assert result.unplaced == (("d1", "no feasible route"),)
     assert "d1" not in {s.id for s in work.list_services()}
+
+
+# --------------------------------------------------------------------------
+# Final-review Finding 1: Task 4's cross-lightpath QoT invalidation (any
+# lightpath sharing an OMS with a newly-provisioned one has its QoT wiped)
+# fires when a LATER provisioning call in the same _pack run invalidates an
+# EARLIER call's just-seeded QoT, leaving that earlier lightpath with NO QoT
+# state at all. Real solver, real GNPy adapter throughout -- no mocks.
+
+
+def test_apply_candidate_seed_wiped_by_sibling_run_then_fixed_by_reseed():
+    """Mechanism-level reproduction of manifestation (a): TWO new-lightpath
+    runs sharing one physical OMS WITHIN A SINGLE apply_candidate call
+    (Task 6's confirmed-real co-located-siblings scenario, reusing Task 6's
+    own mesh fixture from test_fill_policy.py).
+
+    `apply_candidate` itself is deliberately left seeding immediately and
+    unprotected against later-sibling invalidation (see its docstring) -- the
+    correction is the caller's job. This test proves both halves: (1) calling
+    apply_candidate alone still leaves one of the two co-located lightpaths
+    with no QoT state (the raw bug, unchanged by design), and (2) re-applying
+    the `seeded` pairs apply_candidate now returns -- exactly what
+    allocation.py's _pack does in its post-loop corrective pass -- closes it."""
+    from multilayer_optical_mcp.model.assets import Service
+    from multilayer_optical_mcp.model.multilayer_graph import build_layered_graph
+    from multilayer_optical_mcp.model.allocation import make_adapter_evaluator
+    from multilayer_optical_mcp.model.qot_results import QoTResultStore
+    from multilayer_optical_mcp.model.spectrum import FillPolicy
+    from multilayer_optical_mcp.model import objective as objective_mod
+    from tests.model.test_fill_policy import (
+        _shared_oms_mesh_model, _runs_using, place_demands,
+    )
+
+    n, grid = _shared_oms_mesh_model()
+    qot = make_adapter_evaluator(n, QoTResultStore())
+    g = build_layered_graph(n, grid=grid)
+    res = place_demands(n, g, qot, src="C", dst="Z", demand_gbps=100.0,
+                        policy="new_only", k=20, grid=grid,
+                        fill_policy=FillPolicy.ACTUAL)
+    target = next((p for p in res if len(_runs_using(p, "oms_C_M")) == 2), None)
+    assert target is not None, "expected a placement with two new runs sharing oms_C_M"
+
+    work = n.clone()
+    svc = Service(id="svc-a", src_router="router_C", dst_router="router_Z",
+                 demand_gbps=100.0, working_path=())
+    work.add_service(svc)
+
+    seeded = objective_mod.apply_candidate(work, target, svc)
+
+    # (1) The raw bug: apply_candidate alone provisioned 2 new lightpaths
+    # sharing oms_C_M, so the second one's provisioning invalidated the
+    # first's just-seeded QoT (Task 4's cross-lightpath invalidation). Exactly
+    # one of the two new lightpaths must be left with no recorded QoT state.
+    assert len(seeded) == 2, "expected exactly the 2 new co-located runs to be seeded"
+    missing = [lp_id for lp_id, _st in seeded
+              if _no_qot_state(work, lp_id)]
+    assert len(missing) == 1, (
+        f"expected exactly one co-located lightpath to be left without QoT "
+        f"state by apply_candidate alone (the bug); got missing={missing}")
+
+    # (2) The fix: re-applying every returned seed (the last write for each
+    # lightpath) is unconditionally correct -- allocation.py's _pack does
+    # exactly this once, after ALL provisioning for the whole run completes.
+    for lp_id, state in seeded:
+        work.set_qot_state(lp_id, state)
+    for lp_id, _state in seeded:
+        assert not _no_qot_state(work, lp_id), (
+            f"{lp_id} should have a valid QoT state after the corrective re-seed")
+
+
+def _no_qot_state(model, lp_id) -> bool:
+    try:
+        model.get_qot_state(lp_id)
+    except LookupError:
+        return True
+    return False
+
+
+def _line_three_node_model():
+    """C-M-Z line topology (real GNPy adapter, two 80 km OMS both
+    directions). d1 (C->Z) expresses straight through M as ONE lightpath
+    spanning (oms_C_M, oms_M_Z); d2 (C->M) lights its own lightpath on
+    oms_C_M alone. Different IP endpoints (Z vs M) mean d2 can never groom
+    onto d1's lightpath, so both ALWAYS light fresh lightpaths that share
+    physical OMS oms_C_M -- the cross-demand manifestation (c): d2's later
+    provisioning (Task 4's cross-lightpath invalidation) wipes d1's
+    just-seeded QoT within one `_pack` run, deterministically, independent of
+    any grooming/residual-capacity edge case."""
+    from multilayer_optical_mcp.model.topology_import import model_from_abstract_graph
+
+    graph = {
+        "nodes": [{"id": "C"}, {"id": "M"}, {"id": "Z"}],
+        "edges": [
+            {"src": "C", "dst": "M", "length_km": 80.0},
+            {"src": "M", "dst": "Z", "length_km": 80.0},
+        ],
+    }
+    return model_from_abstract_graph(graph, modes=_modes())
+
+
+def _place_cross_demand_scenario():
+    """Runs the real solver on `_line_three_node_model` and returns
+    `(result, work, lp_d1, lp_d2)`. Shared by the two tests below."""
+    from multilayer_optical_mcp.model.allocation import make_adapter_evaluator
+    from multilayer_optical_mcp.model.qot_results import QoTResultStore
+
+    n = _line_three_node_model()
+    qot = make_adapter_evaluator(n, QoTResultStore())
+    demands = [
+        {"id": "d1", "src": "C", "dst": "Z", "demand_gbps": 50.0},
+        {"id": "d2", "src": "C", "dst": "M", "demand_gbps": 50.0},
+    ]
+    result, work = solve_allocation_model(
+        n, qot, demands, spare_inventory={"C": 10, "M": 10, "Z": 10})
+
+    assert result.status is SolverStatus.SOLUTION
+    assert result.unplaced == ()
+    by_demand = {p.demand_id: p for p in result.placements}
+    assert set(by_demand) == {"d1", "d2"}
+    # Confirms the scenario actually landed on the shared-OMS manifestation
+    # this test exists to exercise, not some other placement shape: d1 is a
+    # single run spanning both OMS hops, d2 a single run on oms_C_M alone,
+    # and they share oms_C_M.
+    d1_runs = by_demand["d1"].new_lightpaths
+    d2_runs = by_demand["d2"].new_lightpaths
+    assert len(d1_runs) == 1 and d1_runs[0].oms_sequence == ("oms_C_M", "oms_M_Z")
+    assert len(d2_runs) == 1 and d2_runs[0].oms_sequence == ("oms_C_M",)
+
+    lp_d1 = next(lp.id for lp in work.list_lightpaths()
+                if lp.oms_sequence == ("oms_C_M", "oms_M_Z"))
+    lp_d2 = next(lp.id for lp in work.list_lightpaths()
+                if lp.oms_sequence == ("oms_C_M",))
+    return result, work, lp_d1, lp_d2
+
+
+def test_pack_reseeds_qot_for_colocated_new_lightpaths_across_demands():
+    """End-to-end through the real solve_allocation_model/_pack. BEFORE
+    Finding 1's fix (verified by temporarily disabling _pack's corrective
+    re-seed pass and re-running this exact scenario): d2's provisioning
+    shares oms_C_M with d1's already-provisioned, already-seeded lightpath,
+    so Task 4's cross-lightpath invalidation wipes d1's QoT and nothing ever
+    re-seeds it -- work.get_qot_state(lp_d1) raised LookupError. AFTER the
+    fix, both new lightpaths carry valid QoT state in the returned `work`,
+    matching solve_allocation_model's own 'byte-for-byte the state a real
+    commit would produce' contract."""
+    result, work, lp_d1, lp_d2 = _place_cross_demand_scenario()
+
+    for lp_id in (lp_d1, lp_d2):
+        state = work.get_qot_state(lp_id)   # must not raise LookupError
+        assert state.margin_db == state.margin_db  # finite, sanity (NaN != NaN)
+
+
+def test_pack_reseed_keeps_total_margin_from_skipping_colocated_lightpath():
+    """evaluate_objective's total_margin loop silently `continue`s past any
+    lightpath with no recorded QoT state. Confirms that, post-fix, NEITHER
+    of the two co-located lightpaths from the cross-demand scenario above is
+    silently skipped: total_margin must equal the direct sum of both
+    lightpaths' own margin_db (there are no other lightpaths in this model)."""
+    from multilayer_optical_mcp.model.objective import evaluate_objective
+
+    result, work, lp_d1, lp_d2 = _place_cross_demand_scenario()
+
+    assert {lp.id for lp in work.list_lightpaths()} == {lp_d1, lp_d2}
+    direct_sum = (work.get_qot_state(lp_d1).margin_db
+                 + work.get_qot_state(lp_d2).margin_db)
+
+    obj = evaluate_objective(work)
+    # Every lightpath in the model has a QoT state post-fix, so total_margin
+    # is exactly their sum -- no silent skip.
+    assert obj.total_margin == pytest.approx(direct_sum)

@@ -155,7 +155,7 @@ def test_provision_new_runs_stitches_reused_leg_into_ip_path():
     placement = Placement(reused_lightpaths=("lpAB",), new_lightpaths=(),
                           restored_gbps=50.0, shortfall_gbps=0.0)
 
-    ip_path = provision_new_runs(work, placement, svc, prefix="prot")
+    ip_path, _seeded = provision_new_runs(work, placement, svc, prefix="prot")
 
     assert ip_path == ("ipAB",)
     # Pure reuse: no new lightpath or IP link was provisioned.

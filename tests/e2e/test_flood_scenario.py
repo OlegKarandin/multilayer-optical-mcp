@@ -101,7 +101,7 @@ def _materialize_and_collect(work, placement, svc_v, *, prefix: str, ops: list) 
     "which lightpaths did this create, and what ops reproduce them" logic
     lives in exactly one place."""
     before = {lp.id for lp in work.list_lightpaths()}
-    new_path = objective.provision_new_runs(work, placement, svc_v, prefix=prefix)
+    new_path, _seeded = objective.provision_new_runs(work, placement, svc_v, prefix=prefix)
     apply_op(work, RerouteService(svc_v.id, new_path, which="protection"))
     for lp_id in sorted({lp.id for lp in work.list_lightpaths()} - before):
         lp_obj = work.get_lightpath(lp_id)

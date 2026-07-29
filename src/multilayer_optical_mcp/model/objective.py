@@ -172,15 +172,27 @@ def _mint_unique(work, registry_attr: str, template: str) -> str:
     return f"{template}-{n}"
 
 
+# A (lp_id, QoTState) pair seeded during provisioning of one or more new runs.
+# apply_candidate/provision_new_runs return these so a caller that provisions
+# many runs across many calls (allocation.py's _pack, across both legs and
+# across demands) can do one final corrective re-seed pass after everything is
+# provisioned -- see _pack's post-loop re-seed and the module-level note above
+# RESERVED_COMMITTER_PREFIXES for why cross-run invalidation is possible here.
+SeededQoT = Tuple[Tuple[str, QoTState], ...]
+
+
 def _provision_and_seed_run(work, run, lp_id, ipl_id, site_to_router, grid):
     """Provision one NewLightpathRun as a lightpath+IP link via the real
     apply_op path, then SEED its QoT from the run's gsnr_db (real provision does
     not seed QoT; real commit reaches the same numbers via a post-commit
     recompute). Shared by apply_candidate (working leg) and score_pair
     (protection leg) so both go through identical provisioning logic. Returns
-    (a_router, z_router, lp_id, ipl_id) -- the ACTUAL ids used, which may
+    (a_router, z_router, lp_id, ipl_id, state) -- the ACTUAL ids used, which may
     differ from the requested lp_id/ipl_id if either collided with an id
-    already present in `work` (see _mint_unique)."""
+    already present in `work` (see _mint_unique), plus the QoTState just seeded
+    (a caller provisioning multiple runs may need to re-apply this seed after a
+    LATER run's provisioning invalidates it via cross-lightpath OMS-sharing
+    invalidation -- see NetworkModel._invalidate_qot_sharing_oms)."""
     lp_id = _mint_unique(work, "_lightpaths", lp_id)
     ipl_id = _mint_unique(work, "_ip_links", ipl_id)
     a = site_to_router[run.src_node]
@@ -190,19 +202,33 @@ def _provision_and_seed_run(work, run, lp_id, ipl_id, site_to_router, grid):
                             mode_id=run.mode_id, center_freq_hz=grid.freq(run.lam)),
         ip_link=IPLink(id=ipl_id, a_router=a, z_router=z, lightpath_id=lp_id)))
     req = work.modes.get(run.mode_id).required_gsnr_db
-    work.set_qot_state(lp_id, QoTState(gsnr_db=run.gsnr_db, osnr_db=run.gsnr_db,
-                                       margin_db=run.gsnr_db - req))
-    return a, z, lp_id, ipl_id
+    state = QoTState(gsnr_db=run.gsnr_db, osnr_db=run.gsnr_db,
+                     margin_db=run.gsnr_db - req)
+    work.set_qot_state(lp_id, state)
+    return a, z, lp_id, ipl_id, state
 
 
-def apply_candidate(work, placement, service, *, prefix="cand") -> None:
+def apply_candidate(work, placement, service, *, prefix="cand") -> SeededQoT:
     """Materialize a Placement on `work` (a clone): provision each new run as a
     lightpath+IP link, seed QoT from the run's gsnr_db, then reroute the
-    service's working path onto the placement."""
+    service's working path onto the placement.
+
+    Returns the `(lp_id, QoTState)` pairs seeded for this placement's new runs.
+    A run provisioned earlier in this SAME call can have its just-seeded QoT
+    wiped by a LATER run's provisioning if the two share an OMS (Task 4's
+    cross-lightpath invalidation firing on Task 6's now-common co-located-
+    siblings scenario); the caller (allocation.py's _pack) is responsible for
+    re-applying every returned seed in one final pass after all provisioning
+    for the whole run (all demands, both legs) completes, so the last write
+    always wins. Scoring callers (score_candidate/score_pair) discard this
+    return value -- they operate on a throwaway clone and only need the seed
+    applied within THIS call to be internally consistent for evaluate_objective,
+    not durable against later invalidation from calls they don't make."""
     grid = SpectrumGrid.default()
     site_to_router = {r.site: r.id for r in work.list_routers()}
     lp_to_iplink = {l.lightpath_id: l for l in work.list_ip_links()}
     segments = []
+    seeded = []
     # reused legs: reuse their existing IP link binding
     for lp_id in placement.reused_lightpaths:
         link = lp_to_iplink[lp_id]
@@ -211,38 +237,47 @@ def apply_candidate(work, placement, service, *, prefix="cand") -> None:
     for i, run in enumerate(placement.new_lightpaths):
         lp_id = f"lp-{prefix}-{service.id}-{i}"
         ipl_id = f"ipl-{prefix}-{service.id}-{i}"
-        a, z, lp_id, ipl_id = _provision_and_seed_run(
+        a, z, lp_id, ipl_id, state = _provision_and_seed_run(
             work, run, lp_id, ipl_id, site_to_router, grid)
         segments.append((a, z, ipl_id))
+        seeded.append((lp_id, state))
     ip_path = _stitch_ip_path(segments, service.src_router, service.dst_router)
     apply_op(work, RerouteService(service_id=service.id, ip_path=ip_path))
+    return tuple(seeded)
 
 
-def provision_new_runs(work, placement, service, *, prefix) -> Tuple[str, ...]:
+def provision_new_runs(work, placement, service, *, prefix) -> Tuple[Tuple[str, ...], SeededQoT]:
     """Provision each new run of `placement` as a lightpath + IP link and seed its
     QoT, WITHOUT rerouting any service. Used for a protection leg: a 1:1 idle
     reserve whose transponder/spectrum/margin cost must count but which carries no
-    IP load. Shared by score_pair (which discards the return value -- protection
+    IP load. Shared by score_pair (which discards both return values -- protection
     must not be routed while scoring, see score_pair's docstring) and
-    solve_allocation's protected commit (which uses the return value to stitch
-    Service.protection_path -- see allocation.py's _pack). Returns the ip_path
-    segments would stitch into, same construction as apply_candidate, including
-    reused legs (previously silently dropped -- a protection leg that grooms onto a
-    survivor lightpath had no IP-link segment tracked at all)."""
+    solve_allocation's protected commit (which uses the ip_path to stitch
+    Service.protection_path, and the seed pairs to re-seed after the whole run
+    completes -- see allocation.py's _pack). Returns `(ip_path, seeded)`:
+    `ip_path` is the segments would stitch into, same construction as
+    apply_candidate, including reused legs (previously silently dropped -- a
+    protection leg that grooms onto a survivor lightpath had no IP-link segment
+    tracked at all); `seeded` is the `(lp_id, QoTState)` pairs seeded for this
+    placement's new runs (see apply_candidate's docstring for why a caller
+    provisioning multiple runs must keep and re-apply these)."""
     grid = SpectrumGrid.default()
     site_to_router = {r.site: r.id for r in work.list_routers()}
     lp_to_iplink = {l.lightpath_id: l for l in work.list_ip_links()}
     segments = []
+    seeded = []
     for lp_id in placement.reused_lightpaths:
         link = lp_to_iplink[lp_id]
         segments.append((link.a_router, link.z_router, link.id))
     for i, run in enumerate(placement.new_lightpaths):
         lp_id = f"lp-{prefix}-{service.id}-{i}"
         ipl_id = f"ipl-{prefix}-{service.id}-{i}"
-        a, z, lp_id, ipl_id = _provision_and_seed_run(
+        a, z, lp_id, ipl_id, state = _provision_and_seed_run(
             work, run, lp_id, ipl_id, site_to_router, grid)
         segments.append((a, z, ipl_id))
-    return _stitch_ip_path(segments, service.src_router, service.dst_router)
+        seeded.append((lp_id, state))
+    ip_path = _stitch_ip_path(segments, service.src_router, service.dst_router)
+    return ip_path, tuple(seeded)
 
 
 def placement_materializable(model, placement) -> bool:
@@ -282,5 +317,5 @@ def score_pair(model, working, protection, service, weights=None) -> ObjectiveRe
     work = model.clone()
     apply_candidate(work, working, service, prefix="score-work")
     # provision protection's new lightpaths (no reroute) so their cost is counted
-    provision_new_runs(work, protection, service, prefix="score-prot")
+    _ip_path, _seeded = provision_new_runs(work, protection, service, prefix="score-prot")
     return evaluate_objective(work, weights)

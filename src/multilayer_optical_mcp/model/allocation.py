@@ -444,6 +444,18 @@ def _pack(
 
     placements: List[AllocationPlacement] = []
     unplaced: List[Tuple[str, str]] = []
+    # Every (lp_id, QoTState) seeded across the WHOLE run (all demands, both
+    # legs). Task 4's cross-lightpath QoT invalidation (any lightpath sharing
+    # an OMS with a newly-provisioned one has its QoT wiped) can fire on a
+    # LATER provisioning call and wipe an EARLIER call's just-seeded QoT --
+    # within one apply_candidate/provision_new_runs call (multiple new runs in
+    # one placement), across the working/protection legs of one protected
+    # demand, or across different demands in this loop (Task 6's ACTUAL-policy
+    # fix makes co-located sibling lightpaths on one OMS a common, correctly-
+    # preferred outcome). Re-applying every seed once, after the whole loop
+    # completes, is the last write for every lightpath and is unconditionally
+    # correct regardless of how much invalidation churn happened in between.
+    all_seeded: List[Tuple[str, QoTState]] = []
 
     for d in ordered:
         did, src, dst = d["id"], d["src"], d["dst"]
@@ -498,11 +510,13 @@ def _pack(
             except ValueError:
                 unplaced.append((did, "demand id collides with an existing service"))
                 continue
-            _objective.apply_candidate(work, pair.working, svc)          # provision+seed+reroute
-            protection_ip_path = _objective.provision_new_runs(
+            seeded_working = _objective.apply_candidate(work, pair.working, svc)  # provision+seed+reroute
+            protection_ip_path, seeded_protection = _objective.provision_new_runs(
                 work, pair.protection, svc, prefix="prot")
             apply_op(work, RerouteService(service_id=svc.id, ip_path=protection_ip_path,
                                           which="protection"))
+            all_seeded.extend(seeded_working)
+            all_seeded.extend(seeded_protection)
             _dec_inv(inv, need)
             placements.append(AllocationPlacement(
                 demand_id=did, lever=_lever(pair.working),
@@ -525,7 +539,8 @@ def _pack(
             except ValueError:
                 unplaced.append((did, "demand id collides with an existing service"))
                 continue
-            _objective.apply_candidate(work, pick, svc)                  # provision+seed+reroute
+            seeded_pick = _objective.apply_candidate(work, pick, svc)    # provision+seed+reroute
+            all_seeded.extend(seeded_pick)
             _dec_inv(inv, need)
             placements.append(AllocationPlacement(
                 demand_id=did, lever=_lever(pick),
@@ -533,6 +548,14 @@ def _pack(
                 new_lightpaths=pick.new_lightpaths,
                 restored_gbps=pick.restored_gbps,
                 shortfall_gbps=pick.shortfall_gbps))
+
+    # Final corrective re-seed: re-apply every seed collected above, now that
+    # all provisioning (all demands, both legs) for this run is done. This is
+    # the last write for every new lightpath's QoT, so it is correct
+    # regardless of which earlier seeds Task 4's invalidation wiped along the
+    # way -- see the all_seeded comment above the loop.
+    for lp_id, state in all_seeded:
+        work.set_qot_state(lp_id, state)
 
     status = _status(len(placements) > 0, len(unplaced) == 0)
     return (AllocationResult(status, tuple(placements), tuple(unplaced)), work)
