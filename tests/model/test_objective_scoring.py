@@ -109,6 +109,69 @@ def test_score_pair_scratch_ids_do_not_collide_with_committed_protection_leg(dia
     assert result.transponders > 0.0
 
 
+def test_score_pair_counts_both_legs_margin_when_working_and_protection_share_an_oms(
+        diamond_service):
+    """Final-review Fix round 2 residual: score_pair calls apply_candidate
+    (working leg) and provision_new_runs (protection leg) as two SEPARATE
+    calls on the same throwaway clone. Each call now re-seeds its OWN runs
+    before returning (Fix 1), but that only makes each call internally
+    consistent -- it does not protect one call's already-returned seed from
+    the OTHER call's later provisioning. When working and protection share a
+    physical OMS at different wavelengths (legal: same fiber, no NLI/SRLG
+    conflict at the frequency level; reachable under basis="physical" +
+    best_effort=True -- CLAUDE.md's degraded-restoration case -- or under any
+    relaxed basis like srlg/risk_group/union), provisioning the protection
+    leg invalidates the working leg's seed via Task 4's cross-lightpath
+    invalidation, and evaluate_objective's total_margin loop silently skips
+    the wiped lightpath. This corrupts both total_margin (undercounted) and
+    max_util (a fully-loaded working-leg IP link reads 0.0, since its bound
+    lightpath has no QoT to derive capacity from) -- exactly the "confident
+    wrong number" class CLAUDE.md's derived-capacity/margin-gate rules exist
+    to prevent, on route_service's protected-menu ranking."""
+    model, svc = diamond_service   # empty net + one service svc-AB, omsAB A->B
+    # Working leg: omsAB lam 0. Protection leg: omsAB lam 1 -- same physical
+    # OMS as the working leg, different wavelength (co-located, not a reuse).
+    working = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 0, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+    protection = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 1, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+
+    scored = score_pair(model, working, protection, svc)
+
+    # Ground truth: materialize the same pair on a fresh clone the same way
+    # score_pair does, then sum margin_db over every lightpath that still has
+    # a recorded QoT state -- evaluate_objective's own total_margin loop.
+    work = model.clone()
+    from multilayer_optical_mcp.model.objective import apply_candidate, provision_new_runs
+    seeded_working = apply_candidate(work, working, work.get_service(svc.id),
+                                     prefix="score-work")
+    _ip_path, seeded_protection = provision_new_runs(
+        work, protection, work.get_service(svc.id), prefix="score-prot")
+    assert len(seeded_working) == 1 and len(seeded_protection) == 1
+    for lp_id, state in (*seeded_working, *seeded_protection):
+        work.set_qot_state(lp_id, state)
+
+    direct_sum = sum(work.get_qot_state(lp.id).margin_db for lp in work.list_lightpaths())
+    assert scored.total_margin == pytest.approx(direct_sum)
+
+    # The specific claim under test: BOTH legs' margins counted, and the
+    # working leg's IP link is correctly seen as loaded (not silently 0.0).
+    seeded_margins = [work.get_qot_state(lp_id).margin_db
+                      for lp_id, _st in (*seeded_working, *seeded_protection)]
+    assert all(m > 0 for m in seeded_margins), "expected both legs margin-positive"
+    assert scored.total_margin >= max(seeded_margins), (
+        "total_margin dropped to a single leg's contribution -- the other "
+        "leg's QoT was silently wiped and skipped")
+    assert scored.max_util > 0.0, (
+        "working leg's IP link read as unloaded -- its lightpath's QoT (and "
+        "therefore derived capacity) was wiped by the protection leg's "
+        "later provisioning")
+
+
 def _shrunk_reuse_model() -> NetworkModel:
     """Single OMS A->B, already lit by lpAB and bound to ipAB with spare
     capacity -- a pure-reuse route: no new lightpath needs lighting. Mirrors

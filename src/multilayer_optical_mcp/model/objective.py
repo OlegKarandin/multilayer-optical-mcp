@@ -332,7 +332,16 @@ def score_pair(model, working, protection, service, weights=None) -> ObjectiveRe
     moment route_service was asked to replan the protection leg of an
     already-protected service, an in-scope restoration use case."""
     work = model.clone()
-    apply_candidate(work, working, service, prefix="score-work")
+    seeded_working = apply_candidate(work, working, service, prefix="score-work")
     # provision protection's new lightpaths (no reroute) so their cost is counted
-    _ip_path, _seeded = provision_new_runs(work, protection, service, prefix="score-prot")
+    _ip_path, seeded_protection = provision_new_runs(work, protection, service, prefix="score-prot")
+    # Each call already re-seeds its OWN runs before returning (see apply_candidate/
+    # provision_new_runs), but when working and protection share an OMS -- legal
+    # under a relaxed basis (srlg/risk_group/union), or under best_effort=True's
+    # minimum-overlap fallback -- protection's provisioning can still invalidate
+    # a working-leg lightpath's QoT that this call already collected. Re-apply
+    # both legs' seeds together, after both are provisioned, so total_margin/
+    # max_util reflect every lightpath this candidate pair actually costs.
+    for lp_id, state in (*seeded_working, *seeded_protection):
+        work.set_qot_state(lp_id, state)
     return evaluate_objective(work, weights)
