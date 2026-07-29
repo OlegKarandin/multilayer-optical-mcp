@@ -296,6 +296,10 @@ def test_check_disjointness_endpoints_kwarg_fixes_shared_interior_node():
     path_b = ("omsAM2", "omsM2M1", "omsM1B2")         # true route A->M2->M1->B, correct order
 
     broken = check_disjointness(n, path_a, path_b, basis="physical", level="node")
+    # Characterizes the CURRENT no-endpoints-supplied behavior (positional inference,
+    # still wrong for out-of-order paths). This assertion documents a known limitation,
+    # not a contract -- if a future change narrows or removes the no-endpoints blind
+    # spot, update/remove this assertion rather than treating its failure as a regression.
     assert broken.disjoint is True, broken.shared_assets   # the bug: falsely disjoint
 
     fixed = check_disjointness(n, path_a, path_b, basis="physical", level="node",

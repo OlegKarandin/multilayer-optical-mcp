@@ -398,11 +398,26 @@ def build_app(*, model: NetworkModel | None = None,
     def check_disjointness(
         path_a: list[str], path_b: list[str],
         basis: str = "physical", level: str = "link",
+        endpoints_a: list[str] | None = None,
+        endpoints_b: list[str] | None = None,
     ) -> dict:
         """Audit whether two existing OMS-sequence paths are disjoint under a
         basis ∈ {physical, srlg, risk_group, union} and level ∈ {node, link,
-        srlg, risk_group}. Returns shared_assets/shared_groups when not disjoint."""
-        res = _check_disjointness(snapshots.current(), path_a, path_b, basis, level)
+        srlg, risk_group}. Returns shared_assets/shared_groups when not disjoint.
+
+        `endpoints_a`/`endpoints_b`, when given as [src_node, dst_node], are
+        passed through VERBATIM instead of letting each path infer its own
+        endpoint exclusions positionally from its own oms_sequence[0]/[-1].
+        Positional inference is only correct when a path's OMS-sequence happens
+        to be laid out starting exactly at its true demand source and ending
+        exactly at its true demand destination; a caller that has the true
+        endpoints on hand (e.g. a service's src_router/dst_router resolved to
+        optical nodes) should pass them explicitly. Omitted (None), the prior
+        positional-inference behavior is preserved."""
+        ea = tuple(endpoints_a) if endpoints_a is not None else None
+        eb = tuple(endpoints_b) if endpoints_b is not None else None
+        res = _check_disjointness(snapshots.current(), path_a, path_b, basis, level,
+                                   endpoints_a=ea, endpoints_b=eb)
         return disjointness_result_dict(res)
 
     @app.tool()

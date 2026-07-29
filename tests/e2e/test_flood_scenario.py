@@ -270,13 +270,20 @@ def test_flood_zone_correlation_exposes_gap_and_remedy_lands(german17_built):
     # ---- Step 2: disjointness under two bases -------------------------------
     working_oms = service_oms_sequence(branch, svc.working_path)
     protection_oms = service_oms_sequence(branch, svc.protection_path)
+    # Thread the service's TRUE optical endpoints through explicitly rather than
+    # letting check_disjointness infer each path's endpoints positionally from
+    # its own oms_sequence[0]/[-1] -- mirrors validate.py's _disjointness_findings.
+    svc_endpoints = (branch.get_router(svc.src_router).site,
+                      branch.get_router(svc.dst_router).site)
 
     phys_result = check_disjointness(branch, working_oms, protection_oms,
-                                     basis="physical", level="link")
+                                     basis="physical", level="link",
+                                     endpoints_a=svc_endpoints, endpoints_b=svc_endpoints)
     assert phys_result.disjoint is True   # nothing physical changed
 
     rg_result = check_disjointness(branch, working_oms, protection_oms,
-                                   basis="risk_group", level="link")
+                                   basis="risk_group", level="link",
+                                   endpoints_a=svc_endpoints, endpoints_b=svc_endpoints)
     assert rg_result.disjoint is False
     assert rg_result.shared_groups == ("flood-zone-1",)
 
