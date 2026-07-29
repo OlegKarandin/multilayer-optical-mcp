@@ -2,7 +2,10 @@ from dataclasses import replace
 
 import pytest
 
-from multilayer_optical_mcp.model.assets import Lightpath, IPLink, Router, Service
+from multilayer_optical_mcp.model.assets import (
+    Lightpath, IPLink, Router, Service, TransceiverMode,
+)
+from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model.qot_results import QoTResultStore
 from multilayer_optical_mcp.model.plan import (
@@ -52,6 +55,11 @@ def test_downshift_below_demand_flags_ip_overload():
     v = next(v for v in report.violations if v.type == ViolationType.IP_LINK_OVERLOAD)
     assert v.asset_id == "ipAB"
     assert not v.transient          # overload persists at the committed endpoint
+    # Finding 3: IP_LINK_OVERLOAD's overflow-equivalent key is "offload_gbps",
+    # distinct from PROTECTION_OVERSUBSCRIBED's "overflow_gbps" (different
+    # formula: offered-capacity here vs. working+reserved-capacity there).
+    assert v.detail["offload_gbps"] == pytest.approx(100.0)   # 300 offered - 200 cap
+    assert "overflow_gbps" not in v.detail
 
 
 def test_teardown_under_demand_flags_dropped_traffic():
@@ -219,3 +227,95 @@ def test_protection_oversubscribed_when_working_plus_reserved_exceeds_cap():
     assert detail["working_gbps"] == 300.0 and detail["reserved_gbps"] == 300.0
     assert detail["overflow_gbps"] == 200.0
     assert "svc" in detail["reserving_services"]
+
+
+def test_protection_oversubscribed_does_not_fire_with_zero_reservation():
+    # Finding 2: two services both WORKING over ipCD (450 total) exceed its 400
+    # cap; no service reserves ipCD as protection (reserved == 0 per
+    # reserved_capacity_per_link's real semantics -- it only sums
+    # protection_path demand, and nothing here has a protection_path at all).
+    # Before the fix, `committed = working + 0 > cap` still fired
+    # PROTECTION_OVERSUBSCRIBED, double-reporting a plain capacity overload
+    # under the wrong violation type and implying a reservation that doesn't
+    # exist.
+    m = _ip_over_optical(demand=300.0)               # svc on ipAB (working), cap 400
+    # C-D, not A-B: reusing the A-B node pair for a second OMS makes the
+    # forward/reverse OMS resolution ambiguous once validate_plan's recompute
+    # runs real GNPy (see reverse_oms_sequence) -- an unrelated ambiguity this
+    # test must not trip over.
+    add_bidir_span(m, "C", "D", "omsCD")
+    m.add_lightpath(Lightpath(id="lpCD", oms_sequence=("omsCD",), mode_id="400G",
+                              center_freq_hz=193.7e12))
+    m.add_ip_link(IPLink(id="ipCD", a_router="rA", z_router="rB", lightpath_id="lpCD"))
+    m.set_qot_state("lpCD", QoTState(gsnr_db=12.0, osnr_db=22.0, margin_db=2.0))
+    m.add_service(Service(id="svc2", src_router="rA", dst_router="rB",
+                          demand_gbps=300.0, working_path=("ipCD",)))
+    m.add_service(Service(id="svc3", src_router="rA", dst_router="rB",
+                          demand_gbps=150.0, working_path=("ipCD",)))
+    # Sanity: genuinely no reservation anywhere on ipCD.
+    assert all("ipCD" not in svc.protection_path for svc in m.list_services())
+
+    assert _protection_oversubscription_findings(m) == [], (
+        "reserved==0 on ipCD -> plain capacity overload, not oversubscription"
+    )
+
+    report = validate_plan(m, Plan(ops=()), store=_store())
+    kinds_on_ipCD = {v.type for v in report.violations if v.asset_id == "ipCD"}
+    assert ViolationType.IP_LINK_OVERLOAD in kinds_on_ipCD, (
+        "the genuine 450-over-400 overload must still be reported, just under "
+        "the correct type"
+    )
+    assert ViolationType.PROTECTION_OVERSUBSCRIBED not in kinds_on_ipCD
+
+
+def test_final_state_spectrum_clash_does_not_mistag_persistent_mode_infeasible():
+    # Finding 1: state 0 downshifts lpAB into a mode requiring 100 dB GSNR --
+    # physically unreachable on an 80 km single span -- so MODE_INFEASIBLE is
+    # genuine and nothing in the plan ever un-does it (it persists to the final
+    # state too). State 1 ALSO provisions a second lightpath onto lpAB's exact
+    # (oms, slot), so the final state's spectrum clash short-circuits its
+    # QoT/mode checks entirely. Before the fix, final_keys held only
+    # SPECTRUM_CLASH entries, so state 0's MODE_INFEASIBLE read "not in
+    # final_keys" and was wrongly tagged transient -- even though the final
+    # state's mode check was never actually run, let alone confirmed clear.
+    modes = ModeRegistry([
+        TransceiverMode(id="400G", bitrate_gbps=400.0, required_gsnr_db=10.0,
+                        symbol_rate_baud=87.5e9, channel_spacing_hz=100e9),
+        TransceiverMode(id="IMPOSSIBLE", bitrate_gbps=1.0, required_gsnr_db=100.0,
+                        symbol_rate_baud=87.5e9, channel_spacing_hz=100e9),
+    ])
+    m = new_model(modes)
+    add_bidir_span(m, "A", "B", "omsAB")
+    m.add_router(Router(id="rA", site="A"))
+    m.add_router(Router(id="rB", site="B"))
+    m.add_lightpath(Lightpath(id="lpAB", oms_sequence=("omsAB",), mode_id="400G",
+                              center_freq_hz=193.4e12))
+    m.add_ip_link(IPLink(id="ipAB", a_router="rA", z_router="rB", lightpath_id="lpAB"))
+    m.add_service(Service(id="svc", src_router="rA", dst_router="rB",
+                          demand_gbps=300.0, working_path=("ipAB",)))
+    m.set_qot_state("lpAB", QoTState(gsnr_db=12.0, osnr_db=22.0, margin_db=2.0))
+
+    plan = Plan(ops=(
+        SetModulationFormat(lightpath_id="lpAB", mode_id="IMPOSSIBLE"),
+        ProvisionLightpath(
+            lightpath=Lightpath(id="lpAB2", oms_sequence=("omsAB",), mode_id="400G",
+                                center_freq_hz=193.4e12), ip_link=None),
+    ))
+    report = validate_plan(m, plan, store=_store())
+    assert report.num_states == 2
+    final_index = report.num_states - 1
+
+    mode_infeasible = [v for v in report.violations
+                       if v.type == ViolationType.MODE_INFEASIBLE and v.asset_id == "lpAB"]
+    assert mode_infeasible, "the downshift into an unreachable GSNR requirement must be caught"
+    assert all(v.state_index == 0 for v in mode_infeasible), (
+        "state 1's clash short-circuits its own mode check, so MODE_INFEASIBLE "
+        "is only ever recorded at state 0"
+    )
+    assert all(not v.transient for v in mode_infeasible), (
+        "final state's mode check was skipped (clash short-circuit), not "
+        "confirmed clear -> must NOT be tagged transient"
+    )
+
+    clash = [v for v in report.violations if v.type == ViolationType.SPECTRUM_CLASH]
+    assert clash and all(v.state_index == final_index for v in clash)

@@ -135,7 +135,10 @@ def _ip_findings(model: NetworkModel, dropped_tolerance_gbps: float) -> List[_Fi
             "utilization": u.utilization,
             "offered_gbps": u.offered_gbps,
             "capacity_gbps": u.capacity_gbps,
-            "overflow_gbps": u.offered_gbps - u.capacity_gbps,   # how much to offload
+            # Distinct key from PROTECTION_OVERSUBSCRIBED's "overflow_gbps" -- the
+            # two use different formulas (offered-capacity here vs.
+            # working+reserved-capacity there); see Violation.detail docstring.
+            "offload_gbps": u.offered_gbps - u.capacity_gbps,   # how much to offload
         }))
     # simulate_ip_routing is failover-aware: it already classifies every lost
     # service (link_down / link_removed / unrouted) and excludes those restored
@@ -229,7 +232,13 @@ def _protection_oversubscription_findings(model: NetworkModel) -> List[_Finding]
         except (KeyError, LookupError):
             continue                                 # unknown capacity: not assessable here
         committed = working[link.id] + reserved[link.id]
-        if cap > 0 and committed > cap:
+        # Gate on a GENUINE reservation: with reserved == 0, `committed > cap`
+        # collapses to `working > cap`, a plain capacity overload that
+        # IP_LINK_OVERLOAD already reports (via simulate_ip_routing's congestion
+        # check). Without this gate this violation double-reports that overload
+        # under the wrong type, implying a protection reservation that doesn't
+        # exist (audit finding: PROTECTION_OVERSUBSCRIBED firing with reserved=0).
+        if cap > 0 and reserved[link.id] > 0 and committed > cap:
             reservers = sorted(svc.id for svc in model.list_services()
                                if link.id in svc.protection_path)
             out.append((ViolationType.PROTECTION_OVERSUBSCRIBED, link.id, {
@@ -276,17 +285,34 @@ def validate_plan(
     """
     work = model.clone()
 
-    def state_findings(m: NetworkModel) -> List[_Finding]:
+    # Every finding type state_findings is capable of returning, so the loop
+    # below can tell "final state checked this type and found nothing" (safe to
+    # call an earlier hit transient) apart from "final state never ran this
+    # check" (unknown -- must NOT be tagged transient). See _CHECKED_ALL /
+    # _CHECKED_CLASH_ONLY below.
+    _CHECKED_ALL = frozenset({
+        ViolationType.SPECTRUM_CLASH, ViolationType.MODE_INFEASIBLE,
+        ViolationType.IP_LINK_OVERLOAD, ViolationType.DROPPED_TRAFFIC,
+    })
+    _CHECKED_CLASH_ONLY = frozenset({ViolationType.SPECTRUM_CLASH})
+
+    def state_findings(m: NetworkModel) -> Tuple[List[_Finding], frozenset]:
         # Spectrum first: a clashed state has two carriers on one frequency, so
         # QoT is undefined (you cannot light both). Report the clash + its
         # retune/reroute discriminator and skip the QoT-dependent checks rather
-        # than drive GNPy with a degenerate overlapping-carrier loading.
+        # than drive GNPy with a degenerate overlapping-carrier loading. This
+        # short-circuit is physically correct; it is NOT the bug. The bug (fixed
+        # below) is treating a state whose QoT/IP checks were skipped as if it
+        # had confirmed those finding types clear -- return which types were
+        # actually evaluated so the caller can tell "confirmed clear" apart from
+        # "undetermined."
         clashes = _spectrum_clash_findings(m)
         if clashes:
-            return clashes
+            return clashes, _CHECKED_CLASH_ONLY
         recompute_if_possible(m, store)
-        return (_mode_infeasible_findings(m)
-                + _ip_findings(m, dropped_tolerance_gbps))
+        findings = (_mode_infeasible_findings(m)
+                    + _ip_findings(m, dropped_tolerance_gbps))
+        return findings, _CHECKED_ALL
 
     def endpoint_findings(m: NetworkModel) -> List[_Finding]:
         return (_disjointness_findings(m, basis, level)
@@ -295,12 +321,14 @@ def validate_plan(
 
     if not plan.ops:
         # Validate the standing state (e.g. a fresh disjointness / protection audit).
-        findings = state_findings(work) + endpoint_findings(work)
+        state, _checked = state_findings(work)
+        findings = state + endpoint_findings(work)
         violations = [Violation(t, 0, a, False, d) for (t, a, d) in findings]
         return ValidationReport(violations=tuple(violations), num_states=1)
 
-    # (state_index -> list of findings). State 0 is after the first op.
-    per_state: List[List[_Finding]] = []
+    # (state_index -> (findings, finding-types actually evaluated)). State 0 is
+    # after the first op.
+    per_state: List[Tuple[List[_Finding], frozenset]] = []
     for op in plan.ops:
         try:
             apply_op(work, op)
@@ -317,12 +345,21 @@ def validate_plan(
         per_state.append(state_findings(work))
 
     final_index = len(per_state) - 1
-    final_keys = {(t, a) for (t, a, _) in per_state[final_index]}
+    final_findings, final_checked_types = per_state[final_index]
+    final_keys = {(t, a) for (t, a, _) in final_findings}
 
     violations: List[Violation] = []
-    for idx, findings in enumerate(per_state):
+    for idx, (findings, _checked) in enumerate(per_state):
         for (t, a, d) in findings:
-            transient = idx != final_index and (t, a) not in final_keys
+            # Only call an earlier finding transient when the final state
+            # actually EVALUATED that finding type and came back clean for
+            # (t, a). If the final state short-circuited that check (e.g. its
+            # own spectrum clash skipped QoT/IP evaluation), whether the earlier
+            # finding still holds there is undetermined -- default to NOT
+            # transient rather than falsely reporting it resolved.
+            transient = (idx != final_index
+                         and t in final_checked_types
+                         and (t, a) not in final_keys)
             violations.append(Violation(t, idx, a, transient, d))
 
     # Endpoint properties of the committed plan (never transient): disjointness
