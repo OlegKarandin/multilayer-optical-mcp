@@ -353,17 +353,19 @@ def whatif_sensitivity(
     fiber's OWN row (here +0.044), not a downstream one — every other row,
     including the very next amp, reads exactly 0.0 on `gsnr_contribution_delta_db`,
     which is the isolation working as intended. That row's sign can read
-    positive because a fiber with more loss delivers a weaker signal into the
-    next span, and a weaker signal generates less NLI at that point —
-    attenuation reduces nonlinear interference locally even though it
-    degrades the whole path. The actual whole-path degradation instead shows
-    up on the downstream amp's row as a shift in
-    `ase_contribution_delta_db` / `nli_contribution_delta_db` (here +4.0 /
-    +4.0, matching the +4 dB loss delta): `design_network` re-targets that
-    amp's gain to compensate for the weaker input, which is a real change to
-    its operating point, not a leftover of the perturbed element — while its
-    `gsnr_contribution_delta_db` correctly stays 0.0, since ITS OWN
-    parameters relative to what design_network re-derives are unchanged."""
+    positive because the injected loss lands at that fiber's own input
+    (`extra_loss_db` maps to gnpy's `att_in`), so the signal traversing that
+    same fiber is weaker and generates less NLI inside it: signal and ASE
+    both drop by the full loss delta while NLI drops further, so the local
+    ratio improves even though the whole path degrades. The downstream amp's
+    row instead shows the CAUSE of that degradation, not a share of it:
+    `ase_contribution_delta_db` / `nli_contribution_delta_db` shift by the
+    design-time gain re-target (here +4.0 / +4.0, matching the +4 dB loss
+    delta) — a real change to that amp's operating point, not a leftover of
+    the perturbed element. Its `gsnr_contribution_delta_db` nonetheless stays
+    exactly 0.0: a pure gain change scales signal, ASE and NLI by the same
+    factor, so the ratio (and therefore GSNR) is invariant to it; no row
+    carries `delta_gsnr_db` itself."""
     state_a, rid_a = compute_qot(model=model_a, store=store, oms_sequence=oms_sequence,
                                  direction=direction, mode_id=mode_id, loading=loading)
     state_b, rid_b = compute_qot(model=model_b, store=store, oms_sequence=oms_sequence,
