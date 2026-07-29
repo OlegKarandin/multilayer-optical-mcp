@@ -159,9 +159,24 @@ def path_basis_keys(
     - basis `physical`: raw physical keys. `level=node` compares optical nodes;
       any other level compares spans (fiber/amp/roadm/oms uids).
     - basis `srlg` / `risk_group`: the group ids whose members intersect the
-      path's physical asset set.
+      path's physical asset set. `level` has NO EFFECT for these two bases —
+      `add_srlg`/`add_risk_group` always use the same whole-group-membership
+      reading (a group counts as shared if ANY of its member assets intersects
+      the path's physical footprint, regardless of whether that overlap is a
+      node or a span) no matter which of `node`/`link`/`srlg`/`risk_group` is
+      passed as `level`. This is the coarsest/strictest reading: it never
+      under-reports a correlation, it just doesn't offer the narrower
+      node-only or span-only granularity that `level` implies for `physical`.
+      True per-level SRLG/risk-group granularity (e.g. "only count a group
+      membership that lands on a shared node, not any shared span") is not
+      implemented; no caller currently depends on it (checked
+      route_service.py, allocation.py, solvers.py, and the MCP tool callers —
+      all either default `level` to "link" or pass it as a same-named
+      convention, e.g. `basis="srlg", level="srlg"`, never expecting
+      `level="node"` to narrow an `srlg`/`risk_group`-basis result).
     - basis `union`: union of physical (at the given level) + srlg + risk_group
-      keys — disjoint under union means disjoint under all of them.
+      keys — disjoint under union means disjoint under all of them, subject to
+      the srlg/risk_group level caveat above.
     """
     endpoint_nodes, endpoint_roadms = path_endpoint_exclusions(
         model, oms_sequence, endpoints=endpoints)
@@ -196,11 +211,17 @@ def path_basis_keys(
             keys.update(_NODE + n for n in nodes)
 
     def add_srlg() -> None:
+        # `level` is intentionally not consulted here: whole-group membership
+        # is the only reading implemented for basis="srlg" (see the docstring
+        # above). Any intersection between the group's asset ids and the
+        # path's physical footprint -- node or span -- counts.
         for g in model.list_srlgs():
             if set(g.asset_ids) & phys:
                 keys.add(_SRLG + g.id)
 
     def add_risk_group() -> None:
+        # Same caveat as add_srlg(): `level` is not consulted, whole-group
+        # membership only.
         for g in model.list_risk_groups():
             if set(g.asset_ids) & phys:
                 keys.add(_RG + g.id)

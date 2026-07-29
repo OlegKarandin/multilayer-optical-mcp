@@ -405,6 +405,16 @@ def build_app(*, model: NetworkModel | None = None,
         basis ∈ {physical, srlg, risk_group, union} and level ∈ {node, link,
         srlg, risk_group}. Returns shared_assets/shared_groups when not disjoint.
 
+        Caveat: `level` only has an effect for basis="physical" (and the
+        physical component of basis="union") — `node` compares optical nodes,
+        anything else compares spans. For basis="srlg"/"risk_group", `level`
+        is currently a no-op: both always use whole-group-membership (any
+        overlap between a group's assets and the path's physical footprint,
+        node or span, counts), regardless of which level value is passed.
+        This is the coarsest/strictest reading, so it never under-reports a
+        correlation — it just doesn't offer node-only/span-only granularity
+        for these two bases.
+
         `endpoints_a`/`endpoints_b`, when given as [src_node, dst_node], are
         passed through VERBATIM instead of letting each path infer its own
         endpoint exclusions positionally from its own oms_sequence[0]/[-1].
@@ -429,6 +439,11 @@ def build_app(*, model: NetworkModel | None = None,
         """Find a disjoint pair src->dst under a basis/level. status 'solution'
         for a fully-disjoint pair, 'partial' for the best-effort minimum-overlap
         pair, 'no_solution' when none disjoint and best_effort is false.
+
+        Caveat: `level` only has an effect for basis="physical" (and the
+        physical component of basis="union"); for basis="srlg"/"risk_group"
+        it is currently a no-op — both always use whole-group-membership
+        regardless of level (see check_disjointness's docstring for detail).
 
         Caveat: 'no_solution' can also mean the search was truncated by the
         solver's internal candidate/emission caps before exhaustively proving
@@ -477,7 +492,9 @@ def build_app(*, model: NetworkModel | None = None,
         {id, src, dst, demand_gbps, protected?, constraints?}. `constraints`
         (protected demands only): {basis?, level?, best_effort?} -- basis in
         {physical, srlg, risk_group, union}, level in {node, link, srlg,
-        risk_group}; defaults to physical/link/false when omitted. Returns a
+        risk_group} (level is a no-op for basis srlg/risk_group -- see
+        check_disjointness's docstring); defaults to physical/link/false
+        when omitted. Returns a
         typed solution/partial/no_solution with placed and unplaced demands.
         weights: per-demand priority (demand id -> ordering weight, higher =
         placed first); does not feed evaluate_objective's cost vector."""
