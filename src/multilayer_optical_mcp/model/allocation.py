@@ -449,12 +449,23 @@ def _pack(
     # an OMS with a newly-provisioned one has its QoT wiped) can fire on a
     # LATER provisioning call and wipe an EARLIER call's just-seeded QoT --
     # within one apply_candidate/provision_new_runs call (multiple new runs in
-    # one placement), across the working/protection legs of one protected
+    # one placement; now self-corrected before either function returns -- see
+    # objective.py), across the working/protection legs of one protected
     # demand, or across different demands in this loop (Task 6's ACTUAL-policy
     # fix makes co-located sibling lightpaths on one OMS a common, correctly-
-    # preferred outcome). Re-applying every seed once, after the whole loop
-    # completes, is the last write for every lightpath and is unconditionally
-    # correct regardless of how much invalidation churn happened in between.
+    # preferred outcome). apply_candidate/provision_new_runs only correct
+    # THEIR OWN seeds before returning; a LATER demand in this loop can still
+    # wipe an EARLIER demand's lightpath. Left uncorrected until the very end,
+    # that earlier lightpath reads as cap=0 to _residual_gbps (multilayer_graph)
+    # for every demand routed in between, so a later demand that could have
+    # groomed onto it instead lights a redundant new lightpath -- a real,
+    # wrong placement decision, not just a stale QoT reading. So the
+    # corrective re-seed pass below runs at the END OF EACH iteration (not
+    # just once after the whole loop), making every already-placed
+    # lightpath's QoT correct BEFORE the next demand's routing decision is
+    # made. Accumulating into the same running list and re-applying it in
+    # full each time is safe and idempotent (every entry's state is already
+    # the known-correct value). The loop-end pass is a harmless safety net.
     all_seeded: List[Tuple[str, QoTState]] = []
 
     for d in ordered:
@@ -517,6 +528,13 @@ def _pack(
                                           which="protection"))
             all_seeded.extend(seeded_working)
             all_seeded.extend(seeded_protection)
+            # Per-iteration corrective re-seed (not just once at the end of the
+            # whole loop): protection's provisioning above can wipe working's
+            # just-re-seeded QoT (or vice versa) via cross-lightpath OMS-sharing
+            # invalidation, and this demand's own lightpaths must already read
+            # correctly before the NEXT demand routes -- see all_seeded's comment.
+            for lp_id, state in all_seeded:
+                work.set_qot_state(lp_id, state)
             _dec_inv(inv, need)
             placements.append(AllocationPlacement(
                 demand_id=did, lever=_lever(pair.working),
@@ -541,6 +559,12 @@ def _pack(
                 continue
             seeded_pick = _objective.apply_candidate(work, pick, svc)    # provision+seed+reroute
             all_seeded.extend(seeded_pick)
+            # Per-iteration corrective re-seed -- see the protected branch above
+            # and all_seeded's comment: this demand's lightpath(s) must already
+            # read correct QoT before the NEXT demand's routing decision is made,
+            # not just at the very end of the whole loop.
+            for lp_id, state in all_seeded:
+                work.set_qot_state(lp_id, state)
             _dec_inv(inv, need)
             placements.append(AllocationPlacement(
                 demand_id=did, lever=_lever(pick),
@@ -549,11 +573,11 @@ def _pack(
                 restored_gbps=pick.restored_gbps,
                 shortfall_gbps=pick.shortfall_gbps))
 
-    # Final corrective re-seed: re-apply every seed collected above, now that
-    # all provisioning (all demands, both legs) for this run is done. This is
-    # the last write for every new lightpath's QoT, so it is correct
-    # regardless of which earlier seeds Task 4's invalidation wiped along the
-    # way -- see the all_seeded comment above the loop.
+    # Final corrective re-seed: a safety net, now largely redundant with the
+    # per-iteration re-seed above (each iteration already leaves every
+    # lightpath seeded so far correct). Kept as a cheap, unconditionally-
+    # correct last write in case a future change adds a seeding path that
+    # doesn't route through the per-iteration pass.
     for lp_id, state in all_seeded:
         work.set_qot_state(lp_id, state)
 

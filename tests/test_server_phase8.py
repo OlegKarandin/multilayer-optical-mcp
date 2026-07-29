@@ -135,6 +135,73 @@ def test_route_service_and_evaluate_objective_tools_registered():
     assert menu["service_id"] == "svc1"
 
 
+# ---------------------------------------------------------------------------
+# Final-review Fix 3: cost_vector (route_service_result_dict's `_cand`/`_pair`
+# helpers) is built from route_service._vec, which copies total_margin/scalar
+# straight off ObjectiveResult -- the same non-finite-float risk
+# objective_result_dict already guards with _safe_float. evaluate_objective's
+# total_margin sums EVERY lightpath in the model (not just the candidate's own
+# new run), so a pre-existing failed lightpath elsewhere in the model (real
+# -inf QoT sentinel via inject_failure, production code) propagates straight
+# into every candidate's cost_vector, whether or not that candidate's own
+# route touches the failed asset.
+# ---------------------------------------------------------------------------
+
+
+def test_route_service_tool_sanitizes_nonfinite_cost_vector():
+    import json
+    import math
+    from multilayer_optical_mcp.model.assets import Lightpath
+
+    app = build_app()
+    n = app._snapshots.current()
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+
+    # Span A-B: hosts a pre-existing lightpath with no bound IP link/service --
+    # contributes to evaluate_objective's total_margin sum via
+    # model.list_lightpaths() alone, unrelated to any service being routed.
+    add_bidir_span(n, "A", "B", "omsAB")
+    mode_id = n.modes.list()[0].id
+    n.add_lightpath(Lightpath(id="lp-other", oms_sequence=("omsAB",),
+                              mode_id=mode_id, center_freq_hz=193.4e12))
+
+    # Span C-D: the service actually being routed by route_service, entirely
+    # disjoint from the failed asset below.
+    add_bidir_span(n, "C", "D", "omsCD")
+    n.add_router(Router(id="RC", site="C"))
+    n.add_router(Router(id="RD", site="D"))
+    n.add_service(Service(id="svcCD", src_router="RC", dst_router="RD",
+                          demand_gbps=100.0, working_path=()))
+
+    # Real -inf QoT sentinel on lp-other via production inject_failure (not
+    # mocked) -- propagates into total_margin/scalar for EVERY candidate
+    # route_service scores, including ones that never touch omsAB.
+    out = _call(app, "inject_failure", asset_ids=["f_omsAB"])
+    assert "lp-other" in out["downed_lightpaths"]
+
+    menu = _call(app, "route_service", service_id="svcCD")
+    assert menu["status"] in ("solution", "partial", "no_solution")
+    assert menu["candidates"], "expected at least one candidate for svcCD"
+    cv = menu["candidates"][0]["cost_vector"]
+    assert cv["total_margin"] == "-Infinity"
+    assert cv["scalar"] == "Infinity"
+
+    payload = json.dumps(menu)
+    reloaded = json.loads(payload)
+
+    def _assert_finite(obj):
+        if isinstance(obj, float):
+            assert math.isfinite(obj), f"non-finite float leaked through JSON: {obj!r}"
+        elif isinstance(obj, dict):
+            for v in obj.values():
+                _assert_finite(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                _assert_finite(v)
+
+    _assert_finite(reloaded)
+
+
 def test_evaluate_objective_state_param_reads_the_named_snapshot_not_current():
     app = build_app()
     n = _seed(app)

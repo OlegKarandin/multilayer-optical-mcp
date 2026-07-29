@@ -217,13 +217,17 @@ def apply_candidate(work, placement, service, *, prefix="cand") -> SeededQoT:
     A run provisioned earlier in this SAME call can have its just-seeded QoT
     wiped by a LATER run's provisioning if the two share an OMS (Task 4's
     cross-lightpath invalidation firing on Task 6's now-common co-located-
-    siblings scenario); the caller (allocation.py's _pack) is responsible for
-    re-applying every returned seed in one final pass after all provisioning
-    for the whole run (all demands, both legs) completes, so the last write
-    always wins. Scoring callers (score_candidate/score_pair) discard this
-    return value -- they operate on a throwaway clone and only need the seed
-    applied within THIS call to be internally consistent for evaluate_objective,
-    not durable against later invalidation from calls they don't make."""
+    siblings scenario). This function re-applies every one of ITS OWN seeds in
+    one corrective pass after all of its new runs are provisioned (below),
+    so by the time it returns, every lightpath it just provisioned carries
+    correct QoT -- regardless of how much invalidation churn happened between
+    the individual provisioning calls. That makes the function internally
+    consistent on its own; a caller that provisions MULTIPLE such calls in a
+    loop (allocation.py's _pack, across demands and legs) can still have a
+    LATER call's provisioning wipe an EARLIER call's (already-correct) seed,
+    which is why _pack additionally re-applies every returned seed of its own
+    after each iteration (and once more after the whole loop, as a safety
+    net) -- see _pack's per-iteration re-seed comment."""
     grid = SpectrumGrid.default()
     site_to_router = {r.site: r.id for r in work.list_routers()}
     lp_to_iplink = {l.lightpath_id: l for l in work.list_ip_links()}
@@ -243,6 +247,13 @@ def apply_candidate(work, placement, service, *, prefix="cand") -> SeededQoT:
         seeded.append((lp_id, state))
     ip_path = _stitch_ip_path(segments, service.src_router, service.dst_router)
     apply_op(work, RerouteService(service_id=service.id, ip_path=ip_path))
+    # Corrective re-seed: a later run in the loop above may have wiped an
+    # earlier run's just-seeded QoT via cross-lightpath OMS-sharing
+    # invalidation. Re-applying every seed THIS call collected is the last
+    # write for each of them, making this call internally consistent before
+    # it returns -- see the docstring above.
+    for lp_id, state in seeded:
+        work.set_qot_state(lp_id, state)
     return tuple(seeded)
 
 
@@ -277,6 +288,12 @@ def provision_new_runs(work, placement, service, *, prefix) -> Tuple[Tuple[str, 
         segments.append((a, z, ipl_id))
         seeded.append((lp_id, state))
     ip_path = _stitch_ip_path(segments, service.src_router, service.dst_router)
+    # Corrective re-seed: same rationale as apply_candidate's -- a later run
+    # provisioned above may have wiped an earlier run's just-seeded QoT via
+    # cross-lightpath OMS-sharing invalidation. Re-apply every seed THIS call
+    # collected so this call is internally consistent before it returns.
+    for lp_id, state in seeded:
+        work.set_qot_state(lp_id, state)
     return ip_path, tuple(seeded)
 
 

@@ -333,7 +333,7 @@ def restoration_result_dict(res) -> Dict[str, Any]:
                 "new_lightpaths": [_new_lp(r) for r in c.new_lightpaths],
                 "restored_gbps": c.restored_gbps,
                 "shortfall_gbps": c.shortfall_gbps,
-                "cost_vector": dict(c.cost_vector)}
+                "cost_vector": {k: _safe_float(v) for k, v in c.cost_vector.items()}}
 
     return {"status": res.status.value,
             "service_id": res.service_id,
@@ -362,14 +362,14 @@ def route_service_result_dict(res) -> Dict[str, Any]:
                 "new_lightpaths": [_new_lp_run(r) for r in c.new_lightpaths],
                 "restored_gbps": c.restored_gbps,
                 "shortfall_gbps": c.shortfall_gbps,
-                "cost_vector": dict(c.cost_vector)}
+                "cost_vector": {k: _safe_float(v) for k, v in c.cost_vector.items()}}
 
     def _pair(p) -> dict:
         return {"working": _cand(p.working), "protection": _cand(p.protection),
                 "disjoint": p.disjoint,
                 "shared_assets": list(p.shared_assets),
                 "shared_groups": list(p.shared_groups),
-                "cost_vector": dict(p.cost_vector)}
+                "cost_vector": {k: _safe_float(v) for k, v in p.cost_vector.items()}}
 
     return {"status": res.status.value,
             "service_id": res.service_id,

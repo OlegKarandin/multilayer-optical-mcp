@@ -196,6 +196,87 @@ def test_score_candidate_does_not_collide_with_real_committer_prefix(diamond_ser
     assert result.transponders > 0.0
 
 
+def test_score_candidate_counts_both_colocated_lightpaths_margin():
+    """Final-review Fix 1: score_candidate/score_pair call apply_candidate/
+    provision_new_runs directly on a throwaway scoring clone and never see
+    _pack's external re-seed accumulation, so a co-located-siblings placement
+    (two new lightpath runs sharing one physical OMS -- Task 6's confirmed-
+    real scenario) used to have its SECOND run's provisioning wipe the
+    FIRST's just-seeded QoT (Task 4's cross-lightpath invalidation), and
+    evaluate_objective's total_margin loop silently skips any lightpath with
+    no recorded QoT state -- systematically under-counting exactly the
+    co-located placements Task 6 made a common, correctly-preferred outcome.
+    This under-ranked those candidates in route_service's cost_vector["scalar"]
+    ordering, the opposite of Task 6's intent.
+
+    Now that apply_candidate re-applies its own seeds before returning (Fix
+    1), score_candidate's clone has BOTH lightpaths' QoT correct, and
+    total_margin equals the direct sum of both -- no silent skip."""
+    from multilayer_optical_mcp.model.assets import Service
+    from multilayer_optical_mcp.model.multilayer_graph import build_layered_graph
+    from multilayer_optical_mcp.model.allocation import make_adapter_evaluator
+    from multilayer_optical_mcp.model.qot_results import QoTResultStore
+    from multilayer_optical_mcp.model.spectrum import FillPolicy
+    from tests.model.test_fill_policy import (
+        _shared_oms_mesh_model, _runs_using, place_demands,
+    )
+
+    n, grid = _shared_oms_mesh_model()
+    qot = make_adapter_evaluator(n, QoTResultStore())
+    g = build_layered_graph(n, grid=grid)
+    res = place_demands(n, g, qot, src="C", dst="Z", demand_gbps=100.0,
+                        policy="new_only", k=20, grid=grid,
+                        fill_policy=FillPolicy.ACTUAL)
+    target = next((p for p in res if len(_runs_using(p, "oms_C_M")) == 2), None)
+    assert target is not None, "expected a placement with two new runs sharing oms_C_M"
+
+    svc = Service(id="svc-a", src_router="router_C", dst_router="router_Z",
+                 demand_gbps=100.0, working_path=())
+    n.add_service(svc)
+
+    scored = score_candidate(n, target, svc)
+
+    # Independently materialize the same candidate on a fresh clone (n
+    # already carries svc-a, added above) via apply_candidate's now-self-
+    # corrected seeds, then sum margin_db over EVERY lightpath that still has
+    # a recorded QoT state -- exactly evaluate_objective's own total_margin
+    # loop (model/objective.py). This is the ground truth score_candidate's
+    # total_margin must match; identical to test_score_candidate_matches_real_
+    # commit's pattern above, but on a fixture with co-located siblings.
+    work = n.clone()
+    from multilayer_optical_mcp.model.objective import apply_candidate
+    seeded = apply_candidate(work, target, work.get_service("svc-a"))
+    assert len(seeded) == 2
+
+    def _has_qot(lp_id):
+        try:
+            work.get_qot_state(lp_id)
+            return True
+        except LookupError:
+            return False
+
+    direct_sum = sum(work.get_qot_state(lp.id).margin_db
+                     for lp in work.list_lightpaths() if _has_qot(lp.id))
+    assert scored.total_margin == pytest.approx(direct_sum)
+
+    # The specific claim under test: BOTH co-located siblings' margins (not
+    # just one) are counted. Pre-Fix-1, apply_candidate would have left one
+    # of the two `seeded` lightpaths with no QoT state (see
+    # test_apply_candidate_self_corrects_seed_wiped_by_sibling_run), so
+    # total_margin would have silently dropped its (positive) contribution --
+    # reading strictly lower than the true value. Confirm both margins are
+    # positive contributors, and that total_margin exceeds what it would be
+    # with either single one omitted.
+    seeded_margins = [work.get_qot_state(lp_id).margin_db for lp_id, _st in seeded]
+    assert all(m > 0 for m in seeded_margins), "expected both siblings margin-positive"
+    other_lps_sum = direct_sum - sum(seeded_margins)
+    for omit in seeded_margins:
+        under_count = other_lps_sum + (sum(seeded_margins) - omit)
+        assert scored.total_margin > under_count, (
+            "total_margin must reflect BOTH co-located lightpaths' margins, "
+            "not just one (the pre-Fix-1 under-count)")
+
+
 def test_apply_candidate_disambiguates_on_id_collision(diamond_service):
     """A real committer re-processing the same service/demand id after its
     prior lightpath was cut must not silently overwrite (or crash on) the
