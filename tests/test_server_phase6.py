@@ -285,3 +285,72 @@ def test_recompute_qot_under_loading_tool_still_tolerates_shared_frequency():
     ]
     out = _call(app, "recompute_qot_under_loading", loading_channels=loading_channels)
     assert "lpAB" in out
+
+
+# ---------------------------------------------------------------------------
+# Final-review Finding 2: 3 more non-finite-float JSON leak sites Task 13's
+# scope didn't cover -- recompute_qot_under_loading's own tool body,
+# validation_report_dict's per-violation `detail` dict, and
+# objective_result_dict's total_margin/scalar. Same technique as Task 13's
+# own tests: a real inject_failure write (production code, not mocked)
+# produces the -inf sentinel; each site must sanitize it.
+# ---------------------------------------------------------------------------
+
+
+def test_recompute_qot_under_loading_tool_sanitizes_failed_asset_margin():
+    app = build_app()
+    mode_id = _seed_branch_with_lightpath(app)
+    # inject_failure writes the real -inf QoT sentinel (whatif.inject_failure);
+    # recompute_qot_under_loading's own S8-1 logic (adapter.py) re-applies that
+    # sentinel rather than resurrecting the lightpath with a feasible GSNR.
+    _call(app, "inject_failure", asset_ids=["fAB"])
+
+    loading_channels = [{"center_freq_hz": 193.4e12, "slot_width_hz": 100e9,
+                         "power_dbm": None, "mode_id": mode_id}]
+    out = _call(app, "recompute_qot_under_loading", loading_channels=loading_channels)
+    row = out["lpAB"]
+    assert row["margin_db"] == "-Infinity"
+    assert row["gsnr_db"] == "-Infinity"
+    assert row["osnr_db"] == "-Infinity"
+
+    payload = json.dumps(out)
+    _assert_json_finite(json.loads(payload))
+
+
+def test_validate_plan_tool_sanitizes_mode_infeasible_detail_floats():
+    app = build_app()
+    _seed_branch_with_lightpath(app)
+    # inject_failure writes the real -inf QoT sentinel for lpAB (crosses fAB).
+    _call(app, "inject_failure", asset_ids=["fAB"])
+
+    # Empty-ops plan validates the standing state (validate.py: `if not
+    # plan.ops`), which is enough to surface lpAB's MODE_INFEASIBLE finding
+    # (margin_db < 0) without needing any actual plan mutation.
+    out = _call(app, "validate_plan", plan={"ops": []})
+    assert out["ok"] is False
+    v = next(v for v in out["violations"] if v["type"] == "mode_infeasible")
+    assert v["detail"]["margin_db"] == "-Infinity"
+    assert v["detail"]["gsnr_db"] == "-Infinity"
+    # deficit_db = required_gsnr_db - gsnr_db = required - (-inf) = +inf.
+    assert v["detail"]["deficit_db"] == "Infinity"
+    # Non-float values in the same detail dict must pass through unchanged.
+    assert isinstance(v["detail"]["feasible_downshift_modes"], list)
+
+    payload = json.dumps(out)
+    _assert_json_finite(json.loads(payload))
+
+
+def test_evaluate_objective_tool_sanitizes_total_margin_and_scalar():
+    app = build_app()
+    _seed_branch_with_lightpath(app)
+    # inject_failure writes the real -inf QoT sentinel for lpAB; evaluate_objective's
+    # total_margin sums every lightpath's margin_db, so -inf propagates straight
+    # into total_margin, and from there into the weighted scalar.
+    _call(app, "inject_failure", asset_ids=["fAB"])
+
+    out = _call(app, "evaluate_objective")
+    assert out["total_margin"] == "-Infinity"
+    assert out["scalar"] == "Infinity"   # scalar subtracts total_margin (- -inf = +inf)
+
+    payload = json.dumps(out)
+    _assert_json_finite(json.loads(payload))

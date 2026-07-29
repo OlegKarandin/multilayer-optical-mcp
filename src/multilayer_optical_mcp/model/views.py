@@ -343,11 +343,14 @@ def restoration_result_dict(res) -> Dict[str, Any]:
 
 def objective_result_dict(res) -> Dict[str, Any]:
     """Serialize an ObjectiveResult: the 7-term cost vector plus the weighted
-    scalar (total_margin is the sole benefit term, already subtracted in scalar)."""
+    scalar (total_margin is the sole benefit term, already subtracted in scalar).
+    `total_margin`/`scalar` can carry a non-finite float (e.g. a failed asset's
+    -inf margin sentinel propagating into the sum) -- sanitized at this boundary
+    like every other QoT-derived float (see _safe_float)."""
     return {"spectrum_used": res.spectrum_used, "transponders": res.transponders,
             "max_util": res.max_util, "dropped_traffic": res.dropped_traffic,
-            "added_latency": res.added_latency, "total_margin": res.total_margin,
-            "services_at_risk": res.services_at_risk, "scalar": res.scalar}
+            "added_latency": res.added_latency, "total_margin": _safe_float(res.total_margin),
+            "services_at_risk": res.services_at_risk, "scalar": _safe_float(res.scalar)}
 
 
 def route_service_result_dict(res) -> Dict[str, Any]:
@@ -379,13 +382,20 @@ def route_service_result_dict(res) -> Dict[str, Any]:
 def validation_report_dict(report) -> Dict[str, Any]:
     """Serialize a ValidationReport: ok/num_states plus the typed violation list,
     each violation carrying its state_index, transient flag, and remediation
-    detail (Decision 4: the detail points the agent at the right fix)."""
+    detail (Decision 4: the detail points the agent at the right fix).
+    `detail` is `Dict[str, Any]` -- not every value is a float (e.g.
+    SPECTRUM_CLASH's "lightpaths" is a list of ids) -- so each value is
+    sanitized individually via _safe_float, which passes non-float values
+    through unchanged; this catches the float-valued keys (margin_db, gsnr_db,
+    deficit_db, offload_gbps, overflow_gbps, ...) that can carry a non-finite
+    QoT-derived float (e.g. a failed asset's -inf margin sentinel)."""
     return {
         "ok": report.ok,
         "num_states": report.num_states,
         "violations": [
             {"type": v.type.value, "state_index": v.state_index,
-             "asset_id": v.asset_id, "transient": v.transient, "detail": v.detail}
+             "asset_id": v.asset_id, "transient": v.transient,
+             "detail": {k: _safe_float(dv) for k, dv in v.detail.items()}}
             for v in report.violations
         ],
     }

@@ -186,9 +186,9 @@ def build_app(*, model: NetworkModel | None = None,
         broadcast_hz = _unattributed_channel_freqs_hz(snapshots.current(), loading)
         result = {
             lp: {
-                "gsnr_db": s.gsnr_db,
-                "osnr_db": s.osnr_db,
-                "margin_db": s.margin_db,
+                "gsnr_db": _safe_float(s.gsnr_db),
+                "osnr_db": _safe_float(s.osnr_db),
+                "margin_db": _safe_float(s.margin_db),
                 "mode_feasible": s.mode_feasible,
                 "limiting_element_id": s.limiting_element_id,
                 "result_id": rid,
@@ -219,6 +219,7 @@ def build_app(*, model: NetworkModel | None = None,
         affected_services_dict,
         margin_sweep_dict, degradation_report_dict, failure_report_dict,
         restoration_result_dict, max_feasible_mode_dict, sensitivity_result_dict,
+        _safe_float,
     )
     from .model.restoration import compute_restoration as _compute_restoration
     from .model.whatif import (
@@ -382,7 +383,10 @@ def build_app(*, model: NetworkModel | None = None,
         src: str, dst: str, k: int = 3, constraints: dict | None = None,
     ) -> dict:
         """k-shortest OMS routes from src to dst over the optical layer.
-        Returns a typed status; no route yields status 'no_solution'."""
+        Returns a typed status; no route yields status 'no_solution'. Assets
+        marked failed (inject_failure) are automatically excluded from the
+        search graph, on top of any explicit `constraints["avoid"]` — a route
+        this tool would have returned before the failure may no longer appear."""
         if k < 1:
             # Task-8-fix reviewer's Minor #3: k=0 falls through the solver's
             # `if emitted >= k: return` on its very first check, yielding an
@@ -438,7 +442,9 @@ def build_app(*, model: NetworkModel | None = None,
     ) -> dict:
         """Find a disjoint pair src->dst under a basis/level. status 'solution'
         for a fully-disjoint pair, 'partial' for the best-effort minimum-overlap
-        pair, 'no_solution' when none disjoint and best_effort is false.
+        pair, 'no_solution' when none disjoint and best_effort is false. Assets
+        marked failed (inject_failure) are automatically excluded from the
+        search graph.
 
         Caveat: `level` only has an effect for basis="physical" (and the
         physical component of basis="union"); for basis="srlg"/"risk_group"
