@@ -451,16 +451,15 @@ def _pack(
             unplaced.append((did, "no router at endpoint"))
             continue
 
-        # Model the demand as a Service on `work`; committing it via apply_candidate
-        # reroutes it, registering IP load so the next demand sees reduced residual.
+        # Model the demand as a Service; registered on `work` only once every
+        # routing/disjoint-pair/inventory check below has succeeded for this
+        # demand, so a demand that fails any of those checks leaves no phantom
+        # Service(working_path=()) behind in `work` (only the collision case --
+        # a brand-new id can still collide with one added by an earlier demand
+        # in this same loop -- is caught here, at add_service time).
         svc = Service(id=did, src_router=site_to_router[src],
                       dst_router=site_to_router[dst], demand_gbps=gbps,
                       working_path=())
-        try:
-            work.add_service(svc)
-        except ValueError:
-            unplaced.append((did, "demand id collides with an existing service"))
-            continue
 
         # Rebuilt every iteration, not hoisted above the loop: `work`'s loading
         # changes each time a demand is placed (a new lightpath lit or a
@@ -487,6 +486,15 @@ def _pack(
             if not _inv_ok(inv, need):
                 unplaced.append((did, "insufficient transponders"))
                 continue
+            # Only now register the Service on `work` -- routing, disjoint-pair,
+            # and inventory checks have all passed, so apply_candidate/
+            # provision_new_runs (which reroute by service_id and require the
+            # service already present) have something to find.
+            try:
+                work.add_service(svc)
+            except ValueError:
+                unplaced.append((did, "demand id collides with an existing service"))
+                continue
             _objective.apply_candidate(work, pair.working, svc)          # provision+seed+reroute
             protection_ip_path = _objective.provision_new_runs(
                 work, pair.protection, svc, prefix="prot")
@@ -506,6 +514,13 @@ def _pack(
             need = _tp_need(pick)
             if not _inv_ok(inv, need):
                 unplaced.append((did, "insufficient transponders"))
+                continue
+            # Only now register the Service on `work` -- see the protected
+            # branch above for why this must come after the checks.
+            try:
+                work.add_service(svc)
+            except ValueError:
+                unplaced.append((did, "demand id collides with an existing service"))
                 continue
             _objective.apply_candidate(work, pick, svc)                  # provision+seed+reroute
             _dec_inv(inv, need)

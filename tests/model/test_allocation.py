@@ -172,3 +172,40 @@ def test_pack_records_unplaced_on_service_id_collision():
     result, _work = solve_allocation_model(n, _hi_qot(), demands, spare_inventory={"A": 10, "Z": 10})
     assert result.unplaced and result.unplaced[0][0] == "d1"
     assert "exist" in result.unplaced[0][1] or "collide" in result.unplaced[0][1]
+
+
+def test_pack_leaves_no_phantom_service_for_unroutable_demand():
+    """Regression for the audit's Important finding: a brand-new demand id
+    (no collision) that fails a downstream check -- here, insufficient
+    transponder inventory, discovered only after the route is harvested --
+    must not leave a phantom Service(working_path=()) registered on `work`.
+    It must show up only in AllocationResult.unplaced."""
+    n = _two_routes()
+    demands = [{"id": "d1", "src": "A", "dst": "Z", "demand_gbps": 100.0}]
+    result, work = solve_allocation_model(
+        n, _hi_qot(), demands, spare_inventory={"A": 0, "Z": 0})
+
+    assert result.status is SolverStatus.NO_SOLUTION
+    assert result.placements == ()
+    assert result.unplaced == (("d1", "insufficient transponders"),)
+    assert "d1" not in {s.id for s in work.list_services()}
+
+
+def test_pack_leaves_no_phantom_service_for_unreachable_demand():
+    """Same regression, via the 'no feasible route' branch: src and dst have
+    routers but no OMS path connects them at all."""
+    n = NetworkModel(modes=_modes())
+    for node in ("A", "Z"):
+        n.add_roadm(ROADM(id=f"roadm_{node}"))
+    n.add_router(Router(id="r_A", site="A"))
+    n.add_router(Router(id="r_Z", site="Z"))
+    # No OMS at all between A and Z: any route harvest must come up empty.
+
+    demands = [{"id": "d1", "src": "A", "dst": "Z", "demand_gbps": 100.0}]
+    result, work = solve_allocation_model(
+        n, _hi_qot(), demands, spare_inventory={"A": 10, "Z": 10})
+
+    assert result.status is SolverStatus.NO_SOLUTION
+    assert result.placements == ()
+    assert result.unplaced == (("d1", "no feasible route"),)
+    assert "d1" not in {s.id for s in work.list_services()}
