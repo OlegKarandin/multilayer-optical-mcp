@@ -320,6 +320,77 @@ def test_compute_paths_severed_by_avoid_is_typed_no_solution():
     assert res.paths == ()
 
 
+def test_compute_paths_excludes_oms_crossing_failed_asset():
+    """Regression for the audit's failed-assets-never-consulted finding: a
+    fiber marked failed via inject_failure must be excluded from the search
+    graph, not merely surfaced later as a -inf QoT sentinel. Pre-fix, k=2 on
+    this topology returns BOTH oms-north and oms-south (see
+    test_compute_paths_returns_both_routes) -- the counter-example this test
+    guards against is oms-north (which crosses the now-failed fiber-north)
+    reappearing in the result."""
+    from multilayer_optical_mcp.model.whatif import inject_failure
+    n = _model_two_paths()
+    inject_failure(n, ("fiber-north",))
+    res = compute_paths(n, "A", "B", k=2)
+    assert res.status is SolverStatus.SOLUTION
+    found = {p.oms_sequence for p in res.paths}
+    assert found == {("oms-south",)}, found   # oms-north must NOT reappear
+
+
+def test_compute_paths_all_routes_failed_is_typed_no_solution():
+    """Both routes failed -> typed NO_SOLUTION, never an exception and never a
+    solution that crosses a failed fiber."""
+    from multilayer_optical_mcp.model.whatif import inject_failure
+    n = _model_two_paths()
+    inject_failure(n, ("fiber-north", "fiber-south"))
+    res = compute_paths(n, "A", "B", k=2)
+    assert res.status is SolverStatus.NO_SOLUTION
+    assert res.paths == ()
+
+
+def test_compute_disjoint_paths_excludes_pair_crossing_failed_asset():
+    """Regression for the same finding at compute_disjoint_paths: with only
+    two node-disjoint routes and one failed, no disjoint PAIR can be formed
+    (only one usable route survives) -- must be typed NO_SOLUTION, never a
+    'solution' pairing a survivor with the failed route. Pre-fix, this
+    topology has exactly the physically-disjoint pair (oms-north, oms-south)
+    (see test_compute_disjoint_paths_physical_finds_pair); the counter-example
+    guarded against is that pair (or any pair containing oms-north)
+    reappearing after fiber-north is failed."""
+    from multilayer_optical_mcp.model.whatif import inject_failure
+    n = _model_two_paths()
+    inject_failure(n, ("fiber-north",))
+    res = compute_disjoint_paths(n, "A", "B", basis="physical", level="link",
+                                 best_effort=False)
+    assert res.status is SolverStatus.NO_SOLUTION
+    assert res.path_a is None and res.path_b is None
+
+    # best_effort=True must not manufacture a pair out of thin air either --
+    # there is only one surviving candidate route, so no pair exists at all.
+    res_be = compute_disjoint_paths(n, "A", "B", basis="physical", level="link",
+                                    best_effort=True)
+    assert res_be.status is SolverStatus.NO_SOLUTION
+
+
+def test_compute_disjoint_paths_finds_survivor_pair_when_third_route_available():
+    """With a THIRD, topologically distinct route available, failing one of
+    two SRLG-sharing trunk parallels must not just collapse to NO_SOLUTION --
+    the solver must route around the failure and still find a genuine
+    disjoint pair among the survivors (the remaining trunk parallel + the
+    distinct A->C->B route), and that pair must never include the failed
+    oms-p0/pfib0."""
+    from multilayer_optical_mcp.model.whatif import inject_failure
+    n = _model_parallels_plus_distinct_route(n_parallels=2)   # oms-p0, oms-p1 (trunk) + oms-AC/oms-CB
+    inject_failure(n, ("pfib0",))   # fail one of the two trunk parallels' fiber
+    res = compute_disjoint_paths(n, "A", "B", basis="srlg", level="srlg",
+                                 best_effort=False)
+    assert res.status is SolverStatus.SOLUTION
+    assert res.disjoint is True
+    pair = {res.path_a.oms_sequence, res.path_b.oms_sequence}
+    assert pair == {("oms-p1",), ("oms-AC", "oms-CB")}
+    assert "oms-p0" not in {oms for path in pair for oms in path}
+
+
 def test_solve_rsa_places_routable_demand_despite_unroutable_sibling():
     """The same bug at the allocation layer: a batch with one routable demand
     and one demand severed by avoid must place the routable one, recording

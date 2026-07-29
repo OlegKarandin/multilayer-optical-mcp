@@ -111,16 +111,30 @@ def oms_length_km(model: NetworkModel, oms_id: str) -> float:
     return total
 
 
-def _avoid_sets(constraints: Optional[dict]) -> Tuple[frozenset, frozenset, frozenset]:
+def _avoid_sets(
+    model: NetworkModel, constraints: Optional[dict],
+) -> Tuple[frozenset, frozenset, frozenset]:
     """Extract (avoid_assets, avoid_srlgs, avoid_risk_groups) from a constraints
-    dict. Missing/empty -> empty sets (no pruning).
+    dict, folding in `model.failed_assets()`. Missing/empty constraints ->
+    avoid_assets is exactly the failed-asset set (still empty on a model with no
+    failures, so behavior for the no-failure case is unchanged).
 
     S6-7 fix (2026-07-24): srlgs and risk_groups are now two distinct namespaces
     (mirrors exposure.py's srlg:/rg: keys) instead of one risk_groups key matching
     both static SRLGs and dynamic RiskGroups — an id collision between the two no
-    longer silently expands both."""
+    longer silently expands both.
+
+    Task-9 fix (2026-07-29): routing previously never consulted
+    `model.failed_assets()`, so `compute_paths`/`compute_disjoint_paths` could
+    hand back a typed SOLUTION that routes straight onto a fiber `inject_failure`
+    had already marked dead — the -inf QoT sentinel only bites once QoT is
+    computed on the resulting path, not at the routing/graph-search stage. Folding
+    failed_assets() into avoid_assets here — the SAME set `forbidden_oms` already
+    prunes on — reuses the existing avoid-constraint filtering mechanism instead
+    of adding a second, parallel one."""
     avoid = (constraints or {}).get("avoid") or {}
-    return (frozenset(avoid.get("assets", ())),
+    avoid_assets = frozenset(avoid.get("assets", ())) | model.failed_assets()
+    return (avoid_assets,
             frozenset(avoid.get("srlgs", ())),
             frozenset(avoid.get("risk_groups", ())))
 
@@ -379,7 +393,7 @@ def compute_paths(
 ) -> RoutingResult:
     """k-shortest OMS routes src->dst (`weight` ∈ {"hops", "length"}). No route
     -> typed NO_SOLUTION."""
-    avoid_assets, avoid_srlgs, avoid_rgs = _avoid_sets(constraints)
+    avoid_assets, avoid_srlgs, avoid_rgs = _avoid_sets(model, constraints)
     forbidden = forbidden_oms(model, avoid_assets, avoid_srlgs, avoid_rgs)
     paths = tuple(_enumerate_oms_paths(model, src, dst, k, weight=weight, forbidden=forbidden))
     if not paths:
@@ -472,7 +486,7 @@ def compute_disjoint_paths(
     pair, and a truncated search returns the same NO_SOLUTION as a proven one.
     On a very large or highly-parallel topology, a NO_SOLUTION result should
     not be read as full-confidence proof that no disjoint pair exists."""
-    avoid_assets, avoid_srlgs, avoid_rgs = _avoid_sets(constraints)
+    avoid_assets, avoid_srlgs, avoid_rgs = _avoid_sets(model, constraints)
     forbidden = forbidden_oms(model, avoid_assets, avoid_srlgs, avoid_rgs)
     cands = list(_enumerate_oms_paths(model, src, dst, _DISJOINT_EMISSION_CAP,
                                       weight=weight, forbidden=forbidden,
