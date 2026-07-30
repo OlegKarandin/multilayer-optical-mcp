@@ -614,18 +614,110 @@ def build_app(*, model: NetworkModel | None = None,
             }
         return validation_report_dict(report)
 
+    def _occupied_slot_error(
+        model, oms_sequence: tuple, center_freq_hz: float,
+    ) -> dict | None:
+        """Reject a genuine spectrum clash BEFORE mutation. Mirrors
+        validate.py's _spectrum_clash_findings occupancy-detection pattern
+        (per-OMS occupancy built by skipping off-grid carriers, since a
+        read-path scan over pre-existing lightpaths must never raise on an
+        unrelated off-grid entry) rather than calling build_spectrum_state
+        directly (which raises on the first off-grid carrier it meets,
+        including ones with nothing to do with this request).
+
+        `grid.slot_of(center_freq_hz)` for the REQUESTED frequency is
+        deliberately left uncaught: an off-grid request still surfaces as a
+        raw ValueError, unchanged from before this check existed.
+        Returns a typed error dict (unmutated model) or None when the slot
+        is free on every OMS in `oms_sequence`."""
+        grid = SpectrumGrid.default()
+        slot = grid.slot_of(center_freq_hz)
+        occ: dict[str, list[str]] = {}
+        for lp in model.list_lightpaths():
+            try:
+                lp_slot = grid.slot_of(lp.center_freq_hz)
+            except ValueError:
+                continue
+            if lp_slot != slot:
+                continue
+            for oms_id in lp.oms_sequence:
+                occ.setdefault(oms_id, []).append(lp.id)
+        clashes = {oms_id: sorted(occ[oms_id]) for oms_id in oms_sequence if oms_id in occ}
+        if not clashes:
+            return None
+        return {
+            "error": "spectrum_clash",
+            "detail": (
+                f"center_freq_hz {center_freq_hz:.6e} Hz (slot {slot}) is already "
+                f"occupied on OMS {sorted(clashes)} by existing lightpath(s); "
+                f"retune to a free slot on those OMS or choose a different path."
+            ),
+            "slot": slot,
+            "center_freq_hz": center_freq_hz,
+            "oms_clashes": [{"oms_id": oms_id, "lightpaths": lps}
+                            for oms_id, lps in sorted(clashes.items())],
+        }
+
+    def _qot_diagnostics(model, lightpath_id: str) -> dict:
+        """Read back the just-(re)computed QoT for a mutated lightpath and
+        report gsnr_db/osnr_db/margin_db/mode_feasible plus an actionable
+        `warnings` list (always present, even when empty) -- the derived-
+        capacity consequence spelled out for the agent, not a bare bool.
+        `_safe_float` sanitizes -inf/NaN (the failed-asset margin sentinel,
+        no-noise GSNR, etc.) so the response stays valid JSON."""
+        try:
+            st = model.get_qot_state(lightpath_id)
+        except LookupError:
+            return {
+                "gsnr_db": None, "osnr_db": None, "margin_db": None,
+                "mode_feasible": None,
+                "warnings": [
+                    f"lightpath {lightpath_id!r}: QoT could not be determined "
+                    f"(recompute failed or found nothing to seed); derived "
+                    f"capacity for any IP link bound to this lightpath reads "
+                    f"as unknown until the next successful recompute."
+                ],
+            }
+        warnings: list[str] = []
+        if not st.mode_feasible:
+            links = sorted(model.ip_links_for_lightpath(lightpath_id))
+            link_note = (f"bound IP link(s) {links} now derive capacity 0 Gbps"
+                        if links else
+                        "no IP link is currently bound to this lightpath")
+            warnings.append(
+                f"lightpath {lightpath_id!r}: margin_db={st.margin_db:.3f} < 0 "
+                f"(delivered GSNR is below the mode's required threshold); "
+                f"{link_note} as a direct consequence of the margin-"
+                f"feasibility gate (capacity = f(mode) only when margin >= 0)."
+            )
+        return {
+            "gsnr_db": _safe_float(st.gsnr_db),
+            "osnr_db": _safe_float(st.osnr_db),
+            "margin_db": _safe_float(st.margin_db),
+            "mode_feasible": st.mode_feasible,
+            "warnings": warnings,
+        }
+
     @app.tool()
     def provision_lightpath(lightpath: dict, ip_link: dict | None = None) -> dict:
         """Light a new lightpath; optionally bind+bring-up an IP link on it.
-        Mutates the current model — branch first (snapshot_branch) to explore."""
+        Rejects a genuine spectrum clash (same frequency already occupied on
+        a shared OMS) with a typed error and no mutation. Mutates the current
+        model — branch first (snapshot_branch) to explore."""
+        model = snapshots.current()
+        oms_sequence = tuple(lightpath["oms_sequence"])
+        center_freq_hz = lightpath["center_freq_hz"]
+        clash = _occupied_slot_error(model, oms_sequence, center_freq_hz)
+        if clash is not None:
+            return clash
         op = ProvisionLightpath(
             lightpath=_Lightpath(
-                id=lightpath["id"], oms_sequence=tuple(lightpath["oms_sequence"]),
-                mode_id=lightpath["mode_id"], center_freq_hz=lightpath["center_freq_hz"]),
+                id=lightpath["id"], oms_sequence=oms_sequence,
+                mode_id=lightpath["mode_id"], center_freq_hz=center_freq_hz),
             ip_link=None if ip_link is None else _IPLink(
                 id=ip_link["id"], a_router=ip_link["a_router"],
                 z_router=ip_link["z_router"], lightpath_id=lightpath["id"]))
-        apply_op(snapshots.current(), op)
+        apply_op(model, op)
         # Seed QoT for the freshly-lit lightpath so derived-capacity reads
         # (ip_link_capacity_gbps, _residual_gbps) report a real value instead
         # of the "unseeded" state -- the live twin of what commit_plan already
@@ -635,8 +727,10 @@ def build_app(*, model: NetworkModel | None = None,
             _recompute_if_possible(snapshots.current(), results)
         except Exception:
             pass
-        return {"lightpath_id": op.lightpath.id,
-                "ip_link_id": op.ip_link.id if op.ip_link else None}
+        out = {"lightpath_id": op.lightpath.id,
+               "ip_link_id": op.ip_link.id if op.ip_link else None}
+        out.update(_qot_diagnostics(snapshots.current(), op.lightpath.id))
+        return out
 
     @app.tool()
     def teardown_lightpath(lightpath_id: str) -> dict:
@@ -652,7 +746,18 @@ def build_app(*, model: NetworkModel | None = None,
         current model — branch first to explore."""
         apply_op(snapshots.current(), SetModulationFormat(
             lightpath_id=lightpath_id, mode_id=mode_id))
-        return {"lightpath_id": lightpath_id, "mode_id": mode_id}
+        # Best-effort recompute, same pattern as provision_lightpath: the mode
+        # change wiped this lightpath's QoT (network.set_lightpath_mode's
+        # S1-7 clear), so re-seed it here rather than leaving derived
+        # capacity reporting "unknown" until some later, unrelated call
+        # happens to recompute.
+        try:
+            _recompute_if_possible(snapshots.current(), results)
+        except Exception:
+            pass
+        out = {"lightpath_id": lightpath_id, "mode_id": mode_id}
+        out.update(_qot_diagnostics(snapshots.current(), lightpath_id))
+        return out
 
     @app.tool()
     def commit_plan(

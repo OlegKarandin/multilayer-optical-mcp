@@ -164,3 +164,120 @@ def test_provision_lightpath_tool_seeds_qot_so_solvers_do_not_crash():
           ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
 
     build_layered_graph(app._snapshots.current())   # must not raise
+
+
+# ---------------------------------------------------------------------------
+# followup-task-A: spectrum clash guard + QoT recompute/diagnostics
+# ---------------------------------------------------------------------------
+
+def test_provision_lightpath_tool_rejects_spectrum_clash():
+    """A second lightpath at the SAME center_freq_hz on the SAME OMS is a
+    genuine physical impossibility (duplicate-frequency carrier). The tool
+    must reject it with a typed error and must NOT mutate the model."""
+    app = build_app()
+    n = _seed(app)
+    mode = n.modes.list()[0].id
+    _call(app, "provision_lightpath",
+          lightpath={"id": "lp1", "oms_sequence": ["omsAB"], "mode_id": mode,
+                     "center_freq_hz": 193.4e12},
+          ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
+    before_ids = {lp.id for lp in app._snapshots.current().list_lightpaths()}
+
+    out = _call(app, "provision_lightpath",
+                lightpath={"id": "lp2", "oms_sequence": ["omsAB"], "mode_id": mode,
+                           "center_freq_hz": 193.4e12})
+
+    assert out["error"] == "spectrum_clash"
+    assert out["oms_clashes"] == [{"oms_id": "omsAB", "lightpaths": ["lp1"]}]
+    after = app._snapshots.current()
+    assert {lp.id for lp in after.list_lightpaths()} == before_ids
+    assert "lp2" not in after._lightpaths
+    assert "ip1" in {l.id for l in after.list_ip_links()}   # untouched too
+
+
+def test_provision_lightpath_tool_allows_non_clashing_frequency():
+    """Regression guard: a different, on-grid frequency on the same OMS must
+    still provision normally -- the clash check must not over-reject."""
+    app = build_app()
+    n = _seed(app)
+    mode = n.modes.list()[0].id
+    _call(app, "provision_lightpath",
+          lightpath={"id": "lp1", "oms_sequence": ["omsAB"], "mode_id": mode,
+                     "center_freq_hz": 193.4e12},
+          ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
+
+    out = _call(app, "provision_lightpath",
+                lightpath={"id": "lp2", "oms_sequence": ["omsAB"], "mode_id": mode,
+                           "center_freq_hz": 193.5e12})   # slot 21, not slot 20
+
+    assert "error" not in out
+    assert out["lightpath_id"] == "lp2"
+    assert "lp2" in app._snapshots.current()._lightpaths
+
+
+def test_set_modulation_format_tool_recomputes_qot():
+    """Regression: set_modulation_format used to never re-seed QoT after a
+    mode change, leaving ip_link_capacity_gbps reporting "unknown" (a
+    LookupError) instead of a real recompute. Real GNPy-backed topology,
+    no mocks."""
+    app = build_app()
+    n = _seed(app)
+    modes = n.modes.list()
+    hi, lo = modes[0].id, modes[-1].id
+    _call(app, "provision_lightpath",
+          lightpath={"id": "lp1", "oms_sequence": ["omsAB"], "mode_id": hi,
+                     "center_freq_hz": 193.4e12},
+          ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
+
+    out = _call(app, "set_modulation_format", lightpath_id="lp1", mode_id=lo)
+
+    assert out["mode_id"] == lo
+    assert isinstance(out["gsnr_db"], float)
+    assert isinstance(out["osnr_db"], float)
+    assert isinstance(out["margin_db"], float)
+    assert out["mode_feasible"] is True     # ~18.3 dB GSNR on this span, comfortably above every mode
+    assert out["warnings"] == []
+    # And the model itself carries the freshly-recomputed state, not just the
+    # tool's return dict (proves it was actually re-seeded, not fabricated).
+    st = app._snapshots.current().get_qot_state("lp1")   # must not raise LookupError
+    assert st.margin_db == out["margin_db"]
+
+
+def test_mode_feasibility_warning_fires_on_negative_margin():
+    """Construct a REAL negative-margin scenario (span loss pushed well past
+    the least-demanding mode's threshold) and confirm the tool surfaces a
+    specific, actionable warning naming the lightpath and the affected IP
+    link -- not a generic message."""
+    app = build_app()
+    n = _seed(app)
+    mode = n.modes.list()[0].id   # 300G@4.8dB: the least-demanding mode
+    n.apply_loss_delta("f_omsAB", 25.0)   # blows the ~18.3 dB nominal budget
+
+    out = _call(app, "provision_lightpath",
+                lightpath={"id": "lp1", "oms_sequence": ["omsAB"], "mode_id": mode,
+                           "center_freq_hz": 193.4e12},
+                ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
+
+    assert out["mode_feasible"] is False
+    assert out["margin_db"] < 0
+    assert len(out["warnings"]) == 1
+    warning = out["warnings"][0]
+    assert "lp1" in warning
+    assert "ip1" in warning
+    assert "0" in warning   # names the resulting 0 Gbps derived capacity
+
+
+def test_provision_lightpath_tool_warnings_empty_list_when_healthy():
+    """`warnings` must be present as an empty list (not omitted) on a
+    healthy provision -- a consistent shape for an agent to parse."""
+    app = build_app()
+    n = _seed(app)
+    mode = n.modes.list()[0].id
+    out = _call(app, "provision_lightpath",
+                lightpath={"id": "lp1", "oms_sequence": ["omsAB"], "mode_id": mode,
+                           "center_freq_hz": 193.4e12},
+                ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
+
+    assert out["mode_feasible"] is True
+    assert "warnings" in out
+    assert out["warnings"] == []
