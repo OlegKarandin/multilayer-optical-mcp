@@ -462,3 +462,49 @@ def test_reroute_service_tool_no_disjointness_warning_when_still_disjoint():
 
     assert out["protection_path"] == ["ip_lpAC", "ip_lpCB"]
     assert out["warnings"] == []
+
+
+def test_reroute_service_tool_warns_on_protection_reservation_oversubscription():
+    """A protection-leg reroute must be checked against working load PLUS the
+    reservation it itself places (offered_load_per_link + reserved_capacity_per_link),
+    not plain offered_load_per_link alone -- offered_load_per_link only ever
+    sums working_path demand, so it is structurally blind to protection
+    reservations (including the one this very reroute creates).
+
+    ip1 is bound to lo_mode (300G@4.8dB). svcA's working_path already offers
+    200 Gbps on ip1 -- on its own, well under capacity, so the plain
+    offered_load_per_link check (used pre-fix, and still used for
+    which="working") would NOT have fired. svcB's protection leg is then
+    rerouted onto ip1 with a 150 Gbps demand: working(200) + reserved(150) =
+    350 > 300 capacity. This is exactly the PROTECTION_OVERSUBSCRIBED failure
+    mode validate.py's _protection_oversubscription_findings catches, now
+    surfaced automatically by reroute_service(which="protection") too."""
+    app = build_app()
+    n = _seed(app)
+    lo_mode = n.modes.list()[0].id   # 300G@4.8dB
+    _call(app, "provision_lightpath",
+          lightpath={"id": "lp1", "oms_sequence": ["omsAB"], "mode_id": lo_mode,
+                     "center_freq_hz": 193.4e12},
+          ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
+    n.set_qot_state("lp1", QoTState(gsnr_db=20.0, osnr_db=30.0, margin_db=5.0))
+
+    n.add_service(Service(id="svcA", src_router="rA", dst_router="rB", demand_gbps=200.0,
+                          working_path=("ip1",)))
+    n.add_service(Service(id="svcB", src_router="rA", dst_router="rB", demand_gbps=150.0))
+
+    # Sanity: plain working-only load alone does not exceed capacity.
+    assert _call(app, "reroute_service", service_id="svcA", ip_path=["ip1"],
+                 which="working")["warnings"] == []
+
+    out = _call(app, "reroute_service", service_id="svcB", ip_path=["ip1"],
+                which="protection")
+
+    assert out["protection_path"] == ["ip1"]
+    assert len(out["warnings"]) == 1
+    warning = out["warnings"][0]
+    assert "ip1" in warning
+    assert "protection" in warning.lower()
+    assert "200" in warning     # working load
+    assert "150" in warning     # reserved protection
+    assert "350" in warning     # committed total
+    assert "300" in warning     # derived capacity

@@ -247,6 +247,7 @@ def build_app(*, model: NetworkModel | None = None,
     from .model.ip_routing import (
         simulate_ip_routing as _simulate_ip_routing,
         offered_load_per_link as _offered_load_per_link,
+        reserved_capacity_per_link as _reserved_capacity_per_link,
         affected_services as _affected_services,
     )
     from .model.plan import (
@@ -323,13 +324,20 @@ def build_app(*, model: NetworkModel | None = None,
         or an unrecognized `which`.
 
         Non-blocking `warnings` (always present, possibly empty), checked
-        AFTER the reroute is applied: an IP-overload note for any new-path
-        link whose offered load now exceeds its derived capacity (or whose
-        capacity is unknown -- no QoT recorded yet), and, only once the
-        service has BOTH a non-empty working_path and protection_path, a
-        disjointness re-check (basis=physical, level=link) against the
-        service's true optical endpoints -- CLAUDE.md's scenario-1 catch,
-        surfaced automatically instead of only on a separate audit call."""
+        AFTER the reroute is applied, leg-aware on the overload check:
+        for which="working", a plain IP-overload note for any new-path link
+        whose working-only offered load now exceeds its derived capacity (or
+        whose capacity is unknown -- no QoT recorded yet); for
+        which="protection", the check instead compares offered working load
+        PLUS the summed protection reservation (offered_load_per_link +
+        reserved_capacity_per_link, gated on a genuine reservation > 0) against
+        capacity -- offered_load_per_link alone never counts protection-path
+        demand, so a plain-overload check would be structurally blind to the
+        reservation this reroute itself places. And, only once the service has
+        BOTH a non-empty working_path and protection_path, a disjointness
+        re-check (basis=physical, level=link) against the service's true
+        optical endpoints -- CLAUDE.md's scenario-1 catch, surfaced
+        automatically instead of only on a separate audit call."""
         model = snapshots.current()
         if which == "working":
             model.set_service_working_path(service_id, tuple(ip_path))
@@ -344,8 +352,16 @@ def build_app(*, model: NetworkModel | None = None,
 
         # 2a: IP-overload check on the new path's links, against the
         # post-reroute offered load (offered_load_per_link reads the model
-        # we just mutated).
+        # we just mutated). Leg-aware: offered_load_per_link sums ONLY
+        # working_path demand (never protection_path -- see its docstring),
+        # so a which="protection" reroute is checked against
+        # working + reserved_capacity_per_link instead, mirroring
+        # validate.py's _protection_oversubscription_findings (including its
+        # reserved>0 gate, so a link with no genuine reservation collapses to
+        # the plain overload case rather than double-reporting under a
+        # different name).
         load = _offered_load_per_link(model)
+        reserved = _reserved_capacity_per_link(model) if which == "protection" else None
         for ip_id in ip_path:
             offered = load.get(ip_id)
             if offered is None:
@@ -362,7 +378,18 @@ def build_app(*, model: NetworkModel | None = None,
                     f"until the next recompute."
                 )
                 continue
-            if offered > cap:
+            if reserved is not None:
+                res = reserved.get(ip_id, 0.0)
+                committed = offered + res
+                if res > 0 and committed > cap:
+                    warnings.append(
+                        f"IP link {ip_id!r} is protection-reservation "
+                        f"oversubscribed on the new protection path: working "
+                        f"load {offered:.3f} Gbps + reserved protection "
+                        f"{res:.3f} Gbps = {committed:.3f} Gbps > derived "
+                        f"capacity {cap:.3f} Gbps."
+                    )
+            elif offered > cap:
                 warnings.append(
                     f"IP link {ip_id!r} is oversubscribed on the new {which} "
                     f"path: offered load {offered:.3f} Gbps > derived "
