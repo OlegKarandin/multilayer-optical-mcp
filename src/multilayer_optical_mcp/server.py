@@ -625,13 +625,23 @@ def build_app(*, model: NetworkModel | None = None,
         directly (which raises on the first off-grid carrier it meets,
         including ones with nothing to do with this request).
 
-        `grid.slot_of(center_freq_hz)` for the REQUESTED frequency is
-        deliberately left uncaught: an off-grid request still surfaces as a
-        raw ValueError, unchanged from before this check existed.
-        Returns a typed error dict (unmutated model) or None when the slot
-        is free on every OMS in `oms_sequence`."""
+        `grid.slot_of(center_freq_hz)` for the REQUESTED frequency IS caught:
+        an off-grid request returns a typed `off_grid_frequency` error dict
+        (unmutated model) instead of a raw ValueError escaping the tool. This
+        is a deliberate, disclosed change from before this check existed,
+        when the live server built its model with grid=None so an off-grid
+        `center_freq_hz` silently succeeded (network.py's on-grid check never
+        fired). Returns a typed error dict (unmutated model) or None when the
+        slot is free on every OMS in `oms_sequence`."""
         grid = SpectrumGrid.default()
-        slot = grid.slot_of(center_freq_hz)
+        try:
+            slot = grid.slot_of(center_freq_hz)
+        except ValueError as exc:
+            return {
+                "error": "off_grid_frequency",
+                "detail": str(exc),
+                "center_freq_hz": center_freq_hz,
+            }
         occ: dict[str, list[str]] = {}
         for lp in model.list_lightpaths():
             try:
@@ -702,8 +712,9 @@ def build_app(*, model: NetworkModel | None = None,
     def provision_lightpath(lightpath: dict, ip_link: dict | None = None) -> dict:
         """Light a new lightpath; optionally bind+bring-up an IP link on it.
         Rejects a genuine spectrum clash (same frequency already occupied on
-        a shared OMS) with a typed error and no mutation. Mutates the current
-        model — branch first (snapshot_branch) to explore."""
+        a shared OMS) or an off-grid `center_freq_hz` with a typed error and
+        no mutation. Mutates the current model — branch first
+        (snapshot_branch) to explore."""
         model = snapshots.current()
         oms_sequence = tuple(lightpath["oms_sequence"])
         center_freq_hz = lightpath["center_freq_hz"]

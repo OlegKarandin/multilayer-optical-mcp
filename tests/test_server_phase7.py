@@ -215,6 +215,33 @@ def test_provision_lightpath_tool_allows_non_clashing_frequency():
     assert "lp2" in app._snapshots.current()._lightpaths
 
 
+def test_provision_lightpath_tool_rejects_off_grid_frequency():
+    """Fix for the review finding on _occupied_slot_error: a center_freq_hz
+    whose slot falls outside SpectrumGrid.default()'s [0, num_slots) range
+    (anchor 191.4e12 Hz, 100 GHz spacing, 48 slots -> valid up to ~196.1e12
+    Hz) used to raise a raw, uncaught ValueError out of the tool. It must
+    now come back as a typed `off_grid_frequency` error, and must NOT
+    mutate the model -- same before/after discipline as the spectrum-clash
+    rejection test above."""
+    app = build_app()
+    n = _seed(app)
+    mode = n.modes.list()[0].id
+    before_ids = {lp.id for lp in app._snapshots.current().list_lightpaths()}
+
+    out = _call(app, "provision_lightpath",
+                lightpath={"id": "lp1", "oms_sequence": ["omsAB"], "mode_id": mode,
+                           "center_freq_hz": 210e12},   # far outside the 48-slot grid
+                ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
+
+    assert out["error"] == "off_grid_frequency"
+    assert out["center_freq_hz"] == 210e12
+    assert "detail" in out
+    after = app._snapshots.current()
+    assert {lp.id for lp in after.list_lightpaths()} == before_ids
+    assert "lp1" not in after._lightpaths
+    assert "ip1" not in {l.id for l in after.list_ip_links()}
+
+
 def test_set_modulation_format_tool_recomputes_qot():
     """Regression: set_modulation_format used to never re-seed QoT after a
     mode change, leaving ip_link_capacity_gbps reporting "unknown" (a
