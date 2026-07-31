@@ -244,10 +244,14 @@ def build_app(*, model: NetworkModel | None = None,
         solve_rsa as _solve_rsa,
         solve_allocation as _solve_allocation,
     )
-    from .model.ip_routing import simulate_ip_routing as _simulate_ip_routing
+    from .model.ip_routing import (
+        simulate_ip_routing as _simulate_ip_routing,
+        offered_load_per_link as _offered_load_per_link,
+        affected_services as _affected_services,
+    )
     from .model.plan import (
         plan_from_dict, ProvisionLightpath, TeardownLightpath,
-        SetModulationFormat, apply_op,
+        SetModulationFormat, apply_op, service_oms_sequence as _service_oms_sequence,
     )
     from .model.assets import Lightpath as _Lightpath, IPLink as _IPLink
     from .model.validate import (
@@ -316,7 +320,16 @@ def build_app(*, model: NetworkModel | None = None,
         """Move a service's working_path (default) or protection_path onto a
         different IP-link sequence. `which` selects the leg: "working" or
         "protection". Validates contiguity src->dst; raises on an invalid path
-        or an unrecognized `which`."""
+        or an unrecognized `which`.
+
+        Non-blocking `warnings` (always present, possibly empty), checked
+        AFTER the reroute is applied: an IP-overload note for any new-path
+        link whose offered load now exceeds its derived capacity (or whose
+        capacity is unknown -- no QoT recorded yet), and, only once the
+        service has BOTH a non-empty working_path and protection_path, a
+        disjointness re-check (basis=physical, level=link) against the
+        service's true optical endpoints -- CLAUDE.md's scenario-1 catch,
+        surfaced automatically instead of only on a separate audit call."""
         model = snapshots.current()
         if which == "working":
             model.set_service_working_path(service_id, tuple(ip_path))
@@ -327,7 +340,52 @@ def build_app(*, model: NetworkModel | None = None,
         else:
             raise ValueError(f"unrecognized which {which!r}: expected 'working' or 'protection'")
         svc = model.get_service(service_id)
-        return {"service_id": svc.id, key: list(getattr(svc, key))}
+        warnings: list[str] = []
+
+        # 2a: IP-overload check on the new path's links, against the
+        # post-reroute offered load (offered_load_per_link reads the model
+        # we just mutated).
+        load = _offered_load_per_link(model)
+        for ip_id in ip_path:
+            offered = load.get(ip_id)
+            if offered is None:
+                continue  # dangling ip_id somehow not in the link table; nothing to check
+            try:
+                cap = model.ip_link_capacity_gbps(ip_id)
+            except KeyError:
+                continue  # link no longer present; nothing to check
+            except LookupError:
+                warnings.append(
+                    f"IP link {ip_id!r}: derived capacity is unknown (no QoT "
+                    f"recorded yet for its bound lightpath) -- offered load "
+                    f"{offered:.3f} Gbps cannot be checked against capacity "
+                    f"until the next recompute."
+                )
+                continue
+            if offered > cap:
+                warnings.append(
+                    f"IP link {ip_id!r} is oversubscribed on the new {which} "
+                    f"path: offered load {offered:.3f} Gbps > derived "
+                    f"capacity {cap:.3f} Gbps."
+                )
+
+        # 2b: disjointness re-check, only once both legs are set.
+        if svc.working_path and svc.protection_path:
+            endpoints = (model.get_router(svc.src_router).site,
+                        model.get_router(svc.dst_router).site)
+            a = _service_oms_sequence(model, svc.working_path)
+            b = _service_oms_sequence(model, svc.protection_path)
+            result = _check_disjointness(model, a, b, basis="physical", level="link",
+                                         endpoints_a=endpoints, endpoints_b=endpoints)
+            if not result.disjoint:
+                warnings.append(
+                    f"service {svc.id!r}: working and protection paths are no "
+                    f"longer disjoint under basis=physical/level=link after "
+                    f"this reroute -- shared_assets={list(result.shared_assets)}, "
+                    f"shared_groups={list(result.shared_groups)}."
+                )
+
+        return {"service_id": svc.id, key: list(getattr(svc, key)), "warnings": warnings}
 
     @app.tool()
     def list_srlgs() -> list[dict]:
@@ -746,9 +804,33 @@ def build_app(*, model: NetworkModel | None = None,
     @app.tool()
     def teardown_lightpath(lightpath_id: str) -> dict:
         """Tear down a lightpath and bring down every IP link bound to it.
-        Mutates the current model — branch first to explore."""
-        apply_op(snapshots.current(), TeardownLightpath(lightpath_id=lightpath_id))
-        return {"torn_down": lightpath_id}
+        Reports `affected_services` -- the blast radius, computed BEFORE the
+        teardown so it reflects what is about to be lost -- as
+        [{service_id, demand_gbps, legs}], legs being any of "working"/
+        "protection" that route through this lightpath. Informational only;
+        the teardown proceeds regardless. Mutates the current model — branch
+        first to explore."""
+        model = snapshots.current()
+        try:
+            ip_link_ids = set(model.ip_links_for_lightpath(lightpath_id))
+        except KeyError:
+            ip_link_ids = None  # unknown lightpath; apply_op below raises PlanError as before
+        affected_services: list[dict] = []
+        if ip_link_ids is not None:
+            for svc_id in _affected_services(model, lightpath_id):
+                svc = model.get_service(svc_id)
+                legs = []
+                if ip_link_ids & set(svc.working_path):
+                    legs.append("working")
+                if ip_link_ids & set(svc.protection_path):
+                    legs.append("protection")
+                affected_services.append({
+                    "service_id": svc.id,
+                    "demand_gbps": svc.demand_gbps,
+                    "legs": legs,
+                })
+        apply_op(model, TeardownLightpath(lightpath_id=lightpath_id))
+        return {"torn_down": lightpath_id, "affected_services": affected_services}
 
     @app.tool()
     def set_modulation_format(lightpath_id: str, mode_id: str) -> dict:

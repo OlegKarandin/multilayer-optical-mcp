@@ -1,7 +1,7 @@
 import pytest
 
 from multilayer_optical_mcp.server import build_app
-from multilayer_optical_mcp.model.assets import FiberType, Router
+from multilayer_optical_mcp.model.assets import FiberType, Router, Service
 from multilayer_optical_mcp.model.qot import QoTState
 from tests.phase7_topology import add_bidir_span
 
@@ -307,4 +307,158 @@ def test_provision_lightpath_tool_warnings_empty_list_when_healthy():
 
     assert out["mode_feasible"] is True
     assert "warnings" in out
+    assert out["warnings"] == []
+
+
+# ---------------------------------------------------------------------------
+# followup-task-B: teardown_lightpath blast-radius + reroute_service warnings
+# ---------------------------------------------------------------------------
+
+def test_teardown_lightpath_reports_affected_services_before_mutation():
+    """A real service riding the lightpath's IP link must be reported --
+    with demand_gbps and the correct leg -- and the report must reflect
+    state BEFORE the teardown (the lightpath is gone afterward)."""
+    app = build_app()
+    n = _seed(app)
+    mode = n.modes.list()[0].id
+    _call(app, "provision_lightpath",
+          lightpath={"id": "lp1", "oms_sequence": ["omsAB"], "mode_id": mode,
+                     "center_freq_hz": 193.4e12},
+          ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
+    n.add_service(Service(id="svc1", src_router="rA", dst_router="rB",
+                          demand_gbps=123.0, working_path=("ip1",)))
+
+    out = _call(app, "teardown_lightpath", lightpath_id="lp1")
+
+    assert out["torn_down"] == "lp1"
+    assert out["affected_services"] == [
+        {"service_id": "svc1", "demand_gbps": 123.0, "legs": ["working"]},
+    ]
+    # And the teardown actually proceeded.
+    assert "lp1" not in app._snapshots.current()._lightpaths
+
+
+def test_teardown_lightpath_reports_empty_when_nothing_rides_it():
+    app = build_app()
+    n = _seed(app)
+    mode = n.modes.list()[0].id
+    _call(app, "provision_lightpath",
+          lightpath={"id": "lp1", "oms_sequence": ["omsAB"], "mode_id": mode,
+                     "center_freq_hz": 193.4e12},
+          ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
+
+    out = _call(app, "teardown_lightpath", lightpath_id="lp1")
+
+    assert out["torn_down"] == "lp1"
+    assert out["affected_services"] == []
+
+
+def test_reroute_service_tool_warns_on_ip_overload():
+    """A 500 Gbps demand rerouted onto a link bound to a 300G-capacity
+    lightpath (least-demanding mode, 4.8 dB threshold) must trip a
+    specific, actionable IP-overload warning naming the link, the offered
+    load, and the derived capacity."""
+    app = build_app()
+    n = _seed(app)
+    lo_mode = n.modes.list()[0].id   # 300G@4.8dB
+    _call(app, "provision_lightpath",
+          lightpath={"id": "lp1", "oms_sequence": ["omsAB"], "mode_id": lo_mode,
+                     "center_freq_hz": 193.4e12},
+          ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
+    n.set_qot_state("lp1", QoTState(gsnr_db=20.0, osnr_db=30.0, margin_db=5.0))
+    n.add_service(Service(id="svcA", src_router="rA", dst_router="rB", demand_gbps=500.0))
+
+    out = _call(app, "reroute_service", service_id="svcA", ip_path=["ip1"], which="working")
+
+    assert out["working_path"] == ["ip1"]
+    assert len(out["warnings"]) == 1
+    warning = out["warnings"][0]
+    assert "ip1" in warning
+    assert "500" in warning     # offered load
+    assert "300" in warning     # derived capacity
+
+
+def test_reroute_service_tool_warns_on_disjointness_collapse():
+    """Rerouting working onto the same OMS the protection leg already rides
+    is exactly CLAUDE.md's scenario-1 catch: a design-time-disjoint pair
+    that becomes correlated. The tool must surface it automatically,
+    naming the shared OMS."""
+    app = build_app()
+    n = _seed(app)                       # rA(site A) <-> rB(site B) via omsAB
+    add_bidir_span(n, "A", "C", "omsAC")
+    add_bidir_span(n, "C", "B", "omsCB")
+    n.add_router(Router(id="rC", site="C"))
+    mode = n.modes.list()[0].id
+    for lp_id, oms, a_router, z_router in [
+        ("lpDirect", "omsAB", "rA", "rB"),
+        ("lpAC", "omsAC", "rA", "rC"),
+        ("lpCB", "omsCB", "rC", "rB"),
+    ]:
+        _call(app, "provision_lightpath",
+              lightpath={"id": lp_id, "oms_sequence": [oms], "mode_id": mode,
+                         "center_freq_hz": 193.4e12},
+              ip_link={"id": f"ip_{lp_id}", "a_router": a_router, "z_router": z_router})
+        n.set_qot_state(lp_id, QoTState(gsnr_db=20.0, osnr_db=30.0, margin_db=5.0))
+
+    # Working direct (omsAB), protection via C (omsAC + omsCB) -- disjoint at setup.
+    n.add_service(Service(id="svcP", src_router="rA", dst_router="rB", demand_gbps=50.0,
+                          working_path=("ip_lpDirect",),
+                          protection_path=("ip_lpAC", "ip_lpCB")))
+
+    out = _call(app, "reroute_service", service_id="svcP",
+                ip_path=["ip_lpAC", "ip_lpCB"], which="working")
+
+    assert out["working_path"] == ["ip_lpAC", "ip_lpCB"]
+    collapse_warnings = [w for w in out["warnings"] if "disjoint" in w.lower()]
+    assert len(collapse_warnings) == 1
+    assert "omsAC" in collapse_warnings[0]
+    assert "omsCB" in collapse_warnings[0]
+
+
+def test_reroute_service_tool_no_disjointness_warning_with_single_leg():
+    """No protection_path yet -> the disjointness re-check must not even
+    run (nothing to compare against), so warnings stays empty."""
+    app = build_app()
+    n = _seed(app)
+    mode = n.modes.list()[0].id
+    _call(app, "provision_lightpath",
+          lightpath={"id": "lp1", "oms_sequence": ["omsAB"], "mode_id": mode,
+                     "center_freq_hz": 193.4e12},
+          ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
+    n.set_qot_state("lp1", QoTState(gsnr_db=20.0, osnr_db=30.0, margin_db=5.0))
+    n.add_service(Service(id="svcS", src_router="rA", dst_router="rB", demand_gbps=50.0))
+
+    out = _call(app, "reroute_service", service_id="svcS", ip_path=["ip1"], which="working")
+
+    assert out["working_path"] == ["ip1"]
+    assert out["warnings"] == []
+
+
+def test_reroute_service_tool_no_disjointness_warning_when_still_disjoint():
+    """Both legs set, genuinely disjoint (no shared OMS) -- the re-check
+    must run and find nothing to report."""
+    app = build_app()
+    n = _seed(app)
+    add_bidir_span(n, "A", "C", "omsAC")
+    add_bidir_span(n, "C", "B", "omsCB")
+    n.add_router(Router(id="rC", site="C"))
+    mode = n.modes.list()[0].id
+    for lp_id, oms, a_router, z_router in [
+        ("lpDirect", "omsAB", "rA", "rB"),
+        ("lpAC", "omsAC", "rA", "rC"),
+        ("lpCB", "omsCB", "rC", "rB"),
+    ]:
+        _call(app, "provision_lightpath",
+              lightpath={"id": lp_id, "oms_sequence": [oms], "mode_id": mode,
+                         "center_freq_hz": 193.4e12},
+              ip_link={"id": f"ip_{lp_id}", "a_router": a_router, "z_router": z_router})
+        n.set_qot_state(lp_id, QoTState(gsnr_db=20.0, osnr_db=30.0, margin_db=5.0))
+
+    n.add_service(Service(id="svcQ", src_router="rA", dst_router="rB", demand_gbps=50.0,
+                          working_path=("ip_lpDirect",)))
+
+    out = _call(app, "reroute_service", service_id="svcQ",
+                ip_path=["ip_lpAC", "ip_lpCB"], which="protection")
+
+    assert out["protection_path"] == ["ip_lpAC", "ip_lpCB"]
     assert out["warnings"] == []
