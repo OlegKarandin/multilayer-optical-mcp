@@ -51,7 +51,6 @@ class ROADM:
 class Transceiver:
     id: str
     site: str
-    supported_mode_ids: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

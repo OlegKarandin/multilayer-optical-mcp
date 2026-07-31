@@ -280,9 +280,9 @@ def test_add_roadm_rejects_duplicate_id():
 def test_add_transceiver_rejects_duplicate_id():
     n = _seeded_full_model()
     with pytest.raises(ValueError, match="already exists"):
-        n.add_transceiver(Transceiver(id="trx_A", site="Z", supported_mode_ids=("mode-x",)))
+        n.add_transceiver(Transceiver(id="trx_A", site="Z"))
     # No public getter for transceivers; reach into the registry directly to
-    # confirm the original entry (site="A", no supported_mode_ids) survives.
+    # confirm the original entry (site="A") survives, not overwritten.
     assert n._transceivers["trx_A"].site == "A"
 
 
