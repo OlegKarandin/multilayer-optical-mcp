@@ -378,17 +378,16 @@ def build_app(*, model: NetworkModel | None = None,
                     f"until the next recompute."
                 )
                 continue
-            if reserved is not None:
-                res = reserved.get(ip_id, 0.0)
-                committed = offered + res
-                if res > 0 and committed > cap:
-                    warnings.append(
-                        f"IP link {ip_id!r} is protection-reservation "
-                        f"oversubscribed on the new protection path: working "
-                        f"load {offered:.3f} Gbps + reserved protection "
-                        f"{res:.3f} Gbps = {committed:.3f} Gbps > derived "
-                        f"capacity {cap:.3f} Gbps."
-                    )
+            res = reserved.get(ip_id, 0.0) if reserved is not None else 0.0
+            committed = offered + res
+            if res > 0 and committed > cap:
+                warnings.append(
+                    f"IP link {ip_id!r} is protection-reservation "
+                    f"oversubscribed on the new protection path: working "
+                    f"load {offered:.3f} Gbps + reserved protection "
+                    f"{res:.3f} Gbps = {committed:.3f} Gbps > derived "
+                    f"capacity {cap:.3f} Gbps."
+                )
             elif offered > cap:
                 warnings.append(
                     f"IP link {ip_id!r} is oversubscribed on the new {which} "
