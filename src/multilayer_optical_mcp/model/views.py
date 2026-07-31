@@ -145,6 +145,7 @@ def disjointness_result_dict(res) -> Dict[str, Any]:
         "path_b": _oms_path(res.path_b) if res.path_b is not None else None,
         "shared_assets": list(res.shared_assets),
         "shared_groups": list(res.shared_groups),
+        "exhaustive": res.exhaustive,
     }
 
 

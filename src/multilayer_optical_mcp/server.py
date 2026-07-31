@@ -539,7 +539,17 @@ def build_app(*, model: NetworkModel | None = None,
         solver's internal candidate/emission caps before exhaustively proving
         infeasibility, not only that no disjoint pair exists — do not read it
         as full-confidence proof of infeasibility on a very large or
-        highly-parallel topology."""
+        highly-parallel topology.
+
+        The returned dict includes `exhaustive` (bool, default True): False
+        when the search hit the total-candidate-emission cap before it could
+        finish, a partial signal that the candidate space was truncated. This
+        is a conservative, not complete, mitigation for the caveat above — it
+        catches the emission-cap case but does NOT detect truncation caused
+        solely by the narrower distinct-node-path cap, which can still leave
+        `exhaustive=True` on a search that was in fact cut short. Treat
+        `exhaustive=True` as "not known to be truncated," not as proof of
+        completeness."""
         res = _compute_disjoint_paths(
             snapshots.current(), src, dst, basis, level, best_effort)
         return disjointness_result_dict(res)

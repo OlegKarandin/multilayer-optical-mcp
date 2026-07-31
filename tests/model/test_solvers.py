@@ -193,6 +193,16 @@ def test_check_disjointness_same_path_not_disjoint():
     assert "fiber-north" in res.shared_assets
 
 
+def test_check_disjointness_exhaustive_always_true():
+    """Task D: check_disjointness audits two already-given paths -- there is
+    no search and no cap to truncate, so `exhaustive` must always default to
+    True, unaffected by the new field added for compute_disjoint_paths."""
+    n = _model_two_paths()
+    res = check_disjointness(n, ("oms-north",), ("oms-south",),
+                             basis="physical", level="link")
+    assert res.exhaustive is True
+
+
 def test_check_disjointness_risk_group_is_the_latent_correlation_catch():
     """Scenario 1: physically-disjoint pair, freshly-injected risk group spans
     both, so the *same* pair is no longer disjoint under the risk_group basis."""
@@ -558,6 +568,40 @@ def test_compute_disjoint_paths_finds_bypass_despite_exponential_parallels():
     expected_bypass = tuple(f"oms-by{h}" for h in range(n_hops + 1))
     pair = {res.path_a.oms_sequence, res.path_b.oms_sequence}
     assert expected_bypass in pair
+
+
+def test_compute_disjoint_paths_exhaustive_false_under_genuine_emission_cap_truncation():
+    """Task D: `exhaustive` must honestly report False when the search was
+    genuinely truncated. Reuses the exponential-parallels-plus-bypass fixture:
+    the chain node path alone emits exactly 2**10=1024==_DISJOINT_EMISSION_CAP
+    combos, and the bypass node path emits one more on top -- a true candidate
+    space of 1025, one more than the cap can hold. `_enumerate_oms_paths` is
+    hard-capped at `_DISJOINT_EMISSION_CAP` emissions, so `cands` in
+    compute_disjoint_paths necessarily comes back at exactly 1024 items
+    (never 1025): the search was really cut short, not merely brushing the
+    cap by coincidence, and `exhaustive` must reflect that honestly."""
+    from multilayer_optical_mcp.model.solvers import _DISJOINT_EMISSION_CAP
+    n_hops, parallels_per_hop = 10, 2
+    assert parallels_per_hop ** n_hops == _DISJOINT_EMISSION_CAP
+    n = _model_exponential_parallels_plus_bypass(n_hops=n_hops, parallels_per_hop=parallels_per_hop)
+    res = compute_disjoint_paths(n, "A", "B", basis="physical", level="link",
+                                 best_effort=False)
+    # Sanity: the true candidate space (1024 chain combos + 1 bypass combo)
+    # exceeds the cap, so this is a genuine truncation, not a coincidental
+    # exact fill -- the SOLUTION status alone doesn't prove that.
+    assert res.status is SolverStatus.SOLUTION
+    assert res.exhaustive is False
+
+
+def test_compute_disjoint_paths_exhaustive_true_within_cap():
+    """Regression guard: a small topology whose candidate space is nowhere
+    near either cap must report exhaustive=True (the default, un-truncated
+    case)."""
+    n = _model_two_paths()
+    res = compute_disjoint_paths(n, "A", "B", basis="physical", level="link",
+                                 best_effort=False)
+    assert res.status is SolverStatus.SOLUTION
+    assert res.exhaustive is True
 
 
 def _model_single_route_alternating_srlg_planes(n_hops: int, parallels_per_hop: int = 2) -> NetworkModel:

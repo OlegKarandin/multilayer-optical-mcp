@@ -69,6 +69,16 @@ class DisjointnessResult:
     path_b: Optional[OmsPath] = None
     shared_assets: Tuple[str, ...] = ()
     shared_groups: Tuple[str, ...] = ()
+    # True unless compute_disjoint_paths's search was truncated by the
+    # emission cap before it could exhaustively enumerate the candidate
+    # space -- see that function's docstring. check_disjointness never
+    # searches (it audits two already-given paths), so its results are
+    # trivially always exhaustive and it never needs to set this field.
+    # Conservative, not complete: this only detects truncation via the
+    # emission cap; truncation via the narrower distinct-node-path cap
+    # (_DISJOINT_CANDIDATE_CAP) is NOT detected and can still leave
+    # `exhaustive=True` on a search that was, in fact, cut short.
+    exhaustive: bool = True
 
 
 # Cap on *distinct node paths* enumerated for disjoint-pair search — NOT raw
@@ -490,12 +500,23 @@ def compute_disjoint_paths(
     the search is truncated before it can exhaustively rule out a disjoint
     pair, and a truncated search returns the same NO_SOLUTION as a proven one.
     On a very large or highly-parallel topology, a NO_SOLUTION result should
-    not be read as full-confidence proof that no disjoint pair exists."""
+    not be read as full-confidence proof that no disjoint pair exists. The
+    result's `exhaustive` field is a partial, best-effort signal for this:
+    it is False when total candidate emissions hit `_DISJOINT_EMISSION_CAP`
+    (the more commonly-hit case on dense/highly-parallel topologies), but it
+    does NOT detect truncation via the narrower `_DISJOINT_CANDIDATE_CAP`
+    (distinct-node-path cap) alone -- a search that was cut short only by
+    that cap can still report `exhaustive=True`. Treat `exhaustive=True` as
+    "not known to be truncated," not as an independent proof of completeness."""
     avoid_assets, avoid_srlgs, avoid_rgs = _avoid_sets(model, constraints)
     forbidden = forbidden_oms(model, avoid_assets, avoid_srlgs, avoid_rgs)
     cands = list(_enumerate_oms_paths(model, src, dst, _DISJOINT_EMISSION_CAP,
                                       weight=weight, forbidden=forbidden,
                                       max_node_paths=_DISJOINT_CANDIDATE_CAP))
+    # Conservative, partial truncation signal -- see docstring above and the
+    # `exhaustive` field's own comment on DisjointnessResult. Only catches
+    # emission-cap truncation, not the narrower candidate-cap-only case.
+    exhaustive = len(cands) < _DISJOINT_EMISSION_CAP
     keyed = [(p, path_basis_keys(model, p.oms_sequence, basis=basis, level=level))
              for p in cands]
 
@@ -509,6 +530,7 @@ def compute_disjoint_paths(
                 return DisjointnessResult(
                     status=SolverStatus.SOLUTION, disjoint=True,
                     basis=basis, level=level, path_a=pa, path_b=pb,
+                    exhaustive=exhaustive,
                 )
             if best is None or len(shared) < best_overlap:
                 best = (pa, pb, shared)
@@ -521,8 +543,9 @@ def compute_disjoint_paths(
             status=SolverStatus.PARTIAL, disjoint=False,
             basis=basis, level=level, path_a=pa, path_b=pb,
             shared_assets=shared_assets, shared_groups=shared_groups,
+            exhaustive=exhaustive,
         )
     return DisjointnessResult(
         status=SolverStatus.NO_SOLUTION, disjoint=False,
-        basis=basis, level=level,
+        basis=basis, level=level, exhaustive=exhaustive,
     )
