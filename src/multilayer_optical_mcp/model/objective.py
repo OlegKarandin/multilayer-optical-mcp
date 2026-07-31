@@ -195,8 +195,10 @@ def _restore_bystander_qot(work, snapshot: Dict[str, QoTState]) -> None:
     wipe that this scoring pass's OWN provisioning inflicted on a
     PRE-EXISTING lightpath via cross-lightpath OMS-sharing invalidation
     (NetworkModel._invalidate_qot_sharing_oms) -- the "bystander" case: a
-    lightpath that is not itself part of the candidate being scored, but
-    happens to share an OMS with one of the candidate's new runs.
+    lightpath that is not itself part of the candidate being scored (this
+    includes both reused_lightpaths the candidate grooms onto and any other
+    lightpath that merely happens to share an OMS with one of the candidate's
+    new runs).
 
     Unconditional and idempotent: every snapshotted id is re-applied
     regardless of whether that particular lightpath was actually invalidated
@@ -205,26 +207,47 @@ def _restore_bystander_qot(work, snapshot: Dict[str, QoTState]) -> None:
     allocation.py's _pack already uses for cross-demand reseeding. No
     per-lightpath bookkeeping of "was this one actually wiped" is needed.
 
-    Why restoring the OLD value (rather than leaving it wiped, or recomputing)
-    is CORRECT, not just a safe-sounding default: every mode in this codebase
-    is currently accepted under FillPolicy.FULL (a worst-case comb -- every
-    non-probe grid slot treated as occupied regardless of real provisioning;
-    FillPolicy.ACTUAL is defined but unreachable from any solver/scoring path
-    in src/). FillPolicy's own docstring states the governing invariant: "By
-    GSNR monotonicity in interferer count, a FULL-accepted mode remains
-    feasible under any lighter real load" (spectrum.py). A bystander's
-    FULL-computed margin is therefore already a worst-case bound computed AS
-    IF the spectrum were maximally loaded -- a newly-provisioned real channel
-    sharing its OMS cannot make the bystander's actual physical situation
-    "more full" than FULL already assumed when its mode was accepted. So the
-    snapshotted value is not stale; it is the same worst-case-valid bound it
-    always was, and restoring it after an incidental wipe reproduces exactly
-    what a real recompute would show. This exactness is tied to FULL being
-    the ONLY reachable acceptance policy today -- if FillPolicy.ACTUAL is ever
-    wired into a scoring path, its margin genuinely depends on real occupancy
-    at probe time, and a same-OMS bystander's true margin COULD shift when a
-    new real channel lands beside it; the restore-old-value shortcut would
-    then need replacing with an actual recompute for ACTUAL-scored candidates.
+    Why restoring the OLD value is CORRECT for feasibility/capacity, and a
+    deliberate, bounded approximation (not exact) for total_margin -- read
+    both halves, they are NOT the same claim:
+
+    Every mode in this codebase is accepted under FillPolicy.FULL (a
+    worst-case comb -- every non-probe grid slot treated as occupied
+    regardless of real provisioning). FillPolicy's own docstring states the
+    governing invariant in full: "By GSNR monotonicity in interferer count, a
+    FULL-accepted mode remains feasible under any lighter real load, so the
+    operating recompute stays ACTUAL and is not gated by this policy"
+    (spectrum.py) -- note the second clause: the OPERATING model's recorded
+    QoT is NOT generally the FULL acceptance value. scenario.py's settle pass
+    explicitly overwrites every lightpath's seeded-at-acceptance QoT with a
+    recompute under the real, ACTUAL committed comb (adapter.py's
+    recompute_qot_under_loading), so a bystander in a built operating network
+    typically carries an ACTUAL-loading margin, not a FULL one.
+
+    What this means in practice:
+    - FEASIBILITY (hence derived capacity, hence max_util/dropped_traffic/
+      congestion evidence) IS exact regardless of which policy produced the
+      snapshotted value: FULL acceptance guarantees margin >= 0 under ANY
+      lighter real load, so a bystander that was up stays up and one that was
+      down stays down -- restoring the old margin's SIGN, and therefore its
+      derived capacity, can never disagree with a real recompute. This is the
+      property the "erasing evidence of congestion" fix actually relies on.
+    - TOTAL_MARGIN is an optimistic BOUND, not an exact reproduction, when the
+      snapshotted value came from an ACTUAL-comb recompute: a genuinely new
+      co-OMS channel does lower the bystander's true GSNR by a small amount
+      (one added interferer in a fixed-width comb). The restored value is
+      strictly better than the pre-fix behavior (which effectively scored a
+      wiped bystander's margin as 0, an unbounded error), and the error it
+      does carry is applied identically to every candidate that touches this
+      bystander, so relative ranking between such candidates is undistorted;
+      it is not zero error against ground truth.
+
+    FillPolicy.ACTUAL is a caller-settable parameter (see allocation.py,
+    scenario.py) that is never SELECTED by any in-repo call site today; if a
+    caller starts routinely requesting ACTUAL-scored candidates, the
+    total_margin approximation above still applies (it does not depend on
+    which policy scored the CANDIDATE, only on which policy produced the
+    BYSTANDER's snapshotted value) -- no change needed here for that case.
     """
     for lp_id, state in snapshot.items():
         work.set_qot_state(lp_id, state)
@@ -391,9 +414,9 @@ def score_candidate(model, placement, service, weights=None) -> ObjectiveResult:
     pre-existing lightpath's QoT before provisioning and restore it after, so
     the score always reflects every lightpath's true state. See
     _restore_bystander_qot's docstring for why restoring the OLD value (not
-    leaving it wiped, not recomputing) is exact under this codebase's
-    FULL-only acceptance policy, and what would need to change if
-    FillPolicy.ACTUAL is ever wired into scoring."""
+    leaving it wiped, not recomputing) is exact for feasibility/capacity and
+    a small, one-sided, non-distorting approximation for total_margin --
+    NOT an exact reproduction in every case."""
     work = model.clone()
     bystanders = _snapshot_lightpath_qot(work)
     apply_candidate(work, placement, service, prefix="score-cand")
@@ -420,8 +443,10 @@ def score_pair(model, working, protection, service, weights=None) -> ObjectiveRe
     margin from total_margin and hiding any real congestion it carried from
     max_util/dropped_traffic. We snapshot every pre-existing lightpath's QoT
     before either leg is provisioned and restore it after both legs' own
-    seed-reapplication below -- see _restore_bystander_qot's docstring for the
-    FULL-policy exactness argument this restore relies on."""
+    seed-reapplication below -- see _restore_bystander_qot's docstring for
+    exactly what this restore does and does not guarantee (exact for
+    feasibility/capacity; a small, non-distorting approximation for
+    total_margin)."""
     work = model.clone()
     bystanders = _snapshot_lightpath_qot(work)
     seeded_working = apply_candidate(work, working, service, prefix="score-work")
