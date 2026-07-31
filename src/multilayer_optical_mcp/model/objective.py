@@ -172,6 +172,64 @@ def _mint_unique(work, registry_attr: str, template: str) -> str:
     return f"{template}-{n}"
 
 
+def _snapshot_lightpath_qot(work) -> Dict[str, QoTState]:
+    """Snapshot every currently-recorded lightpath QoT state on `work`. Called
+    right after `work = model.clone()`, before any candidate provisioning, so
+    the returned dict captures every PRE-EXISTING ("bystander") lightpath's
+    QoT as it stood before this scoring pass touched anything. Only ids that
+    actually have a recorded state are included -- LookupError is swallowed
+    rather than inventing a value for a lightpath that never had one (a
+    freshly-provisioned, not-yet-recomputed lightpath legitimately has none;
+    see ip_routing.py's "unknown" link-status state)."""
+    out = {}
+    for lp in work.list_lightpaths():
+        try:
+            out[lp.id] = work.get_qot_state(lp.id)
+        except LookupError:
+            pass
+    return out
+
+
+def _restore_bystander_qot(work, snapshot: Dict[str, QoTState]) -> None:
+    """Re-apply every snapshotted lightpath's QoT onto `work`, undoing any
+    wipe that this scoring pass's OWN provisioning inflicted on a
+    PRE-EXISTING lightpath via cross-lightpath OMS-sharing invalidation
+    (NetworkModel._invalidate_qot_sharing_oms) -- the "bystander" case: a
+    lightpath that is not itself part of the candidate being scored, but
+    happens to share an OMS with one of the candidate's new runs.
+
+    Unconditional and idempotent: every snapshotted id is re-applied
+    regardless of whether that particular lightpath was actually invalidated
+    (a lightpath the candidate never touched gets its unchanged value written
+    back -- a no-op), matching the flat accumulate-then-reseed pattern
+    allocation.py's _pack already uses for cross-demand reseeding. No
+    per-lightpath bookkeeping of "was this one actually wiped" is needed.
+
+    Why restoring the OLD value (rather than leaving it wiped, or recomputing)
+    is CORRECT, not just a safe-sounding default: every mode in this codebase
+    is currently accepted under FillPolicy.FULL (a worst-case comb -- every
+    non-probe grid slot treated as occupied regardless of real provisioning;
+    FillPolicy.ACTUAL is defined but unreachable from any solver/scoring path
+    in src/). FillPolicy's own docstring states the governing invariant: "By
+    GSNR monotonicity in interferer count, a FULL-accepted mode remains
+    feasible under any lighter real load" (spectrum.py). A bystander's
+    FULL-computed margin is therefore already a worst-case bound computed AS
+    IF the spectrum were maximally loaded -- a newly-provisioned real channel
+    sharing its OMS cannot make the bystander's actual physical situation
+    "more full" than FULL already assumed when its mode was accepted. So the
+    snapshotted value is not stale; it is the same worst-case-valid bound it
+    always was, and restoring it after an incidental wipe reproduces exactly
+    what a real recompute would show. This exactness is tied to FULL being
+    the ONLY reachable acceptance policy today -- if FillPolicy.ACTUAL is ever
+    wired into a scoring path, its margin genuinely depends on real occupancy
+    at probe time, and a same-OMS bystander's true margin COULD shift when a
+    new real channel lands beside it; the restore-old-value shortcut would
+    then need replacing with an actual recompute for ACTUAL-scored candidates.
+    """
+    for lp_id, state in snapshot.items():
+        work.set_qot_state(lp_id, state)
+
+
 # A (lp_id, QoTState) pair seeded during provisioning of one or more new runs.
 # apply_candidate/provision_new_runs return these so a caller that provisions
 # many runs across many calls (allocation.py's _pack, across both legs and
@@ -315,8 +373,31 @@ def placement_materializable(model, placement) -> bool:
 
 
 def score_candidate(model, placement, service, weights=None) -> ObjectiveResult:
+    """Materialize `placement` on a throwaway clone and score it.
+
+    Bystander protection: provisioning the candidate's new run(s) can wipe the
+    recorded QoT of a PRE-EXISTING lightpath that merely happens to share an
+    OMS with one of them (NetworkModel._invalidate_qot_sharing_oms fires on
+    any lightpath sharing an OMS with a newly-added one, not just this
+    candidate's own runs). evaluate_objective's total_margin loop silently
+    skips any lightpath with no recorded QoT, and ip_link_capacity_gbps raises
+    LookupError for one too (read by simulate_ip_routing as "unknown", not
+    congested/down) -- so an un-restored bystander's margin contribution
+    vanishes from the score, AND, if that bystander was actually congested or
+    overloaded, the evidence of that congestion (its utilization/overflow)
+    goes invisible right along with it. That can rank a candidate that
+    "erases the evidence" of a real problem ABOVE one that never touches the
+    bystander -- the opposite of correct scoring. We snapshot every
+    pre-existing lightpath's QoT before provisioning and restore it after, so
+    the score always reflects every lightpath's true state. See
+    _restore_bystander_qot's docstring for why restoring the OLD value (not
+    leaving it wiped, not recomputing) is exact under this codebase's
+    FULL-only acceptance policy, and what would need to change if
+    FillPolicy.ACTUAL is ever wired into scoring."""
     work = model.clone()
+    bystanders = _snapshot_lightpath_qot(work)
     apply_candidate(work, placement, service, prefix="score-cand")
+    _restore_bystander_qot(work, bystanders)
     return evaluate_objective(work, weights)
 
 
@@ -330,8 +411,19 @@ def score_pair(model, working, protection, service, weights=None) -> ObjectiveRe
     explicit) -- score_pair used to reuse "prot", which collided with a
     service's own already-committed protection lightpath (same id scheme) the
     moment route_service was asked to replan the protection leg of an
-    already-protected service, an in-scope restoration use case."""
+    already-protected service, an in-scope restoration use case.
+
+    Bystander protection: same rationale as score_candidate's docstring --
+    provisioning either leg's new run(s) can wipe the recorded QoT of a
+    PRE-EXISTING lightpath outside this pair (not working, not protection)
+    that happens to share an OMS with one of them, silently dropping its
+    margin from total_margin and hiding any real congestion it carried from
+    max_util/dropped_traffic. We snapshot every pre-existing lightpath's QoT
+    before either leg is provisioned and restore it after both legs' own
+    seed-reapplication below -- see _restore_bystander_qot's docstring for the
+    FULL-policy exactness argument this restore relies on."""
     work = model.clone()
+    bystanders = _snapshot_lightpath_qot(work)
     seeded_working = apply_candidate(work, working, service, prefix="score-work")
     # provision protection's new lightpaths (no reroute) so their cost is counted
     _ip_path, seeded_protection = provision_new_runs(work, protection, service, prefix="score-prot")
@@ -344,4 +436,11 @@ def score_pair(model, working, protection, service, weights=None) -> ObjectiveRe
     # max_util reflect every lightpath this candidate pair actually costs.
     for lp_id, state in (*seeded_working, *seeded_protection):
         work.set_qot_state(lp_id, state)
+    # Restore any PRE-EXISTING (neither working nor protection) lightpath's QoT
+    # that either leg's provisioning wiped via cross-lightpath OMS-sharing
+    # invalidation. Order after the candidate-own-reseed above is not load-
+    # bearing (disjoint id sets -- a bystander is by definition not one of
+    # this pair's own seeded runs) but keeps the existing mechanism intact and
+    # simply adds bystander coverage alongside it.
+    _restore_bystander_qot(work, bystanders)
     return evaluate_objective(work, weights)

@@ -306,9 +306,22 @@ def test_score_candidate_counts_both_colocated_lightpaths_margin():
     # loop (model/objective.py). This is the ground truth score_candidate's
     # total_margin must match; identical to test_score_candidate_matches_real_
     # commit's pattern above, but on a fixture with co-located siblings.
+    #
+    # Task E: _shared_oms_mesh_model also seeds "lp-bg-CM" on oms_C_M (margin
+    # 3.0) -- a genuine BYSTANDER (not one of target's own new runs) that
+    # shares an OMS with them. score_candidate now snapshots and restores
+    # every pre-existing lightpath's QoT around provisioning (see
+    # _snapshot_lightpath_qot/_restore_bystander_qot in objective.py), so the
+    # ground truth here must do the same to stay an apples-to-apples
+    # comparison -- otherwise this hand-rolled reimplementation just
+    # reintroduces the bystander-wipe bug score_candidate itself no longer has.
     work = n.clone()
-    from multilayer_optical_mcp.model.objective import apply_candidate
+    from multilayer_optical_mcp.model.objective import (
+        apply_candidate, _snapshot_lightpath_qot, _restore_bystander_qot,
+    )
+    bystanders = _snapshot_lightpath_qot(work)
     seeded = apply_candidate(work, target, work.get_service("svc-a"))
+    _restore_bystander_qot(work, bystanders)
     assert len(seeded) == 2
 
     def _has_qot(lp_id):
@@ -363,3 +376,116 @@ def test_apply_candidate_disambiguates_on_id_collision(diamond_service):
     # Both the pre-existing and the newly-minted lightpath must coexist.
     assert f"lp-cand-{svc.id}-0" in model._lightpaths
     assert len(model._lightpaths) == 2
+
+
+# --------------------------------------------------------------- Task E: bystander QoT
+#
+# Task E: score_candidate/score_pair provision new lightpaths on a THROWAWAY
+# clone and re-seed their OWN just-provisioned QoT (Fix 1/round 2 above), but
+# neither protects a PRE-EXISTING ("bystander") lightpath that is not part of
+# the candidate itself yet happens to share an OMS with one of the candidate's
+# new runs. NetworkModel._invalidate_qot_sharing_oms wipes that bystander's
+# QoT too, and nothing re-applies it. evaluate_objective's total_margin loop
+# silently skips a QoT-less lightpath, and ip_link_capacity_gbps raises
+# LookupError for one (read by simulate_ip_routing as "unknown", not
+# congested/down) -- so the bystander's margin vanishes from the score, and if
+# the bystander was actually congested, the evidence of that congestion goes
+# invisible right along with it.
+
+def test_score_candidate_preserves_bystander_margin_sharing_oms(diamond_service):
+    """A bare pre-existing lightpath sharing omsAB with the candidate's new
+    run must keep contributing its margin to total_margin. Candidate's own
+    margin: gsnr 15.0 - required 10.0 = 5.0. Bystander's seeded margin: 10.0.
+    Pre-fix, provisioning the candidate's new run on omsAB wipes the
+    bystander's QoT (shared OMS -> _invalidate_qot_sharing_oms),
+    evaluate_objective's total_margin loop silently skips it, and
+    total_margin reads only 5.0. Post-fix it reads 15.0."""
+    model, svc = diamond_service   # empty net + svc-AB, omsAB A->B
+    model.add_lightpath(Lightpath(id="lp-bystander", oms_sequence=("omsAB",),
+                                  mode_id="100G", center_freq_hz=193.4e12))
+    model.set_qot_state("lp-bystander",
+                        QoTState(gsnr_db=20.0, osnr_db=30.0, margin_db=10.0))
+
+    cand = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 1, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+
+    result = score_candidate(model, cand, svc)
+
+    assert result.total_margin == pytest.approx(15.0), (
+        "bystander's margin (10.0) must be preserved alongside the "
+        "candidate's own (5.0), not silently wiped and skipped")
+
+
+def test_score_candidate_preserves_bystander_congestion_evidence_sharing_oms(
+        diamond_service):
+    """A pre-existing, ALREADY-OVERSUBSCRIBED bystander service (real
+    congestion: demand 150 Gbps over a 100 Gbps lightpath, 50 Gbps overflow)
+    sharing omsAB with the scored candidate's new run must still read as
+    congested in the returned ObjectiveResult. Pre-fix, provisioning the
+    candidate's run wipes the bystander lightpath's QoT, its IP link's
+    capacity becomes "unknown" (LookupError), simulate_ip_routing treats an
+    unknown link as neither congested nor down, and the 50 Gbps overflow +
+    the 1.5x utilization both silently vanish from the score -- exactly the
+    "erases the evidence of a real problem" failure mode. Post-fix, the
+    bystander's original QoT (hence its true congestion) is restored before
+    evaluate_objective reads it."""
+    model, svc = diamond_service   # empty net + svc-AB (demand 100), omsAB A->B
+    model.add_lightpath(Lightpath(id="lp-bystander", oms_sequence=("omsAB",),
+                                  mode_id="100G", center_freq_hz=193.4e12))
+    model.set_qot_state("lp-bystander",
+                        QoTState(gsnr_db=20.0, osnr_db=30.0, margin_db=10.0))
+    model.add_ip_link(IPLink(id="ipl-bystander", a_router="A", z_router="B",
+                             lightpath_id="lp-bystander"))
+    model.add_service(Service(id="svc-bystander", src_router="A", dst_router="B",
+                              demand_gbps=150.0, working_path=("ipl-bystander",)))
+
+    cand = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 1, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+
+    result = score_candidate(model, cand, svc)
+
+    # 100G capacity on lp-bystander, 150 Gbps offered -> 50 Gbps overflow,
+    # 1.5x utilization. svc-AB's own new link (100/100) is exactly at 1.0x,
+    # not congested, contributing 0 overflow -- so any surviving overflow/
+    # utilization signal traces only to the bystander.
+    assert result.dropped_traffic == pytest.approx(50.0), (
+        "bystander's real overflow (50 Gbps) must survive scoring, not read "
+        "as 0.0 because its QoT (and therefore capacity) was wiped")
+    assert result.max_util == pytest.approx(1.5), (
+        "bystander's true 1.5x utilization must survive scoring, not read "
+        "as unknown/excluded because its QoT was wiped")
+
+
+def test_score_pair_preserves_bystander_margin_sharing_oms(diamond_service):
+    """Same protection as score_candidate's bystander-margin test, but for
+    score_pair: a pre-existing lightpath that is neither the working nor the
+    protection leg being scored, sharing omsAB with BOTH legs' new runs, must
+    keep contributing its margin. Working margin: 5.0 (gsnr 15 - required
+    10). Protection margin: 5.0. Bystander margin: 10.0. Pre-fix, either
+    leg's provisioning wipes the bystander's QoT and evaluate_objective's
+    total_margin loop silently skips it -- total_margin would read 10.0
+    (both legs only). Post-fix it reads 20.0 (both legs + bystander)."""
+    model, svc = diamond_service   # empty net + svc-AB, omsAB A->B
+    model.add_lightpath(Lightpath(id="lp-bystander", oms_sequence=("omsAB",),
+                                  mode_id="100G", center_freq_hz=193.4e12))
+    model.set_qot_state("lp-bystander",
+                        QoTState(gsnr_db=20.0, osnr_db=30.0, margin_db=10.0))
+
+    working = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 0, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+    protection = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 1, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+
+    result = score_pair(model, working, protection, svc)
+
+    assert result.total_margin == pytest.approx(20.0), (
+        "bystander's margin (10.0) must be preserved alongside both legs' "
+        "own (5.0 + 5.0), not silently wiped and skipped")
