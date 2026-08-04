@@ -20,6 +20,7 @@ from .model.modes import load_modulation_formats
 from .model.network import NetworkModel
 from .model.qot_results import QoTResultStore, HarvestCache
 from .model.snapshots import SnapshotStore
+from .model.violations import ValidationReportModel, CommitResultModel
 from .gnpy_adapter.loading import Channel, LoadingState
 from .gnpy_adapter.adapter import (
     compute_qot as _compute_qot,
@@ -677,7 +678,7 @@ def build_app(*, model: NetworkModel | None = None,
     def validate_plan(
         plan: dict, basis: str = "physical", level: str = "link",
         dropped_tolerance_gbps: float = 0.0,
-    ) -> dict:
+    ) -> ValidationReportModel:
         """Replay a plan op-by-op on a clone and return a typed violation list,
         checked at EVERY intermediate state (not just endpoints). Violations:
         mode_infeasible, spectrum_clash, ip_link_overload, dropped_traffic (incl.
@@ -697,7 +698,7 @@ def build_app(*, model: NetworkModel | None = None,
                 "ok": False, "num_states": 0,
                 "violations": [{"type": "invalid_plan", "state_index": 0,
                                 "asset_id": None, "transient": False,
-                                "detail": {"message": str(exc)}}],
+                                "message": str(exc)}],
             }
         return validation_report_dict(report)
 
@@ -886,7 +887,7 @@ def build_app(*, model: NetworkModel | None = None,
         plan: dict, dry_run: bool = True, confirm: bool = False,
         basis: str = "physical", level: str = "link",
         dropped_tolerance_gbps: float = 0.0,
-    ) -> dict:
+    ) -> CommitResultModel:
         """dry_run=True simulates on a clone and returns the would-be diff without
         touching state. A live commit (dry_run=False) validates first, requires
         confirm=True, then actuates; status is 'rejected' (violations),

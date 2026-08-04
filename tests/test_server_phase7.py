@@ -508,3 +508,38 @@ def test_reroute_service_tool_warns_on_protection_reservation_oversubscription()
     assert "150" in warning     # reserved protection
     assert "350" in warning     # committed total
     assert "300" in warning     # derived capacity
+
+
+def test_validate_plan_tool_has_output_schema_with_all_violation_types():
+    """The actual point of the discriminated-union refactor: FastMCP must now
+    publish a real outputSchema for validate_plan, naming every violation
+    type's fields -- not the None it registered when the tool returned a bare
+    dict. This is what makes the shape agent-visible before any call, the
+    same way inputSchema already is."""
+    app = build_app()
+    tool = app._tool_manager._tools["validate_plan"]
+    schema = tool.output_schema
+    assert schema is not None
+    # Pydantic's discriminated-union schema emits each variant as a named
+    # entry under $defs (verified directly against this repo's installed
+    # pydantic/mcp versions before writing this test) -- assert every
+    # violation type's model name is discoverable in the generated schema.
+    schema_text = str(schema)
+    for expected in (
+        "ModeInfeasibleViolation", "SpectrumClashViolation", "IpLinkOverloadViolation",
+        "DroppedTrafficViolation", "DisjointnessCollapseViolation",
+        "ProtectionNotViableViolation", "ProtectionOversubscribedViolation",
+        "InvalidPlanViolation",
+    ):
+        assert expected in schema_text
+
+
+def test_commit_plan_tool_has_output_schema():
+    """Same point as the validate_plan schema test, for commit_plan: it must
+    also publish a real outputSchema now that its return annotation is
+    CommitResultModel instead of bare dict."""
+    app = build_app()
+    tool = app._tool_manager._tools["commit_plan"]
+    schema = tool.output_schema
+    assert schema is not None
+    assert "CommitResultModel" in str(schema) or "status" in str(schema)

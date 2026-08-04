@@ -329,12 +329,14 @@ def test_validate_plan_tool_sanitizes_mode_infeasible_detail_floats():
     out = _call(app, "validate_plan", plan={"ops": []})
     assert out["ok"] is False
     v = next(v for v in out["violations"] if v["type"] == "mode_infeasible")
-    assert v["detail"]["margin_db"] == "-Infinity"
-    assert v["detail"]["gsnr_db"] == "-Infinity"
+    # Discriminated-union flattening: MODE_INFEASIBLE's fields sit at the top
+    # level of the violation dict now, not nested under "detail".
+    assert v["margin_db"] == "-Infinity"
+    assert v["gsnr_db"] == "-Infinity"
     # deficit_db = required_gsnr_db - gsnr_db = required - (-inf) = +inf.
-    assert v["detail"]["deficit_db"] == "Infinity"
-    # Non-float values in the same detail dict must pass through unchanged.
-    assert isinstance(v["detail"]["feasible_downshift_modes"], list)
+    assert v["deficit_db"] == "Infinity"
+    # Non-float values in the same violation must pass through unchanged.
+    assert isinstance(v["feasible_downshift_modes"], list)
 
     payload = json.dumps(out)
     _assert_json_finite(json.loads(payload))
