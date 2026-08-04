@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, PlainSerializer
+from pydantic import BaseModel, Field, PlainSerializer, WithJsonSchema
 
 from .json_safety import safe_float
 
@@ -32,8 +32,23 @@ from .json_safety import safe_float
 # model_dump_json()); model_dump() in python mode (and all internal access)
 # keeps the real float, including a non-finite one -- mirrors json_safety's
 # "only the outgoing dict is sanitized" contract.
+#
+# PlainSerializer's `return_type` only affects the model's *serialization*-mode
+# JSON schema (model_json_schema(mode="serialization")); FastMCP publishes the
+# tool's *validation*-mode schema (Tool.output_schema), which otherwise still
+# claims a bare `{"type": "number"}` even though the real wire value for a
+# non-finite margin is the JSON string "-Infinity"/"Infinity"/"NaN". The
+# WithJsonSchema override below makes the *published* schema honest about
+# both shapes it can actually emit.
 SafeFloat = Annotated[
-    float, PlainSerializer(safe_float, return_type=Union[float, str], when_used="json")
+    float,
+    PlainSerializer(safe_float, return_type=Union[float, str], when_used="json"),
+    WithJsonSchema({
+        "anyOf": [
+            {"type": "number"},
+            {"type": "string", "enum": ["Infinity", "-Infinity", "NaN"]},
+        ]
+    }),
 ]
 
 

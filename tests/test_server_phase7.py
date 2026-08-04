@@ -534,6 +534,29 @@ def test_validate_plan_tool_has_output_schema_with_all_violation_types():
         assert expected in schema_text
 
 
+def test_validate_plan_tool_output_schema_declares_safe_float_anyof():
+    """Regression for the final-review finding: SafeFloat's PlainSerializer
+    return_type only affects model_json_schema(mode="serialization"), NOT the
+    validation-mode schema FastMCP actually publishes as tool.output_schema.
+    Without the WithJsonSchema override, the published schema falsely claims
+    every SafeFloat field (e.g. ModeInfeasibleViolation.margin_db) is a bare
+    number, while the real wire value for a non-finite margin (e.g. a
+    failed-asset -inf) is the JSON string "-Infinity". Assert the published
+    schema now documents both shapes for a representative SafeFloat field."""
+    app = build_app()
+    tool = app._tool_manager._tools["validate_plan"]
+    schema = tool.output_schema
+    assert schema is not None
+    defs = schema.get("$defs", {})
+    mode_infeasible = defs["ModeInfeasibleViolation"]
+    margin_schema = mode_infeasible["properties"]["margin_db"]
+    assert "anyOf" in margin_schema
+    types = {entry.get("type") for entry in margin_schema["anyOf"]}
+    assert types == {"number", "string"}
+    string_variant = next(e for e in margin_schema["anyOf"] if e.get("type") == "string")
+    assert set(string_variant["enum"]) == {"Infinity", "-Infinity", "NaN"}
+
+
 def test_commit_plan_tool_has_output_schema():
     """Same point as the validate_plan schema test, for commit_plan: it must
     also publish a real outputSchema now that its return annotation is
@@ -542,4 +565,4 @@ def test_commit_plan_tool_has_output_schema():
     tool = app._tool_manager._tools["commit_plan"]
     schema = tool.output_schema
     assert schema is not None
-    assert "CommitResultModel" in str(schema) or "status" in str(schema)
+    assert "CommitResultModel" in str(schema)

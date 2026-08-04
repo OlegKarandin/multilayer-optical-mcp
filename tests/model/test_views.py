@@ -230,6 +230,12 @@ def test_validation_report_dict_flattens_detail_for_every_violation_type():
         # the drift guard.
         instance = model_cls.model_validate(flat)
         assert instance.type == violation.type.value
+        # model_validate alone only catches a missing/renamed key (raises
+        # ValidationError); it silently accepts an *added* key that model_cls
+        # doesn't declare (Pydantic drops unknown fields by default), so also
+        # assert the key sets match exactly to catch that drift direction too.
+        assert set(flat) == set(model_cls.model_fields), \
+            f"{model_cls.__name__}: dict keys and model fields drifted"
 
 
 def test_validation_report_dict_sanitizes_nonfinite_floats_when_flattened():
