@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from .network import NetworkModel
+from .plan import PlanError
 from .solvers import SolverStatus
 from .multilayer_graph import build_layered_graph, NewLightpathRun
 from .placement_common import _forbidden_assets, _lever, _status, _harvest_placements
@@ -83,11 +84,21 @@ def route_service(model: NetworkModel, qot, service_id: str, *, protected: bool 
     placements = [p for p in placements if placement_materializable(model, p)]
 
     if not protected:
-        cands = [RouteServiceCandidate(
-                    _lever(p), p.reused_lightpaths, p.new_lightpaths,
-                    p.restored_gbps, p.shortfall_gbps,
-                    _vec(score_candidate(model, p, svc, weights)))
-                 for p in placements]
+        cands = []
+        for p in placements:
+            # score_candidate provisions the placement on a throwaway clone via
+            # the real apply_op path, which can raise PlanError on a stale/bad
+            # reference (e.g. an OMS id the harvest saw but that no longer
+            # resolves). This is a solver-menu tool: CLAUDE.md requires typed
+            # results, never exceptions, so an unscoreable placement is dropped
+            # from the menu rather than crashing the whole route_service call.
+            try:
+                scored = score_candidate(model, p, svc, weights)
+            except PlanError:
+                continue
+            cands.append(RouteServiceCandidate(
+                _lever(p), p.reused_lightpaths, p.new_lightpaths,
+                p.restored_gbps, p.shortfall_gbps, _vec(scored)))
         cands.sort(key=lambda c: c.cost_vector["scalar"])
         status = _status(bool(cands), any(c.shortfall_gbps == 0.0 for c in cands))
         return RouteServiceResult(status, service_id, svc.demand_gbps, False,
@@ -97,7 +108,12 @@ def route_service(model: NetworkModel, qot, service_id: str, *, protected: bool 
                         best_effort=best_effort, top_n=top_n, endpoints=(src, dst))
     pairs: List[RoutePair] = []
     for p in pp:
-        sr = score_pair(model, p.working, p.protection, svc, weights)
+        # Same PlanError-tolerance as the unprotected branch above: an
+        # unscoreable pair is dropped from the menu, not a crash.
+        try:
+            sr = score_pair(model, p.working, p.protection, svc, weights)
+        except PlanError:
+            continue
         def _c(pl):
             return RouteServiceCandidate(_lever(pl), pl.reused_lightpaths,
                 pl.new_lightpaths, pl.restored_gbps, pl.shortfall_gbps, {})

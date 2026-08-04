@@ -172,7 +172,7 @@ def test_real_gnpy_integration_places_with_adapter_mode():
     n = model_from_abstract_graph(graph, modes=_modes())
     # No topo_path: the adapter synthesizes the bidirectional GNPy network.
     qot = make_adapter_evaluator(n, QoTResultStore())
-    res = solve_rsa(n, qot, [{"id": "d1", "src": "A", "dst": "Z"}], objective="shortest")
+    res = solve_rsa(n, qot, [{"id": "d1", "src": "A", "dst": "Z"}])
     assert res.status is SolverStatus.SOLUTION
     p = res.placements[0]
     # North (A-M-Z, 160 km) is shorter than south (A-N-Z, 240 km) -> chosen.

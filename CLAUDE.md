@@ -237,7 +237,10 @@ Group tools by capability. Names are stable contract; argument schemas are typed
 
 ### State management (snapshots)
 - `snapshot_create()` → id
-- `snapshot_branch(id)` → id — copy-on-write branch for exploration.
+- `snapshot_branch(id)` → id — copy-on-write branch for exploration. The
+  returned id names the branch POINT: a frozen snapshot of the parent state
+  at that instant, not a live handle — call `snapshot_create()` again after
+  mutating the branch to get an id for its post-mutation state.
 - `snapshot_restore(id)` — roll back to a known-good state.
 - `snapshot_diff(a, b)` — structured delta between two states.
 
@@ -323,9 +326,12 @@ questions:
   just endpoints. Must run before any commit.
 - `provision_lightpath(spec)` / `teardown_lightpath(id)` — also flip the bound IP
   link up/down.
-- `reroute_service(service, ip_path)` — move an IP demand onto a different IP path
-  over survivors (the IP-reroute restoration option). Distinct from optical reroute
-  (which changes a lightpath's optical path).
+- `reroute_service(service, ip_path, which="working")` — move an IP demand's working
+  (default) or protection leg onto a different IP path over survivors (the IP-reroute
+  restoration option). `which="protection"` targets `protection_path` instead —
+  needed to replan a service's protection leg, e.g. after a risk group reveals it
+  correlates with working. Distinct from optical reroute (which changes a
+  lightpath's optical path).
 - `set_modulation_format(transponder, mode)` — changes the mode; the bound IP
   link's capacity propagates automatically through the model (no separate edit).
 - `commit_plan(plan, dry_run)` — `dry_run=true` simulates; live commit is

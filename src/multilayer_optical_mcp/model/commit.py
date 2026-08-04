@@ -27,21 +27,38 @@ def full_actuator(model: NetworkModel, op) -> bool:
     return True
 
 
-def actuate(model: NetworkModel, plan: Plan, actuator: Actuator) -> Tuple[int, int]:
+@dataclass(frozen=True)
+class OpFailure:
+    """Which op failed during actuate() and why -- so a partial live commit is
+    diagnosable from CommitResult alone, not just "3 of 5 landed" with the
+    caller left to guess. reconcile() still tells you WHAT didn't land
+    (model-vs-reality drift); this tells you WHY the actuator rejected it."""
+    op_index: int
+    op_repr: str
+    error: str
+
+
+def actuate(
+    model: NetworkModel, plan: Plan, actuator: Actuator,
+) -> Tuple[int, int, Tuple[OpFailure, ...]]:
     """Run each op through the actuator on the live model. Returns
-    (applied_count, failed_count). A failed op leaves the model unchanged for
-    that op (the actuator must not partially apply)."""
+    (applied_count, failed_count, failures). A failed op leaves the model
+    unchanged for that op (the actuator must not partially apply)."""
     applied = failed = 0
-    for op in plan.ops:
+    failures: List[OpFailure] = []
+    for i, op in enumerate(plan.ops):
         try:
             ok = actuator(model, op)
-        except Exception:
+            error = None if ok else "actuator declined the op (returned False)"
+        except Exception as exc:
             ok = False
+            error = repr(exc)
         if ok:
             applied += 1
         else:
             failed += 1
-    return applied, failed
+            failures.append(OpFailure(op_index=i, op_repr=repr(op), error=error))
+    return applied, failed, tuple(failures)
 
 
 @dataclass(frozen=True)
@@ -53,6 +70,7 @@ class CommitResult:
     intended_snapshot_id: Optional[str]
     validation: Optional[ValidationReport]
     diff: Optional[dict]                 # simulated delta (dry_run) else None
+    failures: Tuple[OpFailure, ...] = () # per-op (index, repr, error) on partial actuation failure
 
 
 @dataclass(frozen=True)
@@ -166,7 +184,7 @@ def commit_plan(
         pass
     intended_id = store.put(intended)
 
-    applied, failed = actuate(current, plan, actuator)
+    applied, failed, failures = actuate(current, plan, actuator)
 
     # Post-actuation recompute: seed QoT for freshly-lit lightpaths on the LIVE
     # model, so a just-committed lightpath reports derived capacity instead of
@@ -184,7 +202,7 @@ def commit_plan(
     status = "committed" if failed == 0 else "committed_with_failures"
     return CommitResult(status=status, dry_run=False, applied_ops=applied,
                         failed_ops=failed, intended_snapshot_id=intended_id,
-                        validation=report, diff=None)
+                        validation=report, diff=None, failures=failures)
 
 
 def reconcile(store: SnapshotStore, intended_snapshot_id: str) -> DriftReport:

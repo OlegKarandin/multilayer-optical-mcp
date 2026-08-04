@@ -565,25 +565,18 @@ def build_app(*, model: NetworkModel | None = None,
         return feasibility_result_dict(res)
 
     @app.tool()
-    def solve_rsa(
-        demands: list[dict], objective: str = "shortest",
-        constraints: dict | None = None,
-    ) -> dict:
+    def solve_rsa(demands: list[dict]) -> dict:
         """Route + spectrum-assign optical demands. Each demand:
         {id, src, dst, protected?, required_gbps?, constraints?}. Mode falls out
         of the GNPy GSNR on the chosen route (highest feasible bitrate).
 
         A demand's own `constraints` (e.g. `avoid`) are honored for both
         unprotected placement and the working+protection pair of a protected
-        demand.
-
-        Known limitation: the top-level `constraints` parameter above (as
-        opposed to each demand's own `constraints` dict) is currently
-        unused/reserved, not wired to per-demand constraints."""
+        demand. Routing is always shortest-path; there is no separate
+        objective mode."""
         model = snapshots.current()
         qot = make_adapter_evaluator(model, results, harvest_cache=harvest_cache)
-        return placement_result_dict(
-            _solve_rsa(model, qot, demands, objective=objective, constraints=constraints))
+        return placement_result_dict(_solve_rsa(model, qot, demands))
 
     @app.tool()
     def solve_allocation(

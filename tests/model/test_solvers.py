@@ -604,6 +604,68 @@ def test_compute_disjoint_paths_exhaustive_true_within_cap():
     assert res.exhaustive is True
 
 
+def _model_n_distinct_routes(n_routes: int) -> NetworkModel:
+    """`n_routes` fully node-disjoint, two-hop A->M_i->B routes, each on its
+    own fibers/amps -- every pair is physically disjoint, and each route
+    contributes exactly ONE combo (single OMS per hop, no parallels). Isolates
+    the DISTINCT-NODE-PATH cap (_DISJOINT_CANDIDATE_CAP) from the emission cap
+    (_DISJOINT_EMISSION_CAP): total emissions stay at n_routes even when
+    n_routes far exceeds _DISJOINT_CANDIDATE_CAP, so any truncation observed
+    can only be the candidate-path cap, never the emission cap."""
+    n = NetworkModel(modes=ModeRegistry([
+        TransceiverMode(id="100G-QPSK", bitrate_gbps=100.0,
+                        required_gsnr_db=12.0, symbol_rate_baud=32e9,
+                        channel_spacing_hz=50e9),
+    ]))
+    n.register_fiber_type(FiberType(type_variety="SSMF", loss_coef_db_per_km=0.2))
+    n.add_roadm(ROADM(id="roadm_A"))
+    n.add_roadm(ROADM(id="roadm_B"))
+    for i in range(n_routes):
+        m = f"M{i}"
+        n.add_roadm(ROADM(id=f"roadm_{m}"))
+        a1, a2, a3, a4 = f"r{i}am1", f"r{i}am2", f"r{i}am3", f"r{i}am4"
+        for amp_id in (a1, a2, a3, a4):
+            n.add_amplifier(Amplifier(id=amp_id, type_variety="advanced_toy",
+                                      gain_db=20.0, nf_db=5.5))
+        n.add_fiber(Fiber(id=f"r{i}fib1", a_end=a1, z_end=a2, length_km=80.0,
+                          type_variety="SSMF"))
+        n.add_fiber(Fiber(id=f"r{i}fib2", a_end=a3, z_end=a4, length_km=80.0,
+                          type_variety="SSMF"))
+        n.add_oms(OMS(id=f"oms-r{i}-1", src_node_id="A", dst_node_id=m,
+                      elements=("roadm_A", a1, f"r{i}fib1", a2)))
+        n.add_oms(OMS(id=f"oms-r{i}-2", src_node_id=m, dst_node_id="B",
+                      elements=(f"roadm_{m}", a3, f"r{i}fib2", a4)))
+    return n
+
+
+def test_compute_disjoint_paths_exhaustive_false_under_candidate_cap_truncation():
+    """Regression: `exhaustive` must detect truncation via
+    _DISJOINT_CANDIDATE_CAP alone, not just the emission cap. n_routes = cap+1
+    distinct node paths, each contributing exactly one combo (33 total
+    emissions, nowhere near _DISJOINT_EMISSION_CAP=1024) -- so ONLY the
+    candidate-path cap binds here. Before this fix, `exhaustive` stayed True
+    in this exact scenario (a false "not known to be truncated" even though
+    one whole route was never even considered)."""
+    from multilayer_optical_mcp.model.solvers import _DISJOINT_CANDIDATE_CAP
+    n = _model_n_distinct_routes(_DISJOINT_CANDIDATE_CAP + 1)
+    res = compute_disjoint_paths(n, "A", "B", basis="physical", level="link",
+                                 best_effort=False)
+    assert res.status is SolverStatus.SOLUTION   # every pair here is disjoint
+    assert res.exhaustive is False
+
+
+def test_compute_disjoint_paths_exhaustive_true_at_exact_candidate_cap():
+    """Boundary companion: exactly _DISJOINT_CANDIDATE_CAP distinct routes --
+    the search considers every one of them (the cap never actually cuts
+    anything off), so `exhaustive` must stay True."""
+    from multilayer_optical_mcp.model.solvers import _DISJOINT_CANDIDATE_CAP
+    n = _model_n_distinct_routes(_DISJOINT_CANDIDATE_CAP)
+    res = compute_disjoint_paths(n, "A", "B", basis="physical", level="link",
+                                 best_effort=False)
+    assert res.status is SolverStatus.SOLUTION
+    assert res.exhaustive is True
+
+
 def _model_single_route_alternating_srlg_planes(n_hops: int, parallels_per_hop: int = 2) -> NetworkModel:
     """A SINGLE node-chain A->n1->...->n(k-1)->B (no alternate node path) with
     `parallels_per_hop` parallel OMS on EVERY hop, where parallel index 0 at

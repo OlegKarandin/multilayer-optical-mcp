@@ -261,9 +261,14 @@ class NetworkModel:
         """Tear a lightpath down: drop it, its recorded QoT, and unbind every IP
         link riding it (teardown flips the bound IP link down — CLAUDE.md coupling
         1). Removing (not sentinelling) frees the lightpath's spectrum slot and
-        stops it loading its fibers, which is what make-before-break requires."""
+        stops it loading its fibers, which is what make-before-break requires.
+        Idempotent, matching remove_ip_link: a second call on an already-gone id
+        is a no-op, not a KeyError."""
         self._check_mutable()
-        oms_sequence = self._lightpaths[lp_id].oms_sequence
+        lp = self._lightpaths.get(lp_id)
+        if lp is None:
+            return
+        oms_sequence = lp.oms_sequence
         for link_id in self.ip_links_for_lightpath(lp_id):
             self._ip_links.pop(link_id, None)
         self._lightpaths.pop(lp_id, None)

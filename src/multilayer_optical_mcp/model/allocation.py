@@ -287,7 +287,6 @@ def _demand_constraints(d: dict) -> Tuple[str, str, bool]:
 
 def solve_rsa(
     model: NetworkModel, qot: QotEvaluator, demands: Sequence[dict],
-    objective: str = "shortest", constraints: Optional[dict] = None,
     fill_policy: FillPolicy = FillPolicy.FULL,
 ) -> RSAResult:
     """Route + spectrum-assign each demand. Demand:
@@ -302,11 +301,9 @@ def solve_rsa(
     A demand's own `constraints` (e.g. `avoid`) are honored for both
     UNPROTECTED placement (`_place_unprotected` passes them to `compute_paths`)
     and the working+protection pair of a protected demand (`_place_protected`
-    passes them to `compute_disjoint_paths`).
-
-    Known limitation: the top-level `constraints` parameter on THIS function
-    (as opposed to each demand's own `constraints` dict) is currently
-    unused/reserved and is not wired to per-demand constraints."""
+    passes them to `compute_disjoint_paths`). There is no top-level
+    objective/constraints parameter on this function; routing is always
+    shortest-path and constraints are always per-demand."""
     grid = SpectrumGrid.default()
     work = build_spectrum_state(model, grid)
     ref_mode = model.modes.list()[0].id

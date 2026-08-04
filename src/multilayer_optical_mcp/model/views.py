@@ -425,6 +425,10 @@ def commit_result_dict(result) -> Dict[str, Any]:
         "validation": validation_report_dict(result.validation)
         if result.validation is not None else None,
         "diff": _jsonify_diff(result.diff),
+        "failures": [
+            {"op_index": f.op_index, "op": f.op_repr, "error": f.error}
+            for f in result.failures
+        ],
     }
 
 

@@ -78,6 +78,15 @@ def test_partial_commit_then_reconcile_surfaces_drift():
     assert "lpX" in store.current()._lightpaths       # first op actuated
     assert "lpY" not in store.current()._lightpaths   # second failed
 
+    # Regression: CommitResult must name which op failed and why, not just a
+    # count -- reconcile() alone tells you WHAT didn't land, not WHY the
+    # actuator rejected it.
+    assert len(result.failures) == 1
+    failure = result.failures[0]
+    assert failure.op_index == 1               # second op in the plan (0-based)
+    assert "lpY" in failure.op_repr
+    assert failure.error                       # non-empty explanation
+
     drift = reconcile(store, result.intended_snapshot_id)
     assert not drift.in_sync
     # intended has lpY/ipY that reality lacks -> drift names them

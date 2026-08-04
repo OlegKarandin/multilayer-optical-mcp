@@ -69,15 +69,12 @@ class DisjointnessResult:
     path_b: Optional[OmsPath] = None
     shared_assets: Tuple[str, ...] = ()
     shared_groups: Tuple[str, ...] = ()
-    # True unless compute_disjoint_paths's search was truncated by the
-    # emission cap before it could exhaustively enumerate the candidate
-    # space -- see that function's docstring. check_disjointness never
-    # searches (it audits two already-given paths), so its results are
-    # trivially always exhaustive and it never needs to set this field.
-    # Conservative, not complete: this only detects truncation via the
-    # emission cap; truncation via the narrower distinct-node-path cap
-    # (_DISJOINT_CANDIDATE_CAP) is NOT detected and can still leave
-    # `exhaustive=True` on a search that was, in fact, cut short.
+    # True unless compute_disjoint_paths's search was truncated by EITHER the
+    # emission cap or the distinct-node-path cap (_DISJOINT_CANDIDATE_CAP)
+    # before it could exhaustively enumerate the candidate space -- see that
+    # function's docstring. check_disjointness never searches (it audits two
+    # already-given paths), so its results are trivially always exhaustive
+    # and it never needs to set this field.
     exhaustive: bool = True
 
 
@@ -234,6 +231,7 @@ def _hop_combos(hop_options: Sequence[Sequence[str]], *, diagonal_first: bool) -
 def _enumerate_oms_paths(
     model: NetworkModel, src: str, dst: str, k: int, weight: str = "hops",
     forbidden: frozenset = frozenset(), max_node_paths: Optional[int] = None,
+    truncation: Optional[dict] = None,
 ) -> Iterator[OmsPath]:
     """Yield up to `k` OMS-sequence routes src->dst, shortest first, expanding
     parallel OMS per hop. `weight="hops"` (default) orders by segment count;
@@ -249,7 +247,17 @@ def _enumerate_oms_paths(
     parallel, and hop expansion then emits every parallel per hop in odometer
     order (not re-sorted by realized total length). `solve_rsa` relies on this
     ordering as a heuristic proxy for reachable SNR, not a certified guarantee;
-    the first `k` results are not provably shortest-by-fiber-km."""
+    the first `k` results are not provably shortest-by-fiber-km.
+
+    `truncation`, when passed a dict, is written to (never read) so a caller
+    can tell apart "max_node_paths bound the search" (at least one more
+    distinct node path existed beyond the cap that was never even considered)
+    from "the search ran dry on its own" (every node path was seen; the cap
+    just happened not to bind). Written at most once, to key
+    "candidate_cap_hit" -- callers should pre-seed it False and treat an
+    untouched dict as "cap never bound." compute_disjoint_paths uses this to
+    make its `exhaustive` field detect BOTH truncation mechanisms, not just
+    the emission cap."""
     g = build_oms_graph(model, forbidden)
     if src not in g or dst not in g or src == dst:
         return
@@ -329,6 +337,13 @@ def _enumerate_oms_paths(
             if emitted >= k:
                 return
             if max_node_paths is not None and node_paths_seen >= max_node_paths:
+                # We only reach here because the `for` loop already pulled
+                # THIS node_path from `node_paths` before the cap check ran --
+                # its mere existence proves at least one more distinct node
+                # path sat beyond the cap, unconsidered. That's exactly the
+                # "truncated, not exhausted" signal a caller needs.
+                if truncation is not None:
+                    truncation["candidate_cap_hit"] = True
                 # Stop considering NEW node paths, but still fall through to
                 # the resumption pass below for node paths already parked.
                 break
@@ -501,22 +516,21 @@ def compute_disjoint_paths(
     pair, and a truncated search returns the same NO_SOLUTION as a proven one.
     On a very large or highly-parallel topology, a NO_SOLUTION result should
     not be read as full-confidence proof that no disjoint pair exists. The
-    result's `exhaustive` field is a partial, best-effort signal for this:
-    it is False when total candidate emissions hit `_DISJOINT_EMISSION_CAP`
-    (the more commonly-hit case on dense/highly-parallel topologies), but it
-    does NOT detect truncation via the narrower `_DISJOINT_CANDIDATE_CAP`
-    (distinct-node-path cap) alone -- a search that was cut short only by
-    that cap can still report `exhaustive=True`. Treat `exhaustive=True` as
-    "not known to be truncated," not as an independent proof of completeness."""
+    result's `exhaustive` field detects truncation via EITHER cap: it is False
+    when total candidate emissions hit `_DISJOINT_EMISSION_CAP`, and also False
+    when `_DISJOINT_CANDIDATE_CAP` (the distinct-node-path cap) cut the search
+    off with at least one more, never-considered node path beyond it (see
+    `_enumerate_oms_paths`'s `truncation` param). `exhaustive=True` means
+    neither cap bound the search."""
     avoid_assets, avoid_srlgs, avoid_rgs = _avoid_sets(model, constraints)
     forbidden = forbidden_oms(model, avoid_assets, avoid_srlgs, avoid_rgs)
+    truncation = {"candidate_cap_hit": False}
     cands = list(_enumerate_oms_paths(model, src, dst, _DISJOINT_EMISSION_CAP,
                                       weight=weight, forbidden=forbidden,
-                                      max_node_paths=_DISJOINT_CANDIDATE_CAP))
-    # Conservative, partial truncation signal -- see docstring above and the
-    # `exhaustive` field's own comment on DisjointnessResult. Only catches
-    # emission-cap truncation, not the narrower candidate-cap-only case.
-    exhaustive = len(cands) < _DISJOINT_EMISSION_CAP
+                                      max_node_paths=_DISJOINT_CANDIDATE_CAP,
+                                      truncation=truncation))
+    exhaustive = (len(cands) < _DISJOINT_EMISSION_CAP
+                 and not truncation["candidate_cap_hit"])
     keyed = [(p, path_basis_keys(model, p.oms_sequence, basis=basis, level=level))
              for p in cands]
 

@@ -70,9 +70,11 @@ adapt: **weights drive routing; QoT realizes the result.**
    lightpaths in one path** (`hybrid` lever). Each new-lightpath run is QoT'd independently,
    so a path that chains new lightpaths with an O-E-O at an intermediate access node is
    *enumerable* (the regen-reach benefit — a long detour split into individually-feasible
-   segments). **Deferred to validate/commit (Phase 7):** regen-node **transponder inventory
-   gating** (the read-only enumerator surfaces such recoveries with their transponder
-   `cost_facets` but does not yet verify spare transponders at the regen node).
+   segments). **Decided 2026-07-24: regen-node transponder inventory is assumed infinite.**
+   Pre-planning regen capacity is a nontrivial planning problem in its own right; gating
+   `validate_plan`/`commit_plan` on spare transponders was considered and deliberately not
+   built (see `docs/2026-07-19-open-todos.md` §5/§6). `solve_allocation`'s separate
+   `spare_inventory` packer still exists for callers who want scarcity modeling explicitly.
 
 ## Architecture
 
@@ -162,8 +164,10 @@ candidates + cost facets → (Phase 7) `validate_plan` the chosen candidate's pl
 ## Deferred (honest boundaries)
 
 - Regen-node **transponder inventory gating** — multi-new-lightpath recoveries are
-  *enumerated* (with their transponder cost) but spare-transponder availability at regen
-  nodes is checked at validate/commit (Phase 7), not here.
+  *enumerated* (with their transponder cost); spare-transponder availability at regen nodes
+  is **not** checked anywhere in `validate_plan`/`commit_plan`. This was originally scoped
+  for Phase 7 but decided 2026-07-24 to stay unbuilt: regen capacity is assumed infinite
+  rather than pre-planned (see `docs/2026-07-19-open-todos.md` §5/§6).
 - `solve_allocation` refactor onto the layered graph — the next consumer.
 - Full `evaluate_objective` cost vector — `cost_facets` are computed inline meanwhile.
 - Execution — `compute_restoration` only enumerates. `validate_plan` / `commit_plan` /

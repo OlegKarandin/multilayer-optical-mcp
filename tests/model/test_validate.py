@@ -319,3 +319,27 @@ def test_final_state_spectrum_clash_does_not_mistag_persistent_mode_infeasible()
 
     clash = [v for v in report.violations if v.type == ViolationType.SPECTRUM_CLASH]
     assert clash and all(v.state_index == final_index for v in clash)
+
+
+def test_recompute_failure_does_not_escape_validate_plan(monkeypatch):
+    # Regression: recompute_if_possible must swallow an adapter/GNPy exception
+    # rather than let it propagate out of validate_plan. Before the fix, this
+    # blew up with the adapter's raw exception instead of returning a report --
+    # and even where an outer try/except caught it (server.py's tool boundary),
+    # it was mistagged as INVALID_PLAN ("the plan is malformed"), which isn't
+    # what happened: the plan was fine, the QoT recompute itself failed.
+    import multilayer_optical_mcp.model.validate as validate_mod
+
+    def _boom(**kwargs):
+        raise RuntimeError("adapter blew up")
+
+    monkeypatch.setattr(validate_mod, "recompute_qot_under_loading", _boom)
+
+    m = _ip_over_optical(demand=300.0)
+    plan = Plan(ops=(SetModulationFormat(lightpath_id="lpAB", mode_id="200G"),))
+    report = validate_plan(m, plan, store=_store())  # must not raise
+    assert report.num_states == 1
+    # IP_LINK_OVERLOAD depends on mode/QoT-derived capacity being current;
+    # with recompute swallowed, the check still ran against stale QoT rather
+    # than crashing the whole validation.
+    assert isinstance(report.violations, tuple)

@@ -295,6 +295,27 @@ def test_remove_lightpath_also_unbinds_ip_link():
     assert "svc" in {d.service_id for d in res.dropped_services}
 
 
+def test_remove_lightpath_is_idempotent():
+    # Regression: a second remove_lightpath on an already-gone id must be a
+    # no-op, matching remove_ip_link's documented idempotent contract, not a
+    # bare KeyError.
+    m = _model_with_service()
+    m.remove_lightpath("lpAB")
+    m.remove_lightpath("lpAB")   # must not raise
+    assert "lpAB" not in m._lightpaths
+
+
+def test_is_contiguous_path_on_dangling_link_returns_false_not_raise():
+    # Regression: is_contiguous_path itself must be safe on a dangling ip_path
+    # entry (the documented valid state left by remove_lightpath/
+    # remove_ip_link), not just safe-by-convention-of-its-callers.
+    from multilayer_optical_mcp.model.ip_routing import is_contiguous_path
+
+    m = _model_with_service()
+    m.remove_ip_link("ipAB")   # "ipAB" now dangles
+    assert is_contiguous_path(m, "rA", "rB", ("ipAB",)) is False   # must not raise
+
+
 def _protected_model():
     from dataclasses import replace
     m = _model_with_service()                       # svc demand 100, working ("ipAB",)

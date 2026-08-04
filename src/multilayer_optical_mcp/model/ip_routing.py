@@ -269,10 +269,17 @@ def is_contiguous_path(
 ) -> bool:
     """True iff ip_path forms a connected walk src_router -> dst_router,
     traversing each IP link in either orientation. Empty path is contiguous
-    only when src == dst."""
+    only when src == dst. A dangling ip_path entry (the documented valid state
+    left by remove_lightpath/remove_ip_link -- see module docstring) makes the
+    walk not contiguous rather than raising KeyError, consistent with how
+    every other dangling-link-aware path in this module treats the same
+    state."""
     cur = src_router
     for ip_id in ip_path:
-        link = model.get_ip_link(ip_id)
+        try:
+            link = model.get_ip_link(ip_id)
+        except KeyError:
+            return False
         if link.a_router == cur:
             cur = link.z_router
         elif link.z_router == cur:

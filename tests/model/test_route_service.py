@@ -325,3 +325,41 @@ def test_route_service_threads_one_grid_through_layered_and_placement(monkeypatc
 
     assert len(seen_grids) >= 2
     assert all(g is seen_grids[0] for g in seen_grids)
+
+
+def test_unprotected_scoring_planerror_is_dropped_not_raised(diamond_service, monkeypatch):
+    # Regression: score_candidate materializes a placement via the real apply_op
+    # path and can raise PlanError on a bad/stale reference. route_service is a
+    # solver-menu tool (CLAUDE.md: typed results, never exceptions) -- before
+    # the fix, nothing between here and the MCP boundary caught this, so a
+    # single unscoreable candidate crashed the whole call instead of just being
+    # dropped from the menu.
+    import multilayer_optical_mcp.model.route_service as rs_mod
+    from multilayer_optical_mcp.model.plan import PlanError
+
+    model, svc = diamond_service
+
+    def _boom(*args, **kwargs):
+        raise PlanError("simulated bad reference during scoring")
+
+    monkeypatch.setattr(rs_mod, "score_candidate", _boom)
+    res = route_service(model, FakeQot(), svc.id)  # must not raise
+    assert isinstance(res.status, SolverStatus)
+    assert res.status is SolverStatus.NO_SOLUTION
+    assert res.candidates == ()
+
+
+def test_protected_scoring_planerror_is_dropped_not_raised(diamond_service_two_routes, monkeypatch):
+    import multilayer_optical_mcp.model.route_service as rs_mod
+    from multilayer_optical_mcp.model.plan import PlanError
+
+    model, svc = diamond_service_two_routes
+
+    def _boom(*args, **kwargs):
+        raise PlanError("simulated bad reference during scoring")
+
+    monkeypatch.setattr(rs_mod, "score_pair", _boom)
+    res = route_service(model, FakeQot(), svc.id, protected=True)  # must not raise
+    assert isinstance(res.status, SolverStatus)
+    assert res.status is SolverStatus.NO_SOLUTION
+    assert res.pairs == ()

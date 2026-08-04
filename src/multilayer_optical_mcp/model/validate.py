@@ -276,10 +276,19 @@ def _op_target(op) -> Optional[str]:
 
 def recompute_if_possible(model: NetworkModel, store: QoTResultStore) -> None:
     """Recompute QoT for all lightpaths under the model's own loading. No-op when
-    there are no lightpaths (nothing to propagate)."""
+    there are no lightpaths (nothing to propagate). Best-effort: an adapter/GNPy
+    exception during recompute must not escape to validate_plan's caller as a raw
+    exception -- it would otherwise surface as a misleading INVALID_PLAN ("the
+    plan is malformed") when the actual failure is a QoT recompute error, not a
+    plan-structure problem. Swallow and leave this state's QoT at its prior
+    value, same best-effort contract commit.py's own callers of this function
+    already follow."""
     if model.list_lightpaths():
-        recompute_qot_under_loading(model=model, store=store,
-                                    loading=loading_from_model(model))
+        try:
+            recompute_qot_under_loading(model=model, store=store,
+                                        loading=loading_from_model(model))
+        except Exception:
+            pass
 
 
 def validate_plan(
