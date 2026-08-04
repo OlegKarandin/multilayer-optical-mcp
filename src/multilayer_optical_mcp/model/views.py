@@ -363,25 +363,41 @@ def route_service_result_dict(res) -> Dict[str, Any]:
 
 
 def validation_report_dict(report) -> Dict[str, Any]:
-    """Serialize a ValidationReport: ok/num_states plus the typed violation list,
-    each violation carrying its state_index, transient flag, and remediation
-    detail (Decision 4: the detail points the agent at the right fix).
-    `detail` is `Dict[str, Any]` -- not every value is a float (e.g.
-    SPECTRUM_CLASH's "lightpaths" is a list of ids) -- so each value is
-    sanitized individually via _safe_float, which passes non-float values
-    through unchanged; this catches the float-valued keys (margin_db, gsnr_db,
-    deficit_db, offload_gbps, overflow_gbps, ...) that can carry a non-finite
-    QoT-derived float (e.g. a failed asset's -inf margin sentinel)."""
+    """Serialize a ValidationReport: ok/num_states plus the typed violation
+    list. Each violation dict is FLAT -- type/state_index/asset_id/transient
+    plus that violation type's own fields promoted to the top level, no
+    nested "detail" -- matching violations.py's discriminated-union Pydantic
+    models field-for-field (see tests/model/test_views.py's cross-validation
+    regression test, which feeds this function's output through those models'
+    model_validate and asserts it succeeds)."""
     return {
         "ok": report.ok,
         "num_states": report.num_states,
-        "violations": [
-            {"type": v.type.value, "state_index": v.state_index,
-             "asset_id": v.asset_id, "transient": v.transient,
-             "detail": {k: _safe_float(dv) for k, dv in v.detail.items()}}
-            for v in report.violations
-        ],
+        "violations": [_violation_dict(v) for v in report.violations],
     }
+
+
+def _violation_dict(v) -> Dict[str, Any]:
+    """Flatten a Violation into its discriminated-union JSON shape. v.detail's
+    keys already ARE the target field names (each finding-builder in
+    validate.py -- _mode_infeasible_findings, _spectrum_clash_findings,
+    _ip_findings, _disjointness_findings, _protection_viability_findings,
+    _protection_oversubscription_findings, plus the INVALID_PLAN construction
+    site -- builds its detail dict with the exact keys violations.py's
+    matching model declares as fields), so a flat merge is correct with no
+    per-type dispatch needed here. Every value is run through safe_float so a
+    non-finite QoT-derived float (e.g. the failed-asset -inf margin sentinel)
+    stays valid JSON -- this hand-built dict is the path every test that
+    calls a tool's underlying function directly (bypassing real FastMCP
+    protocol serialization) actually sees; violations.py's SafeFloat
+    annotation independently sanitizes the SAME data on the real
+    protocol-serving path (FastMCP's model_validate/model_dump), so both
+    paths agree without duplicated logic drift (both ultimately call the one
+    shared json_safety.safe_float)."""
+    out = {"type": v.type.value, "state_index": v.state_index,
+           "asset_id": v.asset_id, "transient": v.transient}
+    out.update({k: _safe_float(dv) for k, dv in v.detail.items()})
+    return out
 
 
 def _jsonify_diff(diff):

@@ -8,6 +8,16 @@ from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model.views import (
     topology_dict, lightpaths_dict, services_dict,
     traffic_matrix_dict, srlgs_dict, risk_groups_dict,
+    validation_report_dict,
+)
+from multilayer_optical_mcp.model.validate import (
+    Violation, ValidationReport, ViolationType,
+)
+from multilayer_optical_mcp.model.violations import (
+    ModeInfeasibleViolation, SpectrumClashViolation, IpLinkOverloadViolation,
+    DroppedTrafficViolation, DisjointnessCollapseViolation,
+    ProtectionNotViableViolation, ProtectionOversubscribedViolation,
+    InvalidPlanViolation,
 )
 
 
@@ -172,3 +182,66 @@ def test_affected_services_dict_shape():
     n = _model_with_services()
     d = views.affected_services_dict(n, "lpBC")
     assert d == {"asset_id": "lpBC", "services": ["svc-AC"]}
+
+
+def test_validation_report_dict_flattens_detail_for_every_violation_type():
+    """Regression guard: validate.py's finding-builder detail-dict keys and
+    violations.py's Pydantic model fields must stay in lock-step. If someone
+    renames a key in one place and not the other, this test catches it --
+    model_validate raises on a missing/extra required field."""
+    cases = [
+        (Violation(ViolationType.MODE_INFEASIBLE, 0, "lpAB", False, {
+            "margin_db": -1.0, "gsnr_db": 14.0, "required_gsnr_db": 15.0,
+            "deficit_db": 1.0, "feasible_downshift_modes": ["50G-QPSK"],
+        }), ModeInfeasibleViolation),
+        (Violation(ViolationType.SPECTRUM_CLASH, 0, "omsAB", False, {
+            "slot": 3, "lightpaths": ["lp1", "lp2"],
+            "retune_candidates": {"lp1": [4], "lp2": []},
+        }), SpectrumClashViolation),
+        (Violation(ViolationType.IP_LINK_OVERLOAD, 0, "ipAB", False, {
+            "utilization": 1.1, "offered_gbps": 110.0, "capacity_gbps": 100.0,
+            "offload_gbps": 10.0,
+        }), IpLinkOverloadViolation),
+        (Violation(ViolationType.DROPPED_TRAFFIC, 0, "svc1", False, {
+            "reason": "link_down", "on_link": "ipAB", "demand_gbps": 50.0,
+        }), DroppedTrafficViolation),
+        (Violation(ViolationType.DISJOINTNESS_COLLAPSE, 0, "svc1", False, {
+            "basis": "risk_group", "level": "link",
+            "shared_assets": ["fAB"], "shared_groups": ["rg1"],
+        }), DisjointnessCollapseViolation),
+        (Violation(ViolationType.PROTECTION_NOT_VIABLE, 0, "svc1", False, {
+            "demand_gbps": 50.0, "protection_capacity_gbps": 0.0,
+            "dead_links": ["ipCD"], "bottleneck_link": None,
+        }), ProtectionNotViableViolation),
+        (Violation(ViolationType.PROTECTION_OVERSUBSCRIBED, 0, "ipAB", False, {
+            "working_gbps": 60.0, "reserved_gbps": 50.0, "capacity_gbps": 100.0,
+            "overflow_gbps": 10.0, "reserving_services": ["svc1", "svc2"],
+        }), ProtectionOversubscribedViolation),
+        (Violation(ViolationType.INVALID_PLAN, 0, None, False, {
+            "message": "unknown op 'frobnicate'", "op_index": 2,
+        }), InvalidPlanViolation),
+    ]
+    for violation, model_cls in cases:
+        report = ValidationReport(violations=(violation,), num_states=1)
+        out = validation_report_dict(report)
+        flat = out["violations"][0]
+        assert "detail" not in flat, f"{model_cls.__name__}: detail must be flattened"
+        # Must validate cleanly against the matching Pydantic model -- this is
+        # the drift guard.
+        instance = model_cls.model_validate(flat)
+        assert instance.type == violation.type.value
+
+
+def test_validation_report_dict_sanitizes_nonfinite_floats_when_flattened():
+    violation = Violation(ViolationType.MODE_INFEASIBLE, 0, "lpAB", False, {
+        "margin_db": float("-inf"), "gsnr_db": float("-inf"),
+        "required_gsnr_db": 15.0, "deficit_db": float("inf"),
+        "feasible_downshift_modes": [],
+    })
+    report = ValidationReport(violations=(violation,), num_states=1)
+    out = validation_report_dict(report)
+    flat = out["violations"][0]
+    assert flat["margin_db"] == "-Infinity"
+    assert flat["gsnr_db"] == "-Infinity"
+    assert flat["deficit_db"] == "Infinity"
+    assert flat["feasible_downshift_modes"] == []
