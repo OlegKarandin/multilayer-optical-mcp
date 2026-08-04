@@ -252,8 +252,9 @@ def build_app(*, model: NetworkModel | None = None,
         affected_services as _affected_services,
     )
     from .model.plan import (
-        plan_from_dict, ProvisionLightpath, TeardownLightpath,
-        SetModulationFormat, apply_op, service_oms_sequence as _service_oms_sequence,
+        Plan, plan_from_dict, ProvisionLightpath, TeardownLightpath,
+        SetModulationFormat, apply_op, PlanError,
+        service_oms_sequence as _service_oms_sequence,
     )
     from .model.assets import Lightpath as _Lightpath, IPLink as _IPLink
     from .model.validate import (
@@ -668,7 +669,12 @@ def build_app(*, model: NetworkModel | None = None,
         failure's asset set). `srlgs` matches static SRLG ids, `risk_groups`
         matches dynamic RiskGroup ids only (distinct namespaces).
         Read-only: returns typed candidates (full + degraded) with status
-        solution/partial/no_solution. Does not mutate or commit anything."""
+        solution/partial/no_solution. Every candidate here restores only the
+        working leg (phase 1 -- get connectivity back fast); `protection_pending`
+        in the result is True iff the service had a protection_path before the
+        failure, signaling that re-protecting it is a separate, deliberate phase 2
+        (route_service(protected=True) + reroute_service(which="protection")), not
+        something this call does automatically. Does not mutate or commit anything."""
         model = snapshots.current()
         qot = make_adapter_evaluator(model, results, harvest_cache=harvest_cache)
         res = _compute_restoration(model, qot, service_id, avoid=avoid)
@@ -693,12 +699,24 @@ def build_app(*, model: NetworkModel | None = None,
             report = _validate_plan(
                 snapshots.current(), parsed, store=results,
                 basis=basis, level=level, dropped_tolerance_gbps=dropped_tolerance_gbps)
-        except Exception as exc:
+        except PlanError as exc:
             return {
                 "ok": False, "num_states": 0,
                 "violations": [{"type": "invalid_plan", "state_index": 0,
                                 "asset_id": None, "transient": False,
                                 "message": str(exc)}],
+            }
+        except Exception as exc:
+            # NOT a PlanError: plan_from_dict/validate_plan raised something
+            # neither anticipates -- an internal bug, not a malformed plan.
+            # Still typed, still never raises (CLAUDE.md), but the message
+            # says so instead of implying the caller's plan is at fault.
+            return {
+                "ok": False, "num_states": 0,
+                "violations": [{"type": "invalid_plan", "state_index": 0,
+                                "asset_id": None, "transient": False,
+                                "message": f"unexpected internal error (not a "
+                                           f"plan-structure problem): {exc}"}],
             }
         return validation_report_dict(report)
 
@@ -756,6 +774,79 @@ def build_app(*, model: NetworkModel | None = None,
                             for oms_id, lps in sorted(clashes.items())],
         }
 
+    # A single-op tool's own violations (this lightpath's own margin going
+    # negative from provision/set_modulation_format; the traffic THIS teardown
+    # directly drops) are the expected, often-intended consequence of the very
+    # thing the caller asked for -- already surfaced via _qot_diagnostics'
+    # mode_feasible/warnings and teardown_lightpath's affected_services, not
+    # grounds to refuse the call outright (a caller must still be ABLE to
+    # provision a currently-infeasible lightpath, or tear down an in-use
+    # unprotected one -- that IS what "tear down" means). What SHOULD refuse
+    # the call is unintended collateral damage to something ELSE: a different
+    # service's protection disjointness collapsing, an unrelated IP link
+    # overloading, protection becoming non-viable, a spectrum clash, or a
+    # structurally invalid resulting plan.
+    _BLOCKING_VIOLATION_TYPES = frozenset({
+        "disjointness_collapse", "ip_link_overload", "protection_oversubscribed",
+        "protection_not_viable", "spectrum_clash", "invalid_plan",
+    })
+
+    def _reject_if_invalid(model, op, *, own_ip_links: frozenset = frozenset()) -> dict | None:
+        """Replay `op` as a one-op plan on a clone and return the typed
+        validation report (same shape the standalone `validate_plan` tool
+        returns) iff it finds a BLOCKING violation (_BLOCKING_VIOLATION_TYPES);
+        None iff clean of those (mode_infeasible/dropped_traffic alone do not
+        block -- see the comment above). This is what makes provision_
+        lightpath/teardown_lightpath/set_modulation_format "gated" mutations in
+        the sense CLAUDE.md's tool-surface section already lists them under,
+        rather than a bare apply_op with no safety net for collateral damage
+        to assets the caller wasn't touching on purpose.
+
+        `own_ip_links`: IP link ids directly bound to the lightpath THIS op
+        acts on. An IP_LINK_OVERLOAD naming one of these is the same kind of
+        direct, expected consequence mode_infeasible already gets a pass on --
+        capacity is derived from mode (capacity = f(mode)), so shrinking a
+        lightpath's own mode overloading its OWN bound link is just that same
+        margin-driven capacity drop, measured one layer up. It is EXCLUDED
+        from blocking. An IP_LINK_OVERLOAD naming any OTHER link id -- e.g. a
+        different lightpath's link, pushed over from NLI added by a new
+        co-propagating channel -- still blocks; the caller had no way to see
+        that coming, unlike the direct consequence on its own link.
+
+        Cost-viable because of the model-clone-reuses-parent's-GNPy-network
+        fix (see synthesize.py's fingerprint-keyed _NETWORK_CACHE) plus
+        recompute_qot_under_loading's only_missing scoping -- both make this
+        check ~15ms on a real-sized network rather than scaling with total
+        lightpath count. Never raises: mirrors the standalone validate_plan
+        tool's own belt-and-suspenders try/except around an unexpected
+        internal error."""
+        try:
+            report = _validate_plan(model, Plan(ops=(op,)), store=results)
+        except PlanError as exc:
+            return {"ok": False, "num_states": 0,
+                    "violations": [{"type": "invalid_plan", "state_index": 0,
+                                    "asset_id": None, "transient": False,
+                                    "message": str(exc)}]}
+        except Exception as exc:
+            # NOT a PlanError: an internal bug, not a malformed plan -- see
+            # the standalone validate_plan tool's identical split above.
+            return {"ok": False, "num_states": 0,
+                    "violations": [{"type": "invalid_plan", "state_index": 0,
+                                    "asset_id": None, "transient": False,
+                                    "message": f"unexpected internal error (not a "
+                                               f"plan-structure problem): {exc}"}]}
+
+        def _blocks(v) -> bool:
+            if v.type.value not in _BLOCKING_VIOLATION_TYPES:
+                return False
+            if v.type.value == "ip_link_overload" and v.asset_id in own_ip_links:
+                return False
+            return True
+
+        if not any(_blocks(v) for v in report.violations):
+            return None
+        return validation_report_dict(report)
+
     def _qot_diagnostics(model, lightpath_id: str) -> dict:
         """Read back the just-(re)computed QoT for a mutated lightpath and
         report gsnr_db/osnr_db/margin_db/mode_feasible plus an actionable
@@ -801,7 +892,15 @@ def build_app(*, model: NetworkModel | None = None,
         """Light a new lightpath; optionally bind+bring-up an IP link on it.
         Rejects a genuine spectrum clash (same frequency already occupied on
         a shared OMS) or an off-grid `center_freq_hz` with a typed error and
-        no mutation. Mutates the current model — branch first
+        no mutation. Also gated for COLLATERAL damage to assets other than the
+        one being provisioned: replayed as a one-op plan first, refused (typed
+        validation report, `ok=False`, no mutation) if it would collapse a
+        DIFFERENT service's disjointness, overload/oversubscribe an unrelated
+        IP link, or leave protection non-viable elsewhere. This lightpath's
+        OWN mode feasibility is never blocking -- provisioning a currently
+        mode-infeasible lightpath is a legitimate state (capacity 0 until
+        conditions improve); see the returned `mode_feasible`/`warnings`
+        instead. Mutates the current model on success — branch first
         (snapshot_branch) to explore."""
         model = snapshots.current()
         oms_sequence = tuple(lightpath["oms_sequence"])
@@ -816,6 +915,11 @@ def build_app(*, model: NetworkModel | None = None,
             ip_link=None if ip_link is None else _IPLink(
                 id=ip_link["id"], a_router=ip_link["a_router"],
                 z_router=ip_link["z_router"], lightpath_id=lightpath["id"]))
+        rejection = _reject_if_invalid(
+            model, op,
+            own_ip_links=frozenset({op.ip_link.id}) if op.ip_link else frozenset())
+        if rejection is not None:
+            return rejection
         apply_op(model, op)
         # Seed QoT for the freshly-lit lightpath so derived-capacity reads
         # (ip_link_capacity_gbps, _residual_gbps) report a real value instead
@@ -837,9 +941,15 @@ def build_app(*, model: NetworkModel | None = None,
         Reports `affected_services` -- the blast radius, computed BEFORE the
         teardown so it reflects what is about to be lost -- as
         [{service_id, demand_gbps, legs}], legs being any of "working"/
-        "protection" that route through this lightpath. Informational only;
-        the teardown proceeds regardless. Mutates the current model — branch
-        first to explore."""
+        "protection" that route through this lightpath. Gated for COLLATERAL
+        damage only: replayed as a one-op plan first, refused (typed
+        validation report, `ok=False`, no mutation, `affected_services` still
+        reported so the caller can see why) if it would collapse a service's
+        disjointness or leave protection non-viable. Dropping the traffic THIS
+        lightpath itself carried is never blocking -- that is what a teardown
+        means, and `affected_services` already reports it; a caller must still
+        be able to tear down an in-use, unprotected lightpath. Mutates the
+        current model on success — branch first to explore."""
         model = snapshots.current()
         try:
             ip_link_ids = set(model.ip_links_for_lightpath(lightpath_id))
@@ -859,16 +969,39 @@ def build_app(*, model: NetworkModel | None = None,
                     "demand_gbps": svc.demand_gbps,
                     "legs": legs,
                 })
-        apply_op(model, TeardownLightpath(lightpath_id=lightpath_id))
+        op = TeardownLightpath(lightpath_id=lightpath_id)
+        rejection = _reject_if_invalid(
+            model, op, own_ip_links=frozenset(ip_link_ids or ()))
+        if rejection is not None:
+            rejection["affected_services"] = affected_services
+            return rejection
+        apply_op(model, op)
         return {"torn_down": lightpath_id, "affected_services": affected_services}
 
     @app.tool()
     def set_modulation_format(lightpath_id: str, mode_id: str) -> dict:
         """Change a lightpath's transceiver mode; the bound IP link's capacity
-        propagates automatically (capacity = f(mode), margin-gated). Mutates the
-        current model — branch first to explore."""
-        apply_op(snapshots.current(), SetModulationFormat(
-            lightpath_id=lightpath_id, mode_id=mode_id))
+        propagates automatically (capacity = f(mode), margin-gated). Gated for
+        COLLATERAL damage only: replayed as a one-op plan first, refused (typed
+        validation report, `ok=False`, no mutation) if the new mode collapses
+        a service's disjointness, leaves protection non-viable, or overloads/
+        oversubscribes an IP link OTHER than this lightpath's own bound
+        link(s). This lightpath's own resulting mode feasibility, and an
+        overload on its OWN bound link from the resulting capacity drop, are
+        never blocking -- both are the direct, expected consequence of the
+        mode change itself; see the returned `mode_feasible`/`warnings`
+        instead. Mutates the current model on success — branch first to
+        explore."""
+        model = snapshots.current()
+        op = SetModulationFormat(lightpath_id=lightpath_id, mode_id=mode_id)
+        try:
+            own_ip_links = frozenset(model.ip_links_for_lightpath(lightpath_id))
+        except KeyError:
+            own_ip_links = frozenset()  # unknown lightpath; apply_op below raises PlanError as before
+        rejection = _reject_if_invalid(model, op, own_ip_links=own_ip_links)
+        if rejection is not None:
+            return rejection
+        apply_op(model, op)
         # Best-effort recompute, same pattern as provision_lightpath: the mode
         # change wiped this lightpath's QoT (network.set_lightpath_mode's
         # S1-7 clear), so re-seed it here rather than leaving derived
@@ -895,11 +1028,17 @@ def build_app(*, model: NetworkModel | None = None,
         'committed_with_failures' (control-plane partial failure — call reconcile)."""
         try:
             parsed = plan_from_dict(plan)
-        except Exception as exc:
+        except PlanError as exc:
             return commit_result_dict(_CommitResult(
                 status="rejected", dry_run=dry_run, applied_ops=0, failed_ops=0,
                 intended_snapshot_id=None, validation=None,
                 diff={"error": str(exc)}))
+        except Exception as exc:
+            return commit_result_dict(_CommitResult(
+                status="rejected", dry_run=dry_run, applied_ops=0, failed_ops=0,
+                intended_snapshot_id=None, validation=None,
+                diff={"error": f"unexpected internal error (not a "
+                                f"plan-structure problem): {exc}"}))
         result = _commit_plan(
             snapshots, parsed, store_results=results,
             dry_run=dry_run, confirm=confirm, basis=basis, level=level,

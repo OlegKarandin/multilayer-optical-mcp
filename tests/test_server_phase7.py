@@ -63,6 +63,88 @@ def test_set_modulation_format_tool_changes_mode_and_capacity():
     assert app._snapshots.current().get_lightpath("lp1").mode_id == lo
 
 
+def test_set_modulation_format_does_not_block_on_its_own_link_overload():
+    """A downshift that overloads the SAME lightpath's own bound IP link must
+    still succeed -- that overload is the direct, expected consequence of
+    the mode change itself (capacity = f(mode)), the same category as
+    mode_infeasible, not collateral damage to something else. Regression-lock
+    for the own_ip_links exemption in server.py's _reject_if_invalid."""
+    app = build_app()
+    n = _seed(app)
+    modes = sorted(n.modes.list(), key=lambda m: m.bitrate_gbps)
+    lo, hi = modes[0], modes[-1]
+    _call(app, "provision_lightpath",
+          lightpath={"id": "lp1", "oms_sequence": ["omsAB"], "mode_id": hi.id,
+                     "center_freq_hz": 193.4e12},
+          ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
+    n.add_service(Service(id="svc1", src_router="rA", dst_router="rB",
+                          demand_gbps=lo.bitrate_gbps + 50.0,
+                          working_path=("ip1",)))
+
+    out = _call(app, "set_modulation_format", lightpath_id="lp1", mode_id=lo.id)
+
+    assert "ok" not in out, f"expected success, got a rejection: {out}"
+    assert out["mode_id"] == lo.id
+    assert n.get_lightpath("lp1").mode_id == lo.id
+
+
+def test_teardown_lightpath_blocks_on_collateral_protection_not_viable():
+    """The actual new gate: tearing down lp2 doesn't touch svc1's WORKING path
+    at all (lp1/ip1, on a different frequency, left completely alone) -- but
+    lp2 is svc1's PROTECTION lightpath, so tearing it down silently kills
+    svc1's failover capacity. That's exactly the collateral-damage case the
+    gate exists for (see server.py's _reject_if_invalid), distinct from the
+    direct/self case (dropping the traffic a lightpath itself carries), which
+    must NOT block -- see test_teardown_tool_removes_lightpath."""
+    app = build_app()
+    n = _seed(app)
+    mode = n.modes.list()[0].id
+    _call(app, "provision_lightpath",
+          lightpath={"id": "lp1", "oms_sequence": ["omsAB"], "mode_id": mode,
+                     "center_freq_hz": 193.4e12},
+          ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
+    _call(app, "provision_lightpath",
+          lightpath={"id": "lp2", "oms_sequence": ["omsAB"], "mode_id": mode,
+                     "center_freq_hz": 193.5e12},
+          ip_link={"id": "ip2", "a_router": "rA", "z_router": "rB"})
+    n.add_service(Service(id="svc1", src_router="rA", dst_router="rB",
+                          demand_gbps=10.0, working_path=("ip1",),
+                          protection_path=("ip2",)))
+
+    out = _call(app, "teardown_lightpath", lightpath_id="lp2")
+
+    assert out.get("ok") is False, f"expected a collateral-damage rejection, got {out}"
+    assert any(v["type"] == "protection_not_viable" for v in out["violations"])
+    # lp2 is svc1's PROTECTION leg only -- reported, but not a "working" leg.
+    assert out["affected_services"] == [
+        {"service_id": "svc1", "demand_gbps": 10.0, "legs": ["protection"]}]
+    # Refused: nothing mutated.
+    assert "lp2" in app._snapshots.current()._lightpaths
+    assert app._snapshots.current().get_service("svc1").protection_path == ("ip2",)
+
+
+def test_teardown_lightpath_does_not_block_on_its_own_dropped_traffic():
+    """Regression-lock for the deliberately-NOT-blocking case: tearing down a
+    lightpath that itself carries an unprotected service's only route must
+    still succeed -- that IS what a teardown means (see server.py's
+    _BLOCKING_VIOLATION_TYPES comment)."""
+    app = build_app()
+    n = _seed(app)
+    mode = n.modes.list()[0].id
+    _call(app, "provision_lightpath",
+          lightpath={"id": "lp1", "oms_sequence": ["omsAB"], "mode_id": mode,
+                     "center_freq_hz": 193.4e12},
+          ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
+    n.add_service(Service(id="svc1", src_router="rA", dst_router="rB",
+                          demand_gbps=10.0, working_path=("ip1",)))
+
+    out = _call(app, "teardown_lightpath", lightpath_id="lp1")
+
+    assert out["torn_down"] == "lp1"
+    assert out["affected_services"][0]["service_id"] == "svc1"
+    assert "lp1" not in app._snapshots.current()._lightpaths
+
+
 def test_validate_plan_tool_returns_typed_report():
     app = build_app()
     n = _seed(app)
@@ -136,6 +218,10 @@ def test_validate_plan_tool_never_raises_on_malformed_json():
     out = _call(app, "validate_plan", plan=malformed)   # must not raise
     assert out["ok"] is False
     assert any(v["type"] == "invalid_plan" for v in out["violations"])
+    # A real PlanError's message must be byte-for-byte unchanged -- no
+    # "unexpected internal error" prefix, which is reserved for the
+    # except-Exception (non-PlanError) branch.
+    assert not out["violations"][0]["message"].startswith("unexpected internal error")
 
 
 def test_commit_plan_tool_never_raises_on_malformed_json():
@@ -148,6 +234,71 @@ def test_commit_plan_tool_never_raises_on_malformed_json():
                           "lightpath": {"id": "lpX"}}]}
     out = _call(app, "commit_plan", plan=malformed, dry_run=True)   # must not raise
     assert out["status"] == "rejected"
+    # Same PlanError-path-unchanged guarantee as validate_plan above.
+    assert not out["diff"]["error"].startswith("unexpected internal error")
+
+
+def test_validate_plan_tool_labels_internal_error_distinctly(monkeypatch):
+    """A NON-PlanError exception (a genuine internal bug, not a malformed
+    plan) reaching validate_plan's except-Exception fallback must still come
+    back as a typed invalid_plan violation (required by
+    ValidationReportModel's discriminated union -- no new "type" string) but
+    with a message that says so, instead of implying the caller's plan is at
+    fault. `_validate_plan` is a local name rebound on every build_app() call
+    from `.model.validate.validate_plan`, so patch that source before
+    build_app() runs."""
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("multilayer_optical_mcp.model.validate.validate_plan", _boom)
+    app = build_app()
+    _seed(app)
+    plan = {"ops": [{"op": "provision_lightpath",
+                     "lightpath": {"id": "lp1", "oms_sequence": ["omsAB"],
+                                   "mode_id": "m1", "center_freq_hz": 193.4e12}}]}
+    out = _call(app, "validate_plan", plan=plan)   # must not raise
+    assert out["ok"] is False
+    assert out["violations"][0]["type"] == "invalid_plan"
+    assert out["violations"][0]["message"].startswith("unexpected internal error")
+
+
+def test_provision_lightpath_tool_labels_internal_error_distinctly(monkeypatch):
+    """Same fix, site 2: `_reject_if_invalid`'s except-Exception fallback,
+    exercised via provision_lightpath's collateral-damage replay call. Same
+    source-patch technique as the validate_plan case above."""
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("multilayer_optical_mcp.model.validate.validate_plan", _boom)
+    app = build_app()
+    n = _seed(app)
+    out = _call(app, "provision_lightpath",
+                lightpath={"id": "lp1", "oms_sequence": ["omsAB"],
+                           "mode_id": n.modes.list()[0].id,
+                           "center_freq_hz": 193.4e12},
+                ip_link={"id": "ip1", "a_router": "rA", "z_router": "rB"})
+    assert out["ok"] is False
+    assert out["violations"][0]["type"] == "invalid_plan"
+    assert out["violations"][0]["message"].startswith("unexpected internal error")
+
+
+def test_commit_plan_tool_labels_internal_error_distinctly(monkeypatch):
+    """Same fix, site 3: commit_plan's except-Exception fallback around
+    `plan_from_dict`. This site has no `_validate_plan` call, so patch
+    `plan_from_dict`'s own source instead (same rebind-on-build_app()
+    mechanism)."""
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("multilayer_optical_mcp.model.plan.plan_from_dict", _boom)
+    app = build_app()
+    _seed(app)
+    plan = {"ops": [{"op": "provision_lightpath",
+                     "lightpath": {"id": "lp1", "oms_sequence": ["omsAB"],
+                                   "mode_id": "m1", "center_freq_hz": 193.4e12}}]}
+    out = _call(app, "commit_plan", plan=plan, dry_run=True)   # must not raise
+    assert out["status"] == "rejected"
+    assert out["diff"]["error"].startswith("unexpected internal error")
 
 
 def test_provision_lightpath_tool_seeds_qot_so_solvers_do_not_crash():
