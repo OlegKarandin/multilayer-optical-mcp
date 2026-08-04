@@ -489,3 +489,89 @@ def test_score_pair_preserves_bystander_margin_sharing_oms(diamond_service):
     assert result.total_margin == pytest.approx(20.0), (
         "bystander's margin (10.0) must be preserved alongside both legs' "
         "own (5.0 + 5.0), not silently wiped and skipped")
+
+
+# --------------------------------------------------------------- Prefix assertion tests
+#
+
+def test_apply_candidate_accepts_real_committer_prefix_cand(diamond_service):
+    """apply_candidate with prefix="cand" (real committer reserved value)
+    must not raise."""
+    model, svc = diamond_service
+    candidate = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 0, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+    from multilayer_optical_mcp.model.objective import apply_candidate
+    work = model.clone()
+    # Must not raise ValueError for reserved prefix "cand"
+    apply_candidate(work, candidate, svc, prefix="cand")
+
+
+def test_apply_candidate_accepts_default_prefix(diamond_service):
+    """apply_candidate with default prefix (="cand") must not raise."""
+    model, svc = diamond_service
+    candidate = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 0, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+    from multilayer_optical_mcp.model.objective import apply_candidate
+    work = model.clone()
+    # Must not raise ValueError for default prefix (="cand")
+    apply_candidate(work, candidate, svc)
+
+
+def test_provision_new_runs_accepts_reserved_prefix_prot(diamond_service):
+    """provision_new_runs with prefix="prot" (real committer reserved value)
+    must not raise."""
+    model, svc = diamond_service
+    placement = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 0, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+    from multilayer_optical_mcp.model.objective import provision_new_runs
+    work = model.clone()
+    # Must not raise ValueError for reserved prefix "prot"
+    provision_new_runs(work, placement, svc, prefix="prot")
+
+
+def test_apply_candidate_rejects_prefix_colliding_with_reserved(diamond_service):
+    """apply_candidate with prefix="cand-explore" (collides with reserved
+    "cand") must raise ValueError."""
+    model, svc = diamond_service
+    candidate = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 0, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+    from multilayer_optical_mcp.model.objective import apply_candidate
+    work = model.clone()
+    with pytest.raises(ValueError, match="collides with reserved committer"):
+        apply_candidate(work, candidate, svc, prefix="cand-explore")
+
+
+def test_provision_new_runs_rejects_prefix_colliding_with_reserved(diamond_service):
+    """provision_new_runs with prefix="prot2" (collides with reserved "prot")
+    must raise ValueError."""
+    model, svc = diamond_service
+    placement = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 0, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+    from multilayer_optical_mcp.model.objective import provision_new_runs
+    work = model.clone()
+    with pytest.raises(ValueError, match="collides with reserved committer"):
+        provision_new_runs(work, placement, svc, prefix="prot2")
+
+
+def test_apply_candidate_accepts_score_prefix_no_collision(diamond_service):
+    """apply_candidate with prefix="score-cand" (scoring prefix, no collision
+    with reserved namespace) must not raise."""
+    model, svc = diamond_service
+    candidate = Placement(reused_lightpaths=(),
+        new_lightpaths=(NewLightpathRun(("omsAB",), 0, "100G", 15.0, 100.0,
+                                        src_node="A", dst_node="B"),),
+        restored_gbps=100.0, shortfall_gbps=0.0)
+    from multilayer_optical_mcp.model.objective import apply_candidate
+    work = model.clone()
+    # Must not raise ValueError for non-reserved, non-colliding prefix
+    apply_candidate(work, candidate, svc, prefix="score-cand")

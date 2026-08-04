@@ -156,6 +156,25 @@ def _stitch_ip_path(segments, src_router, dst_router):
 RESERVED_COMMITTER_PREFIXES = frozenset({"cand", "prot"})
 
 
+def _assert_prefix_not_reserved(prefix: str) -> None:
+    """A caller's id-minting prefix must either BE a real committer's exact
+    reserved value ("cand" default / "prot" explicit) or must not COLLIDE
+    with the reserved namespace at all -- even a near-miss like "cand-explore"
+    risks _mint_unique's f"{template}-{n}" suffixing scheme picking an id a
+    real committer mints later. Scoring/throwaway callers (score_candidate,
+    score_pair) use a "score-" prefix precisely to stay clear of this; this
+    assertion is what actually enforces that, instead of leaving it as a
+    comment for the next caller to remember on their own."""
+    if prefix in RESERVED_COMMITTER_PREFIXES:
+        return
+    colliding = [p for p in RESERVED_COMMITTER_PREFIXES if prefix.startswith(p)]
+    if colliding:
+        raise ValueError(
+            f"id-minting prefix {prefix!r} collides with reserved committer "
+            f"namespace {sorted(colliding)}; use a prefix that does not start "
+            f"with a reserved value (e.g. \"score-\" + something)")
+
+
 def _mint_unique(work, registry_attr: str, template: str) -> str:
     """Return `template` if free in `work`'s `registry_attr` dict (e.g.
     '_lightpaths' or '_ip_links'), else the first `template-N` (N=2,3,...)
@@ -309,6 +328,7 @@ def apply_candidate(work, placement, service, *, prefix="cand") -> SeededQoT:
     which is why _pack additionally re-applies every returned seed of its own
     after each iteration (and once more after the whole loop, as a safety
     net) -- see _pack's per-iteration re-seed comment."""
+    _assert_prefix_not_reserved(prefix)
     grid = SpectrumGrid.default()
     site_to_router = {r.site: r.id for r in work.list_routers()}
     lp_to_iplink = {l.lightpath_id: l for l in work.list_ip_links()}
@@ -353,6 +373,7 @@ def provision_new_runs(work, placement, service, *, prefix) -> Tuple[Tuple[str, 
     tracked at all); `seeded` is the `(lp_id, QoTState)` pairs seeded for this
     placement's new runs (see apply_candidate's docstring for why a caller
     provisioning multiple runs must keep and re-apply these)."""
+    _assert_prefix_not_reserved(prefix)
     grid = SpectrumGrid.default()
     site_to_router = {r.site: r.id for r in work.list_routers()}
     lp_to_iplink = {l.lightpath_id: l for l in work.list_ip_links()}
