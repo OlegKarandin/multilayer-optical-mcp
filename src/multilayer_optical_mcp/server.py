@@ -591,8 +591,14 @@ def build_app(*, model: NetworkModel | None = None,
         {physical, srlg, risk_group, union}, level in {node, link, srlg,
         risk_group} (level is a no-op for basis srlg/risk_group -- see
         check_disjointness's docstring); defaults to physical/link/false
-        when omitted. Returns a
-        typed solution/partial/no_solution with placed and unplaced demands.
+        when omitted. Each demand's `id` becomes the resulting `Service`'s
+        `id` verbatim -- there is no separate service-id namespace. A demand
+        id that collides with an already-present service id in the model is
+        reported unplaced ("demand id collides with an existing service"),
+        never silently overwritten; reuse a demand id across calls only when
+        you mean "this is the same service" (e.g. re-processing a demand
+        after a prior partial failure during restoration). Returns a typed
+        solution/partial/no_solution with placed and unplaced demands.
         weights: per-demand priority (demand id -> ordering weight, higher =
         placed first); does not feed evaluate_objective's cost vector."""
         model = snapshots.current()
