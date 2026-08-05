@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import NamedTuple, Optional, Tuple
 
 from ..model.assets import Direction
-from ..model.network import NetworkModel
+from ..model.optical_network import OpticalNetworkModel
 from ..model.qot import ElementSnapshot, QoTBreakdown, QoTState
 from ..model.qot_results import QoTResultStore, QoTCache
 from .bands import SI_BAND
@@ -166,7 +166,7 @@ def _roadm_successor(network, node):
 
 
 def _path_physical_fingerprint(
-    model: NetworkModel, oms_sequence: Tuple[str, ...], direction: Direction,
+    model: OpticalNetworkModel, oms_sequence: Tuple[str, ...], direction: Direction,
 ) -> tuple:
     """Fingerprint every GSNR-relevant physical input on the resolved path.
 
@@ -206,7 +206,7 @@ def _path_physical_fingerprint(
 
 
 def _cache_key(
-    model: NetworkModel, oms_sequence: Tuple[str, ...], direction: Direction,
+    model: OpticalNetworkModel, oms_sequence: Tuple[str, ...], direction: Direction,
     mode_id: str, loading: LoadingState, center_freq_hz: Optional[float],
 ) -> tuple:
     """Full content-addressed key: path physical params + loading + direction +
@@ -237,7 +237,7 @@ class _PropResult(NamedTuple):
 
 
 def _propagate_loading(
-    model: NetworkModel,
+    model: OpticalNetworkModel,
     oms_sequence: Tuple[str, ...],
     direction: Direction,
     loading_for_gnpy: LoadingState,
@@ -417,7 +417,7 @@ def _apply_penalties(si, idx, uids_list, elements, roadm_propagated, baud_rate,
 
 def compute_qot(
     *,
-    model: NetworkModel,
+    model: OpticalNetworkModel,
     store: QoTResultStore,
     oms_sequence: Tuple[str, ...],
     direction: Direction,
@@ -433,7 +433,7 @@ def compute_qot(
     Parameters
     ----------
     model:
-        The NetworkModel that owns the OMS and mode definitions.
+        The OpticalNetworkModel that owns the OMS and mode definitions.
     store:
         QoTResultStore that will hold the per-element breakdown.
     oms_sequence:
@@ -562,7 +562,7 @@ def compute_qot(
 
 
 def _resolve_unpropagated_path(
-    model: NetworkModel,
+    model: OpticalNetworkModel,
     oms_sequence: Tuple[str, ...],
     direction: Direction,
     loading_for_gnpy: LoadingState,
@@ -581,7 +581,7 @@ def _resolve_unpropagated_path(
 
     NOTE this does NOT always build brand-new gnpy element instances.
     ``build_gnpy_network`` (``synthesize.py``) caches the synthesized network
-    per ``NetworkModel`` instance in a ``WeakKeyDictionary``; on a cache hit it
+    per ``OpticalNetworkModel`` instance in a ``WeakKeyDictionary``; on a cache hit it
     returns the SAME ``network`` object and SAME element instances as a prior
     call for that model. What actually makes reusing those objects safe across
     calls is narrower and more specific than "always fresh": on a cache HIT,
@@ -653,8 +653,8 @@ def _resolve_unpropagated_path(
 
 def isolate_element_contribution(
     *,
-    model_a: NetworkModel,
-    model_b: NetworkModel,
+    model_a: OpticalNetworkModel,
+    model_b: OpticalNetworkModel,
     oms_sequence: Tuple[str, ...],
     direction: Direction,
     mode_id: str,
@@ -786,7 +786,7 @@ def isolate_element_contribution(
 
 
 def harvest_cache_key(
-    model: NetworkModel, oms_sequence: Tuple[str, ...], direction: Direction,
+    model: OpticalNetworkModel, oms_sequence: Tuple[str, ...], direction: Direction,
     mode_id: str,
 ) -> tuple:
     """Content-addressed key for a full-comb harvest: path + direction + mode +
@@ -801,7 +801,7 @@ def harvest_cache_key(
 
 
 def harvest_qot(
-    model: NetworkModel,
+    model: OpticalNetworkModel,
     oms_sequence: Tuple[str, ...],
     direction: Direction,
     mode_id: str,
@@ -858,7 +858,7 @@ def harvest_qot(
 
 def gated_qot(
     *,
-    model: NetworkModel,
+    model: OpticalNetworkModel,
     store: QoTResultStore,
     oms_sequence: Tuple[str, ...],
     mode_id: str,
@@ -900,7 +900,7 @@ def _per_path_loading(grid, occ_mask: int, probe_slot: int, mode_id: str) -> Loa
     return LoadingState(channels)
 
 
-def unattributed_channel_freqs_hz(model: NetworkModel, loading: LoadingState) -> Tuple[float, ...]:
+def unattributed_channel_freqs_hz(model: OpticalNetworkModel, loading: LoadingState) -> Tuple[float, ...]:
     """Frequencies in *loading* not explained by any committed lightpath.
 
     These are the channels recompute_qot_under_loading broadcasts as an
@@ -938,7 +938,7 @@ def unattributed_channel_freqs_hz(model: NetworkModel, loading: LoadingState) ->
 
 
 def recompute_qot_under_loading(
-    *, model: NetworkModel, store: QoTResultStore, loading: LoadingState,
+    *, model: OpticalNetworkModel, store: QoTResultStore, loading: LoadingState,
     cache: Optional[QoTCache] = None,
 ) -> dict[str, Tuple[QoTState, str]]:
     """Compute gated QoT for every lightpath in model under *loading*.
@@ -988,7 +988,7 @@ def recompute_qot_under_loading(
     Writes QoTState on the model and returns {lp_id: (QoTState, result_id)}.
     """
     from ..model.spectrum import SpectrumGrid, build_spectrum_state, occupied_along
-    from ..model.exposure import lightpath_footprint
+    from ..model.optical_network import lightpath_footprint
 
     grid = SpectrumGrid.default()
     model_state = build_spectrum_state(model, grid)

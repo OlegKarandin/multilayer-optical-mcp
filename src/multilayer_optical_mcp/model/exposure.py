@@ -2,6 +2,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import FrozenSet, Tuple
 from .network import NetworkModel
+# oms_seq_asset_set / terminal_roadm_id / lightpath_footprint moved to
+# optical_network (they read only optical state, and clear_failed needs
+# lightpath_footprint without dragging in the IP layer). Re-exported here so
+# every existing consumer keeps importing them from exposure.
+from .optical_network import (  # noqa: F401
+    lightpath_footprint,
+    oms_seq_asset_set,
+    terminal_roadm_id,
+)
 
 
 @dataclass(frozen=True)
@@ -19,50 +28,6 @@ class ExposureResult:
     both_intersect: bool
     working_intersection: Tuple[str, ...]
     protection_intersection: Tuple[str, ...]
-
-
-def oms_seq_asset_set(model: NetworkModel, oms_sequence: Tuple[str, ...]) -> FrozenSet[str]:
-    """Expand an OMS-id sequence to {oms_ids} ∪ {fiber/amp/roadm uids}. Shared
-    by IP-link expansion (below) and the routing/disjointness solvers, which
-    work with OMS-sequences directly."""
-    assets: set[str] = set()
-    for oms_id in oms_sequence:
-        assets.add(oms_id)
-        oms = model.get_oms(oms_id)
-        assets.update(oms.elements)
-    return frozenset(assets)
-
-
-def lightpath_footprint(model: NetworkModel, oms_sequence: Tuple[str, ...]) -> FrozenSet[str]:
-    """The full physical footprint of an OMS-sequence: ``oms_seq_asset_set`` plus
-    the terminal drop ROADM the OMS elements omit (S8-3).
-
-    This is the single crossing predicate shared by every failure-aware path —
-    ``inject_failure`` (down a lightpath), ``recompute_qot_under_loading``
-    (don't resurrect a downed lightpath, S8-1), and ``clear_failed`` (drop the
-    sentinel only when nothing failed still crosses it, S8-6) — so the failed-set
-    and the QoT sentinels can never disagree about what a lightpath crosses."""
-    assets = set(oms_seq_asset_set(model, oms_sequence))
-    term = terminal_roadm_id(model, oms_sequence)
-    if term is not None:
-        assets.add(term)
-    return frozenset(assets)
-
-
-def terminal_roadm_id(model: NetworkModel, oms_sequence: Tuple[str, ...]) -> "str | None":
-    """The drop ROADM at the end of *oms_sequence*, or None.
-
-    Each importer OMS's ``elements`` start at ``roadm_<src>`` but omit the drop
-    ROADM (``roadm_<dst>``), so ``oms_seq_asset_set`` never includes it. Callers
-    that must reason about the whole physical footprint — e.g. failing the
-    destination ROADM (S8-3) — add this. Returns None when the path drops into a
-    bare transceiver (no ``roadm_<dst>`` registered), as in legacy toy models.
-    """
-    if not oms_sequence:
-        return None
-    last = model.get_oms(oms_sequence[-1])
-    candidate = f"roadm_{last.dst_node_id}"
-    return candidate if model.has_roadm(candidate) else None
 
 
 def path_endpoint_exclusions(
