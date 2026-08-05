@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import replace
-from typing import TYPE_CHECKING, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Optional, Self, Tuple
 from .ip_assets import Router, IPLink, Service
 from .modes import ModeRegistry
 from .optical_network import FrozenModelError, OpticalNetworkModel
@@ -29,7 +29,7 @@ class NetworkModel(OpticalNetworkModel):
 
     # ------------------------------------------------------------------ clone
 
-    def _copy_state_into(self, c: "OpticalNetworkModel") -> None:
+    def _copy_state_into(self, c: Self) -> None:
         """Extend the optical copy with the IP registries. Without this override
         every clone (hence every snapshot, since SnapshotStore routes through
         clone()) would silently lose routers, IP links, and services."""

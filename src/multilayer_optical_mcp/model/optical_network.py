@@ -15,7 +15,7 @@ links, services, and the cross-layer couplings on top.
 from __future__ import annotations
 import math
 from dataclasses import replace
-from typing import TYPE_CHECKING, Dict, FrozenSet, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, FrozenSet, Optional, Self, Tuple
 from .assets import FiberType, Fiber, Amplifier, ROADM, Transceiver, OMS, Lightpath, SRLG, RiskGroup
 from .modes import ModeRegistry
 from .qot import QoTState
@@ -34,7 +34,18 @@ class FrozenModelError(RuntimeError):
 
 
 class OpticalNetworkModel:
-    """Optical state only. Zero knowledge of Router/IPLink/Service."""
+    """Optical state only. Zero knowledge of Router/IPLink/Service.
+
+    ``NetworkModel`` inherits from this class, so every mutator defined here is
+    available on a ``NetworkModel`` automatically -- including ones added after
+    this split. If a *future* optical mutator needs IP-side cleanup (the way
+    ``remove_lightpath`` needs to unbind IP links), it will be silently
+    inherited without that cleanup unless ``NetworkModel`` explicitly overrides
+    it, the same way ``NetworkModel.remove_lightpath`` overrides this class's
+    optical-only version. Treat "does this new optical mutator need an
+    IP-layer override in NetworkModel?" as a standing review question whenever
+    a mutator is added here.
+    """
 
     def __init__(
         self, modes: ModeRegistry, grid: Optional["SpectrumGrid"] = None,
@@ -62,13 +73,13 @@ class OpticalNetworkModel:
                 "cannot mutate a frozen snapshot model; branch() or clone() first"
             )
 
-    def freeze(self) -> "OpticalNetworkModel":
+    def freeze(self) -> Self:
         """Mark this model immutable and return it (for chaining). Every mutator
         then raises FrozenModelError."""
         self._frozen = True
         return self
 
-    def clone(self) -> "OpticalNetworkModel":
+    def clone(self) -> Self:
         """Deep-ish copy of the model with independent collections. The single
         home for model duplication (SnapshotStore and Phase 7 both use it). The
         clone is always UNFROZEN regardless of this model's frozen state, so a
@@ -87,7 +98,7 @@ class OpticalNetworkModel:
         c._frozen = False
         return c
 
-    def _copy_state_into(self, c: "OpticalNetworkModel") -> None:
+    def _copy_state_into(self, c: Self) -> None:
         """Copy this model's registries into a fresh instance *c*. Subclasses
         override to add their own registries after calling ``super()``."""
         c._fiber_types = dict(self._fiber_types)

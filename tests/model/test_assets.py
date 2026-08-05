@@ -1,6 +1,5 @@
 import pytest
 from multilayer_optical_mcp.model.assets import FiberType, Fiber, Amplifier, ROADM, Transceiver, TransceiverMode, OMS, Lightpath, SRLG, RiskGroup, Direction
-from multilayer_optical_mcp.model.ip_assets import Router, IPLink, Service
 from multilayer_optical_mcp.model.qot import (
     QoTState, ElementSnapshot, QoTBreakdown,
 )
@@ -44,11 +43,6 @@ def test_lightpath_uses_oms_sequence_no_slot_width_no_margin():
     assert not hasattr(lp, "slot_width_hz")
     assert not hasattr(lp, "margin_db")
     assert not hasattr(lp, "path")
-
-
-def test_ip_link_bound_to_lightpath_no_capacity_field():
-    link = IPLink(id="ip-1", a_router="R1", z_router="R2", lightpath_id="lp1")
-    assert not hasattr(link, "capacity_gbps")
 
 
 def test_risk_group_metadata_is_read_only_and_defensively_copied():

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, Optional, Tuple
 
-from .network import NetworkModel
+from .optical_network import OpticalNetworkModel
 
 
 class FillPolicy(Enum):
@@ -79,7 +79,7 @@ class FeasibilityResult:
     clashes: Tuple[Clash, ...] = ()
 
 
-def build_spectrum_state(model: NetworkModel, grid: SpectrumGrid) -> Dict[str, int]:
+def build_spectrum_state(model: OpticalNetworkModel, grid: SpectrumGrid) -> Dict[str, int]:
     """Per-OMS slot bitmask built from every lightpath's center frequency."""
     state: Dict[str, int] = {}
     for lp in model.list_lightpaths():
@@ -126,7 +126,7 @@ def reserve(state: Dict[str, int], oms_sequence: Tuple[str, ...], slot: int) -> 
 
 
 def check_spectrum_feasibility(
-    model: NetworkModel,
+    model: OpticalNetworkModel,
     oms_sequence: Tuple[str, ...],
     slot: int,
     *,
