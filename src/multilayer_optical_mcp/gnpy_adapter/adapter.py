@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import NamedTuple, Optional, Tuple
 
 from ..model.assets import Direction
-from ..model.optical_network import OpticalNetworkModel
+from ..model.optical_network import OpticalNetworkModel, lightpath_footprint
 from ..model.qot import ElementSnapshot, QoTBreakdown, QoTState
 from ..model.qot_results import QoTResultStore, QoTCache
 from .bands import SI_BAND
@@ -988,7 +988,6 @@ def recompute_qot_under_loading(
     Writes QoTState on the model and returns {lp_id: (QoTState, result_id)}.
     """
     from ..model.spectrum import SpectrumGrid, build_spectrum_state, occupied_along
-    from ..model.optical_network import lightpath_footprint
 
     grid = SpectrumGrid.default()
     model_state = build_spectrum_state(model, grid)
