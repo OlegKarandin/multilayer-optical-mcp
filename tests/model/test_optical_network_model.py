@@ -230,9 +230,18 @@ def test_optical_model_freeze_and_clone():
 
 def test_optical_model_imports_without_ip_layer():
     """The real proof of the split. A fresh subprocess is required: in-process,
-    pytest has already imported the whole package."""
+    pytest has already imported the whole package.
+
+    Also imports gnpy_adapter.adapter — the actual reusable surface (it pulls in
+    synthesize.py and translate.py transitively) — so the guarantee covers the
+    adapter package, not just optical_network.py in isolation. Without this, a
+    stray ``from ..model.network import NetworkModel`` reintroduced into any of
+    those three adapter modules (e.g. for a type annotation) would leave all
+    other tests green while silently breaking the reuse claim the split exists
+    to deliver."""
     code = (
         "import multilayer_optical_mcp.model.optical_network;"
+        "import multilayer_optical_mcp.gnpy_adapter.adapter;"
         "import sys;"
         "bad=[m for m in sys.modules "
         "if m.endswith(('.ip_assets','.network','.ip_routing'))];"
