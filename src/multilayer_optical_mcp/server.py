@@ -828,7 +828,7 @@ def build_app(*, model: NetworkModel | None = None,
         internal error."""
         try:
             report = _validate_plan(model, Plan(ops=(op,)), store=results)
-        except PlanError as exc:
+        except PlanError as exc:  # unreachable in practice today -- validate_plan converts PlanError to an invalid_plan violation itself; kept for shape parity with the other two call sites below, which do have a live PlanError source (plan_from_dict).
             return {"ok": False, "num_states": 0,
                     "violations": [{"type": "invalid_plan", "state_index": 0,
                                     "asset_id": None, "transient": False,
@@ -960,7 +960,7 @@ def build_app(*, model: NetworkModel | None = None,
         try:
             ip_link_ids = set(model.ip_links_for_lightpath(lightpath_id))
         except KeyError:
-            ip_link_ids = None  # unknown lightpath; apply_op below raises PlanError as before
+            ip_link_ids = None  # unknown lightpath; the pre-apply validation replay below reports it as a typed invalid_plan rejection (apply_op is never reached)
         affected_services: list[dict] = []
         if ip_link_ids is not None:
             for svc_id in _affected_services(model, lightpath_id):
@@ -1003,7 +1003,7 @@ def build_app(*, model: NetworkModel | None = None,
         try:
             own_ip_links = frozenset(model.ip_links_for_lightpath(lightpath_id))
         except KeyError:
-            own_ip_links = frozenset()  # unknown lightpath; apply_op below raises PlanError as before
+            own_ip_links = frozenset()  # unknown lightpath; the pre-apply validation replay below reports it as a typed invalid_plan rejection (apply_op is never reached)
         rejection = _reject_if_invalid(model, op, own_ip_links=own_ip_links)
         if rejection is not None:
             return rejection
