@@ -57,9 +57,8 @@ def split_link_into_spans(
     return spans
 
 
-from .assets import (
-    Amplifier, Fiber, FiberType, OMS, ROADM, Router, Transceiver,
-)
+from .assets import Amplifier, Fiber, FiberType, OMS, ROADM, Transceiver
+from .ip_assets import Router
 from .modes import ModeRegistry
 from .network import NetworkModel
 

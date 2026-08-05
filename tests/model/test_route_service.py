@@ -4,10 +4,8 @@ and disjoint-pair menu (protected). Read-only; scores via objective.score_candid
 / score_pair on throwaway clones; ground truth untouched."""
 import pytest
 
-from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, ROADM, Lightpath, Router, IPLink,
-    Service, TransceiverMode,
-)
+from multilayer_optical_mcp.model.assets import FiberType, Fiber, Amplifier, OMS, ROADM, Lightpath, TransceiverMode
+from multilayer_optical_mcp.model.ip_assets import Router, IPLink, Service
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot import QoTState

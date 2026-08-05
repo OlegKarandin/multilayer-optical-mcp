@@ -2,10 +2,8 @@
 """compute_restoration: per-service recovery over survivors. Read-only; emits
 typed candidates (full + degraded); status solution/partial/no_solution."""
 from multilayer_optical_mcp.model.assets import ROADM
-from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, Lightpath, Router, IPLink, Service,
-    TransceiverMode,
-)
+from multilayer_optical_mcp.model.assets import FiberType, Fiber, Amplifier, OMS, Lightpath, TransceiverMode
+from multilayer_optical_mcp.model.ip_assets import Router, IPLink, Service
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot import QoTState

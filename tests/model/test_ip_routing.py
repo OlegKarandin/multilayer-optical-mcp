@@ -1,9 +1,7 @@
 # tests/model/test_ip_routing.py
 import pytest
-from multilayer_optical_mcp.model.assets import (
-    FiberType, Amplifier, Fiber, OMS, Lightpath, Router, IPLink, Service,
-    TransceiverMode,
-)
+from multilayer_optical_mcp.model.assets import FiberType, Amplifier, Fiber, OMS, Lightpath, TransceiverMode
+from multilayer_optical_mcp.model.ip_assets import Router, IPLink, Service
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot import QoTState
@@ -246,11 +244,8 @@ def test_affected_services_includes_protection_path():
 
 
 # --- Phase 7 Task 2: removal + failover-aware routing + 1:1 reservation ---
-from multilayer_optical_mcp.model.assets import (
-    Amplifier as _Amp, Fiber as _Fiber, OMS as _OMS, Lightpath as _LP,
-    IPLink as _IPLink, Service as _Svc, FiberType as _FT, TransceiverMode as _TM,
-    ROADM,
-)
+from multilayer_optical_mcp.model.assets import Amplifier as _Amp, Fiber as _Fiber, OMS as _OMS, Lightpath as _LP, FiberType as _FT, TransceiverMode as _TM, ROADM
+from multilayer_optical_mcp.model.ip_assets import IPLink as _IPLink, Service as _Svc
 from multilayer_optical_mcp.model.qot import QoTState as _QoT
 from multilayer_optical_mcp.model.modes import ModeRegistry as _MR
 from multilayer_optical_mcp.model.network import NetworkModel as _NM

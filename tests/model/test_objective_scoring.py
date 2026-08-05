@@ -1,10 +1,8 @@
 # tests/model/test_objective_scoring.py
 import pytest
 
-from multilayer_optical_mcp.model.assets import (
-    FiberType, Amplifier, Fiber, OMS, ROADM, Router, Service, TransceiverMode,
-    Lightpath, IPLink,
-)
+from multilayer_optical_mcp.model.assets import FiberType, Amplifier, Fiber, OMS, ROADM, TransceiverMode, Lightpath
+from multilayer_optical_mcp.model.ip_assets import Router, Service, IPLink
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot import QoTState
@@ -275,7 +273,7 @@ def test_score_candidate_counts_both_colocated_lightpaths_margin():
     Now that apply_candidate re-applies its own seeds before returning (Fix
     1), score_candidate's clone has BOTH lightpaths' QoT correct, and
     total_margin equals the direct sum of both -- no silent skip."""
-    from multilayer_optical_mcp.model.assets import Service
+    from multilayer_optical_mcp.model.ip_assets import Service
     from multilayer_optical_mcp.model.multilayer_graph import build_layered_graph
     from multilayer_optical_mcp.model.allocation import make_adapter_evaluator
     from multilayer_optical_mcp.model.qot_results import QoTResultStore

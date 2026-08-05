@@ -21,7 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
 
-from .assets import Direction, Service
+from .assets import Direction
+from .ip_assets import Service
 from .network import NetworkModel
 from .plan import apply_op, RerouteService
 from .qot import QoTState

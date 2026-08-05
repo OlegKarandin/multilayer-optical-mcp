@@ -256,7 +256,8 @@ def build_app(*, model: NetworkModel | None = None,
         SetModulationFormat, apply_op, PlanError,
         service_oms_sequence as _service_oms_sequence,
     )
-    from .model.assets import Lightpath as _Lightpath, IPLink as _IPLink
+    from .model.assets import Lightpath as _Lightpath
+    from .model.ip_assets import IPLink as _IPLink
     from .model.validate import (
         validate_plan as _validate_plan, recompute_if_possible as _recompute_if_possible,
     )

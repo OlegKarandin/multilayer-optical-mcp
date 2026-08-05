@@ -1,4 +1,5 @@
-from multilayer_optical_mcp.model.assets import Lightpath, IPLink, Router
+from multilayer_optical_mcp.model.assets import Lightpath
+from multilayer_optical_mcp.model.ip_assets import IPLink, Router
 from multilayer_optical_mcp.model.qot_results import QoTResultStore
 from multilayer_optical_mcp.model.snapshots import SnapshotStore
 from multilayer_optical_mcp.model.plan import Plan, ProvisionLightpath, TeardownLightpath

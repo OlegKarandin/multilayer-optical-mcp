@@ -12,10 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from multilayer_optical_mcp.model.assets import (
-    ROADM, FiberType, Fiber, Amplifier, OMS, TransceiverMode, Router, IPLink,
-    Lightpath, Direction,
-)
+from multilayer_optical_mcp.model.assets import ROADM, FiberType, Fiber, Amplifier, OMS, TransceiverMode, Lightpath, Direction
+from multilayer_optical_mcp.model.ip_assets import Router, IPLink
 from multilayer_optical_mcp.gnpy_adapter.loading import LoadingState
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel

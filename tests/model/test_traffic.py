@@ -8,9 +8,8 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from multilayer_optical_mcp.model.assets import (
-    ROADM, FiberType, Fiber, OMS, Router,
-)
+from multilayer_optical_mcp.model.assets import ROADM, FiberType, Fiber, OMS
+from multilayer_optical_mcp.model.ip_assets import Router
 from multilayer_optical_mcp.model.modes import ModeRegistry, load_modulation_formats
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.topology_import import model_from_abstract_graph

@@ -2,10 +2,8 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 from typing import TYPE_CHECKING, Dict, Optional, Tuple
-from .assets import (
-    FiberType, Fiber, Amplifier, ROADM, Transceiver, OMS,
-    Lightpath, Router, IPLink, Service, SRLG, RiskGroup,
-)
+from .assets import FiberType, Fiber, Amplifier, ROADM, Transceiver, OMS, Lightpath, SRLG, RiskGroup
+from .ip_assets import Router, IPLink, Service
 from .modes import ModeRegistry
 from .qot import QoTState
 

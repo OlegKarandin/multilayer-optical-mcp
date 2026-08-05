@@ -1,9 +1,6 @@
 import pytest
-from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, ROADM, Transceiver,
-    TransceiverMode, OMS, Lightpath, Router, IPLink, Service,
-    SRLG, RiskGroup, Direction,
-)
+from multilayer_optical_mcp.model.assets import FiberType, Fiber, Amplifier, ROADM, Transceiver, TransceiverMode, OMS, Lightpath, SRLG, RiskGroup, Direction
+from multilayer_optical_mcp.model.ip_assets import Router, IPLink, Service
 from multilayer_optical_mcp.model.qot import (
     QoTState, ElementSnapshot, QoTBreakdown,
 )

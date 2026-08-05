@@ -11,7 +11,8 @@ from multilayer_optical_mcp.model.route_service import (
     RouteServiceResult, RouteServiceCandidate, RoutePair,
 )
 from multilayer_optical_mcp.model.objective import ObjectiveResult
-from multilayer_optical_mcp.model.assets import FiberType, Router, Service
+from multilayer_optical_mcp.model.assets import FiberType
+from multilayer_optical_mcp.model.ip_assets import Router, Service
 from multilayer_optical_mcp.server import build_app
 from tests.phase7_topology import add_bidir_span
 

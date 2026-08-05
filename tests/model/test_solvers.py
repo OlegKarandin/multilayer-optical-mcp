@@ -7,10 +7,8 @@ fiber-south). Solver outcomes are typed (SolverStatus), never exceptions.
 from __future__ import annotations
 
 import pytest
-from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, ROADM, Lightpath, Router, IPLink, Service,
-    SRLG, TransceiverMode,
-)
+from multilayer_optical_mcp.model.assets import FiberType, Fiber, Amplifier, OMS, ROADM, Lightpath, SRLG, TransceiverMode
+from multilayer_optical_mcp.model.ip_assets import Router, IPLink, Service
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.solvers import (

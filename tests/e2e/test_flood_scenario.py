@@ -21,7 +21,7 @@ import asyncio
 
 from multilayer_optical_mcp.model import objective
 from multilayer_optical_mcp.model.allocation import make_adapter_evaluator
-from multilayer_optical_mcp.model.assets import Service
+from multilayer_optical_mcp.model.ip_assets import Service
 from multilayer_optical_mcp.model.commit import commit_plan, reconcile
 from multilayer_optical_mcp.model.exposure import (
     compute_exposure, oms_seq_asset_set, service_asset_set,

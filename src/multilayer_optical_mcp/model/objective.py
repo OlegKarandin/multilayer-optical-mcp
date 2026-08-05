@@ -9,7 +9,8 @@ from .spectrum import SpectrumGrid, build_spectrum_state
 from .ip_routing import simulate_ip_routing
 from .whatif import margin_threshold_sweep
 from .plan import apply_op, ProvisionLightpath, RerouteService
-from .assets import Lightpath, IPLink
+from .assets import Lightpath
+from .ip_assets import IPLink
 from .qot import QoTState
 
 _PROP_MS_PER_KM = 0.005   # ~5 us/km one-way fiber propagation
