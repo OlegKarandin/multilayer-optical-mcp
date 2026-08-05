@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 from weakref import WeakKeyDictionary
 
-from ..model.network import NetworkModel
+from ..model.optical_network import OpticalNetworkModel
 from .bands import AMP_BAND, SI_BAND, TRANSCEIVER_BAND
 
 ROADM_TARGET_PCH_OUT_DB = -20.0
@@ -36,7 +36,7 @@ _EDFA_GAIN_MIN_DB = 0
 _EDFA_P_MAX_DBM = 23
 
 
-def _physical_fingerprint(model: NetworkModel) -> tuple:
+def _physical_fingerprint(model: OpticalNetworkModel) -> tuple:
     """Order-independent hashable key over exactly the model state that feeds
     model_to_gnpy_equipment / model_to_gnpy_topology.
 
@@ -66,13 +66,13 @@ def _physical_fingerprint(model: NetworkModel) -> tuple:
 
 
 # Module-level, single-threaded cache of the synthesized GNPy network per model.
-# Keyed by the NetworkModel instance (weak, so a dropped branch is auto-evicted);
+# Keyed by the OpticalNetworkModel instance (weak, so a dropped branch is auto-evicted);
 # the entry is reused only while the model's physical fingerprint is unchanged.
-# No GNPy object is ever stored on the NetworkModel itself — the adapter remains
+# No GNPy object is ever stored on the OpticalNetworkModel itself — the adapter remains
 # the only component that holds GNPy state. Not guarded for concurrent access;
 # the server is single-threaded.
 _CacheEntry = namedtuple("_CacheEntry", "fingerprint equipment network design_gains")
-_NETWORK_CACHE: "WeakKeyDictionary[NetworkModel, _CacheEntry]" = WeakKeyDictionary()
+_NETWORK_CACHE: "WeakKeyDictionary[OpticalNetworkModel, _CacheEntry]" = WeakKeyDictionary()
 
 
 def _snapshot_design_gains(network) -> Dict[str, float]:
@@ -125,7 +125,7 @@ def _adv_config_path(nf: float, tmpdir: Path) -> str:
     return str(p)
 
 
-def model_to_gnpy_equipment(model: NetworkModel,
+def model_to_gnpy_equipment(model: OpticalNetworkModel,
                              _tmpdir: "Path | None" = None) -> Dict[str, Any]:
     """Build the GNPy equipment dict with one advanced_model Edfa per distinct NF.
 
@@ -185,7 +185,7 @@ def model_to_gnpy_equipment(model: NetworkModel,
     }
 
 
-def model_to_gnpy_topology(model: NetworkModel) -> Dict[str, Any]:
+def model_to_gnpy_topology(model: OpticalNetworkModel) -> Dict[str, Any]:
     """Build the GNPy {elements, connections} dict from the model."""
     elements: List[Dict[str, Any]] = []
     for r in model._roadms.values():
@@ -263,7 +263,7 @@ def model_to_gnpy_topology(model: NetworkModel) -> Dict[str, Any]:
     return {"elements": elements, "connections": connections}
 
 
-def build_gnpy_network(model: NetworkModel):
+def build_gnpy_network(model: OpticalNetworkModel):
     """Return (equipment, network) built from the model, ready to propagate.
 
     Cached per model instance and keyed by the model's physical fingerprint: a

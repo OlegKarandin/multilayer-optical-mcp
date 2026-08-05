@@ -1,9 +1,8 @@
 # tests/test_server_phase5.py
 import pytest
 from multilayer_optical_mcp.server import build_app
-from multilayer_optical_mcp.model.assets import (
-    FiberType, Amplifier, Fiber, OMS, ROADM, Lightpath, Router, IPLink, Service,
-)
+from multilayer_optical_mcp.model.assets import FiberType, Amplifier, Fiber, OMS, ROADM, Lightpath
+from multilayer_optical_mcp.model.ip_assets import Router, IPLink, Service
 from multilayer_optical_mcp.model.qot import QoTState
 
 

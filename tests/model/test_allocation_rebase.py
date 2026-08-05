@@ -5,10 +5,8 @@ Two facts the flat greenfield packer could not express:
   2. under transponder scarcity a demand GROOMS onto a surviving lightpath's
      residual capacity instead of returning a false no_solution.
 """
-from multilayer_optical_mcp.model.assets import (
-    ROADM, FiberType, Fiber, Amplifier, OMS, TransceiverMode, Router, IPLink,
-    Lightpath,
-)
+from multilayer_optical_mcp.model.assets import ROADM, FiberType, Fiber, Amplifier, OMS, TransceiverMode, Lightpath
+from multilayer_optical_mcp.model.ip_assets import Router, IPLink
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot import QoTState

@@ -1,6 +1,5 @@
-from multilayer_optical_mcp.model.assets import (
-    Lightpath, Router, IPLink,
-)
+from multilayer_optical_mcp.model.assets import Lightpath
+from multilayer_optical_mcp.model.ip_assets import Router, IPLink
 from multilayer_optical_mcp.model.qot_results import QoTResultStore
 from multilayer_optical_mcp.gnpy_adapter.loading import Channel, LoadingState
 from multilayer_optical_mcp.gnpy_adapter.adapter import (

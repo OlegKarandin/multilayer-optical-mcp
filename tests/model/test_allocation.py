@@ -10,9 +10,8 @@ protected insufficient -> unplaced) against the new AllocationResult shape.
 import pytest
 
 from multilayer_optical_mcp.model.assets import ROADM
-from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, SRLG, TransceiverMode, Router,
-)
+from multilayer_optical_mcp.model.assets import FiberType, Fiber, Amplifier, OMS, SRLG, TransceiverMode
+from multilayer_optical_mcp.model.ip_assets import Router
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot import QoTState
@@ -164,7 +163,7 @@ def test_pack_records_unplaced_on_service_id_collision():
     """Regression for the audit's Important finding: _pack must not crash
     when a demand id collides with an existing service id -- it must record
     the demand as unplaced with a clear reason."""
-    from multilayer_optical_mcp.model.assets import Service
+    from multilayer_optical_mcp.model.ip_assets import Service
 
     n = _two_routes()
     n.add_service(Service(id="d1", src_router="r_A", dst_router="r_Z",
@@ -242,7 +241,7 @@ def test_apply_candidate_self_corrects_seed_wiped_by_sibling_run():
     is no longer the contract -- apply_candidate's own return value is
     still provided (and still needed by _pack for the CROSS-DEMAND case,
     see below), but the immediate post-call state is now already correct."""
-    from multilayer_optical_mcp.model.assets import Service
+    from multilayer_optical_mcp.model.ip_assets import Service
     from multilayer_optical_mcp.model.multilayer_graph import build_layered_graph
     from multilayer_optical_mcp.model.allocation import make_adapter_evaluator
     from multilayer_optical_mcp.model.qot_results import QoTResultStore

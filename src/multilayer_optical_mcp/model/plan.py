@@ -13,7 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Optional, Tuple, Union
 
-from .assets import IPLink, Lightpath
+from .assets import Lightpath
+from .ip_assets import IPLink
 from .network import NetworkModel
 
 

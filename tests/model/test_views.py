@@ -1,7 +1,5 @@
-from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, ROADM, Lightpath, Router, IPLink, Service,
-    SRLG, TransceiverMode,
-)
+from multilayer_optical_mcp.model.assets import FiberType, Fiber, Amplifier, OMS, ROADM, Lightpath, SRLG, TransceiverMode
+from multilayer_optical_mcp.model.ip_assets import Router, IPLink, Service
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot import QoTState
@@ -126,7 +124,7 @@ def test_risk_groups_dict_carries_metadata():
 # ---------------------------------------------------------------------------
 # New tests for Task 7 serializers
 # ---------------------------------------------------------------------------
-from multilayer_optical_mcp.model.assets import Service
+from multilayer_optical_mcp.model.ip_assets import Service
 from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model import views
 from tests.model.test_ip_routing import _two_link_model

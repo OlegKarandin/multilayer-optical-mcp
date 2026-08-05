@@ -6,9 +6,8 @@ from __future__ import annotations
 import asyncio
 
 from multilayer_optical_mcp.server import build_app
-from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, ROADM, OMS, Lightpath, Transceiver, Router,
-)
+from multilayer_optical_mcp.model.assets import FiberType, Fiber, Amplifier, ROADM, OMS, Lightpath, Transceiver
+from multilayer_optical_mcp.model.ip_assets import Router
 
 
 def _tool_names(app) -> set[str]:

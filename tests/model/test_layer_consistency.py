@@ -1,7 +1,7 @@
 # tests/model/test_layer_consistency.py
 import pytest
 from multilayer_optical_mcp.model.snapshots import SnapshotStore
-from multilayer_optical_mcp.model.assets import Service
+from multilayer_optical_mcp.model.ip_assets import Service
 from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model import ip_routing
 from tests.model.test_ip_routing import _two_link_model

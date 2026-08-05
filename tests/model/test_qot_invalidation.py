@@ -1,9 +1,8 @@
 """S1-7: physics mutations must invalidate stale QoT so ip_link_capacity_gbps
 never silently serves a capacity read off a mode/impairment that changed."""
 import pytest
-from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, ROADM, Lightpath, TransceiverMode, Router, IPLink,
-)
+from multilayer_optical_mcp.model.assets import FiberType, Fiber, Amplifier, OMS, ROADM, Lightpath, TransceiverMode
+from multilayer_optical_mcp.model.ip_assets import Router, IPLink
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot import QoTState

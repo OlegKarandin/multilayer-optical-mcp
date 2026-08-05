@@ -4,7 +4,7 @@ import math
 from pathlib import Path
 from typing import Any, Tuple
 
-from ..model.network import NetworkModel
+from ..model.optical_network import OpticalNetworkModel
 from .loading import LoadingState
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -33,7 +33,7 @@ def load_toy(
 
 
 def resolve_oms_path_to_uids(
-    model: NetworkModel,
+    model: OpticalNetworkModel,
     oms_sequence: Tuple[str, ...],
 ) -> Tuple[str, ...]:
     """Expand an ordered sequence of OMS ids into the flat uid list of their elements.
@@ -48,7 +48,7 @@ def resolve_oms_path_to_uids(
 
 
 def reverse_oms_sequence(
-    model: NetworkModel,
+    model: OpticalNetworkModel,
     oms_sequence: Tuple[str, ...],
 ) -> "Tuple[str, ...] | None":
     """Resolve the physically separate reverse path for *oms_sequence*.

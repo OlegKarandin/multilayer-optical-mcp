@@ -4,7 +4,8 @@ between them — break-before-make drops a service transiently; reordering to
 make-before-break clears it. Deterministic and physics-free (the drop comes from
 sequencing, not from a marginal QoT — both spans carry comfortably-positive margin).
 """
-from multilayer_optical_mcp.model.assets import Lightpath, IPLink, Router, Service
+from multilayer_optical_mcp.model.assets import Lightpath
+from multilayer_optical_mcp.model.ip_assets import IPLink, Router, Service
 from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model.qot_results import QoTResultStore
 from multilayer_optical_mcp.model.plan import (

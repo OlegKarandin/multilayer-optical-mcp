@@ -1,9 +1,8 @@
 # tests/model/test_multilayer_graph.py
 """Layered auxiliary graph: existing lightpaths -> LPE edges (residual,
 margin-gated); free wavelengths -> WLE edges driven from the OMS bitmask."""
-from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, ROADM, Lightpath, Router, IPLink, TransceiverMode,
-)
+from multilayer_optical_mcp.model.assets import FiberType, Fiber, Amplifier, OMS, ROADM, Lightpath, TransceiverMode
+from multilayer_optical_mcp.model.ip_assets import Router, IPLink
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot import QoTState
@@ -110,10 +109,8 @@ def test_forbidden_asset_drops_lpe_and_wle():
 # place_demands tests
 # ---------------------------------------------------------------------------
 
-from multilayer_optical_mcp.model.assets import (
-    FiberType as _FT, Fiber as _F, Amplifier as _A, OMS as _O, Lightpath as _L,
-    Router as _R, IPLink as _I, Service,
-)
+from multilayer_optical_mcp.model.assets import FiberType as _FT, Fiber as _F, Amplifier as _A, OMS as _O, Lightpath as _L
+from multilayer_optical_mcp.model.ip_assets import Router as _R, IPLink as _I, Service
 from multilayer_optical_mcp.model.multilayer_graph import place_demands
 from multilayer_optical_mcp.model.qot import QoTState
 

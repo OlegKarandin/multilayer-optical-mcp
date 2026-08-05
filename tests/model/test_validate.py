@@ -2,9 +2,8 @@ from dataclasses import replace
 
 import pytest
 
-from multilayer_optical_mcp.model.assets import (
-    Lightpath, IPLink, Router, Service, TransceiverMode,
-)
+from multilayer_optical_mcp.model.assets import Lightpath, TransceiverMode
+from multilayer_optical_mcp.model.ip_assets import IPLink, Router, Service
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model.qot_results import QoTResultStore

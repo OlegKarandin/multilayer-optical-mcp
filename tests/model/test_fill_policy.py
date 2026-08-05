@@ -8,9 +8,8 @@ untouched (see the plan's acceptance-only decision).
 """
 import pytest
 
-from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, ROADM, TransceiverMode, Router,
-)
+from multilayer_optical_mcp.model.assets import FiberType, Fiber, Amplifier, OMS, ROADM, TransceiverMode
+from multilayer_optical_mcp.model.ip_assets import Router
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot import QoTState

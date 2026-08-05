@@ -5,7 +5,8 @@ crash get_services, get_grooming_map, get_exposure, get_affected_services,
 evaluate_objective, or validate_plan (even on an empty plan)."""
 import pytest
 
-from multilayer_optical_mcp.model.assets import Lightpath, Router, IPLink, Service
+from multilayer_optical_mcp.model.assets import Lightpath
+from multilayer_optical_mcp.model.ip_assets import Router, IPLink, Service
 from multilayer_optical_mcp.model.network import NetworkModel
 from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model.qot_results import QoTResultStore
