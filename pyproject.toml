@@ -8,6 +8,8 @@ version = "0.1.0"
 description = "MCP server for multi-layer optical network reasoning (GNPy QoT + IP-over-optical)."
 requires-python = ">=3.11"
 readme = "CLAUDE.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 dependencies = [
     "gnpy==2.14.0",
     "networkx>=3.2",
