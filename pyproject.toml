@@ -9,16 +9,17 @@ description = "MCP server for multi-layer optical network reasoning (GNPy QoT + 
 requires-python = ">=3.11"
 readme = "CLAUDE.md"
 dependencies = [
-    "mcp[cli]>=1.0",
     "gnpy==2.14.0",
     "networkx>=3.2",
     "numpy>=1.26",
     "pyyaml>=6.0",
-    "pydantic>=2.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.5"]
+server = ["mcp[cli]>=1.0", "pydantic>=2.0"]
+# dev pulls in server too: the test suite imports server.py (tests/test_server_*.py,
+# tests/e2e/test_flood_scenario.py), which needs mcp/pydantic.
+dev = ["multilayer-optical-mcp[server]", "pytest>=8", "pytest-cov>=5", "ruff>=0.5"]
 
 [project.scripts]
 multilayer-optical-mcp = "multilayer_optical_mcp.server:main"
