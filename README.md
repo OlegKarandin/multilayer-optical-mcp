@@ -10,19 +10,6 @@ primitives an agent (or a human operator) needs to ask **what-if** questions,
 route lightpaths, reason about shared-risk groups, and validate change plans
 before committing them.
 
-GNPy is one component — the physical-layer QoT adapter — not the whole
-server. The name reflects the full multi-layer surface (IP-over-optical,
-routing, risk groups, what-if analysis), not just the GNPy wrapper.
-
-This repo is deliberately **disaster-agnostic infrastructure**: it knows
-about topologies, lightpaths, services, risk groups, QoT, and plans, but
-nothing about storms, floods, or weather feeds. Event interpretation lives in
-whatever application depends on this server.
-
-For the full design rationale, hard architectural rules, and tool-by-tool
-contract, see [`CLAUDE.md`](CLAUDE.md) — it's the canonical spec this project
-is built against, not just editor configuration.
-
 ## What it does
 
 - **What-if analysis** — a physics-free margin-threshold screening sweep and
@@ -39,17 +26,11 @@ is built against, not just editor configuration.
   (or zero) IP capacity.
 - **Deterministic solvers** — k-shortest paths, disjoint-path computation,
   RSA, and a heuristic multi-layer allocator, each returning a typed
-  `solution` / `partial` / `no_solution` result — never an exception in place
-  of structured data.
+  `solution` / `partial` / `no_solution` result.
 - **Snapshot/branch state engine** — every mutation is simulatable on a
   branch before it touches ground truth; `validate_plan` must pass before
   `commit_plan`, and `reconcile()` reads back actual state after a live
   commit to surface drift from partial control-plane failures.
-
-None of this claims research novelty — the value is a well-typed MCP tool
-surface over GNPy and standard graph/RSA algorithms, plus the what-if and
-risk-group primitives that are usually hand-rolled and missing from
-off-the-shelf stacks.
 
 ## Architecture
 
