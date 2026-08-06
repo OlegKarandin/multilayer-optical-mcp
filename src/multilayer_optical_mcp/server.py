@@ -1092,5 +1092,23 @@ def build_app(*, model: NetworkModel | None = None,
 
 
 def main() -> None:
-    """Entry-point for running the MCP server (stdio transport)."""
-    build_app().run()
+    """Entry-point for running the MCP server (stdio transport). With
+    --topology, seeds the model from a topology JSON file (see
+    topology_loader.load_model_from_topology_file) before serving; without
+    it, starts with the empty NetworkModel as before."""
+    import argparse
+
+    from .topology_loader import load_model_from_topology_file
+
+    parser = argparse.ArgumentParser(prog="multilayer-optical-mcp")
+    parser.add_argument(
+        "--topology", type=str, default=None,
+        help="Path to a topology JSON file to seed the model with at startup",
+    )
+    args = parser.parse_args()
+
+    model = None
+    if args.topology:
+        modes = load_modulation_formats(MOD_FORMATS_YAML)
+        model = load_model_from_topology_file(args.topology, modes=modes)
+    build_app(model=model).run()
