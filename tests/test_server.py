@@ -51,10 +51,10 @@ def _call(app, name: str, **kwargs):
 # tests
 # ---------------------------------------------------------------------------
 
-def test_build_app_returns_fastmcp_instance():
-    from mcp.server.fastmcp import FastMCP
+def test_build_app_returns_mcpserver_instance():
+    from mcp.server import MCPServer
     app = build_app()
-    assert isinstance(app, FastMCP)
+    assert isinstance(app, MCPServer)
 
 
 def test_server_registers_phase_1_and_2_tools():

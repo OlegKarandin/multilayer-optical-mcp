@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-server = ["mcp[cli]>=1.0", "pydantic>=2.0"]
+server = ["mcp[cli]>=2.0", "pydantic>=2.12"]
 # dev pulls in server too: the test suite imports server.py (tests/test_server_*.py,
 # tests/e2e/test_flood_scenario.py), which needs mcp/pydantic.
 dev = ["multilayer-optical-mcp[server]", "pytest>=8", "pytest-cov>=5", "ruff>=0.5"]

@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from .model.assets import Direction
 from .model.modes import load_modulation_formats
@@ -35,9 +35,9 @@ MOD_FORMATS_YAML = REPO_ROOT / "modulation_formats.yaml"
 
 def build_app(*, model: NetworkModel | None = None,
               snapshots: SnapshotStore | None = None,
-              results: QoTResultStore | None = None) -> FastMCP:
-    """Construct and return the FastMCP application with all phase 1-2 tools."""
-    app = FastMCP("multilayer-optical-mcp")
+              results: QoTResultStore | None = None) -> MCPServer:
+    """Construct and return the MCPServer application with all phase 1-2 tools."""
+    app = MCPServer("multilayer-optical-mcp")
     modes = load_modulation_formats(MOD_FORMATS_YAML)
     if snapshots is None:
         snapshots = SnapshotStore(initial=model or NetworkModel(modes=modes),
