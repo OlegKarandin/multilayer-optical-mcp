@@ -25,9 +25,6 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
-    # Advisory only: the repo has pre-existing ruff findings not yet cleaned
-    # up, so lint failures are surfaced without blocking the required check.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 

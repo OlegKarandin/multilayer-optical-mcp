@@ -37,3 +37,10 @@ where = ["src"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-ra --strict-markers"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests deliberately group imports right above the section that uses them
+# (each "# --- Task N ---" block is self-contained) and use semicolon-joined
+# setup/assert one-liners for compact test bodies. Both are consistent,
+# intentional conventions here, not accidental placement/formatting.
+"tests/**" = ["E402", "E702"]
