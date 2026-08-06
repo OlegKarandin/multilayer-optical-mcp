@@ -15,12 +15,16 @@ dependencies = [
     "networkx>=3.2",
     "numpy>=1.26",
     "pyyaml>=6.0",
+    # model/violations.py uses pydantic for typed violation schemas; it's a
+    # core-layer dependency, not MCP-specific, so it lives here rather than
+    # behind the `server` extra.
+    "pydantic>=2.12",
 ]
 
 [project.optional-dependencies]
-server = ["mcp[cli]>=2.0", "pydantic>=2.12"]
+server = ["mcp[cli]>=2.0"]
 # dev pulls in server too: the test suite imports server.py (tests/test_server_*.py,
-# tests/e2e/test_flood_scenario.py), which needs mcp/pydantic.
+# tests/e2e/test_flood_scenario.py), which needs mcp.
 dev = ["multilayer-optical-mcp[server]", "pytest>=8", "pytest-cov>=5", "ruff>=0.5"]
 
 [project.scripts]
