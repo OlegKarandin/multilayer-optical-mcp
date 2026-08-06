@@ -24,7 +24,7 @@ Stage 5 assumptions (recorded explicitly, from the inspection roadmap):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Dict, List, Optional, Tuple
 
 from .network import NetworkModel
 

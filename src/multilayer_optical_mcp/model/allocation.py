@@ -19,7 +19,7 @@ by synthesizing a Service per demand on a clone and committing it through the re
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
+from typing import Dict, List, Optional, Protocol, Sequence, Tuple
 
 from .assets import Direction
 from .ip_assets import Service
@@ -177,10 +177,12 @@ def _build_loading(
     regardless of occupancy, so the probe sees the worst-case fully-loaded comb —
     the mode chosen then stays feasible as the network fills (see FillPolicy)."""
     if fill_policy is FillPolicy.FULL:
-        include = lambda s: True                       # every non-probe slot
+        def include(s):
+            return True                       # every non-probe slot
     else:
         occ = occupied_along(state, oms_sequence)
-        include = lambda s: bool((occ >> s) & 1)       # only lit slots
+        def include(s):
+            return bool((occ >> s) & 1)       # only lit slots
     probe = Channel(grid.freq(probe_slot), grid.spacing_hz, None, ref_mode_id)
     neighbors = tuple(
         Channel(grid.freq(s), grid.spacing_hz, None, ref_mode_id)

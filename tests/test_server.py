@@ -12,7 +12,6 @@ so that the test suite stays synchronous and independent of async machinery.
 from __future__ import annotations
 
 import asyncio
-import pytest
 
 from multilayer_optical_mcp.server import build_app
 

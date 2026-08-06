@@ -1,4 +1,3 @@
-import pytest
 
 from multilayer_optical_mcp.server import build_app
 from multilayer_optical_mcp.model.assets import FiberType
@@ -344,7 +343,7 @@ def test_provision_lightpath_tool_rejects_spectrum_clash():
     after = app._snapshots.current()
     assert {lp.id for lp in after.list_lightpaths()} == before_ids
     assert "lp2" not in after._lightpaths
-    assert "ip1" in {l.id for l in after.list_ip_links()}   # untouched too
+    assert "ip1" in {ip_link.id for ip_link in after.list_ip_links()}   # untouched too
 
 
 def test_provision_lightpath_tool_allows_non_clashing_frequency():
@@ -391,7 +390,7 @@ def test_provision_lightpath_tool_rejects_off_grid_frequency():
     after = app._snapshots.current()
     assert {lp.id for lp in after.list_lightpaths()} == before_ids
     assert "lp1" not in after._lightpaths
-    assert "ip1" not in {l.id for l in after.list_ip_links()}
+    assert "ip1" not in {ip_link.id for ip_link in after.list_ip_links()}
 
 
 def test_set_modulation_format_tool_recomputes_qot():

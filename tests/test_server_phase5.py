@@ -52,7 +52,7 @@ def test_get_ip_topology_annotates_links():
     app = build_app()
     bitrate = _seed(app)
     d = _call(app, "get_ip_topology")
-    links = {l["id"]: l for l in d["ip_links"]}
+    links = {link["id"]: link for link in d["ip_links"]}
     assert links["ipAB"]["capacity_gbps"] == bitrate
     assert links["ipAB"]["load_gbps"] == pytest.approx(bitrate * 0.5)
 
@@ -93,7 +93,7 @@ def test_reroute_service_tool_repins_and_resimulates():
     assert out["service_id"] == "svc-AC"
     assert out["working_path"] == ["ipAC"]
     # Load moved: ipAB now idle, ipAC carries the demand.
-    topo = {l["id"]: l for l in _call(app, "get_ip_topology")["ip_links"]}
+    topo = {link["id"]: link for link in _call(app, "get_ip_topology")["ip_links"]}
     assert topo["ipAB"]["load_gbps"] == 0.0
     assert topo["ipAC"]["load_gbps"] == pytest.approx(bitrate * 0.5)
 
@@ -107,7 +107,7 @@ def test_reroute_service_tool_rejects_bad_path():
 
 def test_reroute_service_tool_which_protection_returns_protection_path():
     app = build_app()
-    bitrate = _seed(app)
+    _seed(app)
     n = app._snapshots.current()
     mode_id = n.modes.list()[0].id
     n.add_lightpath(Lightpath(id="lpAC", oms_sequence=("omsAB", "omsBC"),

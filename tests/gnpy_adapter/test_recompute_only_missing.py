@@ -12,7 +12,6 @@ staleness.
 """
 from multilayer_optical_mcp.gnpy_adapter import adapter as adapter_module
 from multilayer_optical_mcp.model.assets import Lightpath
-from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model.qot_results import QoTResultStore
 from multilayer_optical_mcp.gnpy_adapter.adapter import recompute_qot_under_loading
 from multilayer_optical_mcp.model.whatif import loading_from_model

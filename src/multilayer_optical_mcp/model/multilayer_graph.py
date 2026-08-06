@@ -66,7 +66,7 @@ from typing import Dict, FrozenSet, Iterator, List, Optional, Tuple
 import networkx as nx
 
 from .network import NetworkModel
-from .spectrum import SpectrumGrid, build_spectrum_state
+from .spectrum import FillPolicy, SpectrumGrid, build_spectrum_state
 from .exposure import oms_seq_asset_set
 
 ACCESS = "access"
@@ -409,7 +409,7 @@ def place_demands(
     model: NetworkModel, g: nx.MultiDiGraph, qot, *,
     src: str, dst: str, demand_gbps: float, policy: str,
     k: int = _DEFAULT_K, grid: Optional[SpectrumGrid] = None,
-    fill_policy: "FillPolicy" = None,
+    fill_policy: FillPolicy = None,
 ) -> List[Placement]:
     """IGABAG for one demand, returning up to `k` DISTINCT feasible placements
     (the cost-ordered frontier under the policy), each possibly degraded. A
@@ -419,7 +419,6 @@ def place_demands(
     `fill_policy` selects the acceptance-probe reference loading passed to
     `_build_loading` (defaults to FULL — see FillPolicy)."""
     from .allocation import _build_loading, _best_feasible_mode
-    from .spectrum import FillPolicy
     from ..gnpy_adapter.loading import Channel, LoadingState
     if fill_policy is None:
         fill_policy = FillPolicy.FULL

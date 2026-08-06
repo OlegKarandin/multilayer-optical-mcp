@@ -1,7 +1,6 @@
 """placement_common: the three helpers previously duplicated (or, for
 _forbidden_assets/_lever, defined-but-only-imported-elsewhere) across
 allocation.py, route_service.py, and restoration.py."""
-import pytest
 
 from multilayer_optical_mcp.model.assets import SRLG
 from multilayer_optical_mcp.model.modes import ModeRegistry
@@ -77,7 +76,7 @@ def test_status_empty_input_ordering_matches_each_original_caller():
 
 
 from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, ROADM, Lightpath, TransceiverMode,
+    FiberType, Fiber, Amplifier, OMS, ROADM, TransceiverMode,
 )
 from multilayer_optical_mcp.model.multilayer_graph import build_layered_graph
 from multilayer_optical_mcp.model.placement_common import _harvest_placements

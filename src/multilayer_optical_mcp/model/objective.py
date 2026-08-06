@@ -130,9 +130,15 @@ def _stitch_ip_path(segments, src_router, dst_router):
     while node != dst_router and remaining:
         for k, (a, z, ip_id) in enumerate(remaining):
             if a == node:
-                path.append(ip_id); node = z; remaining.pop(k); break
+                path.append(ip_id)
+                node = z
+                remaining.pop(k)
+                break
             if z == node:
-                path.append(ip_id); node = a; remaining.pop(k); break
+                path.append(ip_id)
+                node = a
+                remaining.pop(k)
+                break
         else:
             # No segment continues the walk -- should not happen for a real
             # placement. Not re-raised here: the truncated `path` this
@@ -332,7 +338,7 @@ def apply_candidate(work, placement, service, *, prefix="cand") -> SeededQoT:
     _assert_prefix_not_reserved(prefix)
     grid = SpectrumGrid.default()
     site_to_router = {r.site: r.id for r in work.list_routers()}
-    lp_to_iplink = {l.lightpath_id: l for l in work.list_ip_links()}
+    lp_to_iplink = {ip_link.lightpath_id: ip_link for ip_link in work.list_ip_links()}
     segments = []
     seeded = []
     # reused legs: reuse their existing IP link binding
@@ -377,7 +383,7 @@ def provision_new_runs(work, placement, service, *, prefix) -> Tuple[Tuple[str, 
     _assert_prefix_not_reserved(prefix)
     grid = SpectrumGrid.default()
     site_to_router = {r.site: r.id for r in work.list_routers()}
-    lp_to_iplink = {l.lightpath_id: l for l in work.list_ip_links()}
+    lp_to_iplink = {ip_link.lightpath_id: ip_link for ip_link in work.list_ip_links()}
     segments = []
     seeded = []
     for lp_id in placement.reused_lightpaths:

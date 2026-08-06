@@ -172,7 +172,6 @@ def test_unresolvable_oms_endpoint_raises():
     """S3-11/S3-4: an OMS endpoint that is neither roadm_<id> nor a registered
     transceiver must raise, not silently synthesize a penalty-free Transceiver."""
     import pytest
-    from multilayer_optical_mcp.model.assets import OMS
     model = _model_with(roadm=ROADM(id="roadm_A"),
                         amp=Amplifier(id="amp_x", type_variety="advanced_toy",
                                       gain_db=20.0, nf_db=5.5))

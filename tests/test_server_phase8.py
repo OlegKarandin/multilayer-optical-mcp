@@ -205,7 +205,7 @@ def test_route_service_tool_sanitizes_nonfinite_cost_vector():
 
 def test_evaluate_objective_state_param_reads_the_named_snapshot_not_current():
     app = build_app()
-    n = _seed(app)
+    _seed(app)
     # svc1 is unrouted (working_path=()) -> its 100 Gbps demand is dropped in
     # whatever state we score it against.
     baseline = _call(app, "evaluate_objective")

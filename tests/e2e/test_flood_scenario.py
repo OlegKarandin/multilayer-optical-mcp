@@ -105,7 +105,7 @@ def _materialize_and_collect(work, placement, svc_v, *, prefix: str, ops: list) 
     apply_op(work, RerouteService(svc_v.id, new_path, which="protection"))
     for lp_id in sorted({lp.id for lp in work.list_lightpaths()} - before):
         lp_obj = work.get_lightpath(lp_id)
-        ipl_obj = next((l for l in work.list_ip_links() if l.lightpath_id == lp_id), None)
+        ipl_obj = next((ipl for ipl in work.list_ip_links() if ipl.lightpath_id == lp_id), None)
         ops.append(ProvisionLightpath(lightpath=lp_obj, ip_link=ipl_obj))
     ops.append(RerouteService(svc_v.id, new_path, which="protection"))
     return new_path

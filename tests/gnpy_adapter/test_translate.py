@@ -21,7 +21,7 @@ def test_toy_topology_loads_with_advanced_amp_model():
 # ---------------------------------------------------------------------------
 
 from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, ROADM, TransceiverMode,
+    FiberType, Amplifier, OMS, ROADM, TransceiverMode,
 )
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel

@@ -1,6 +1,5 @@
 from unittest.mock import patch
 
-import copy
 
 from multilayer_optical_mcp.model.allocation import make_adapter_evaluator
 from multilayer_optical_mcp.model.qot_results import QoTResultStore, HarvestCache

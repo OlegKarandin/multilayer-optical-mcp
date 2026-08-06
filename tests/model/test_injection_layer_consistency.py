@@ -1,7 +1,6 @@
 """Integration tests: injection propagates through optical -> IP -> routing layers
 on a branch, while leaving ground truth untouched.
 """
-import math
 from multilayer_optical_mcp.model.assets import Lightpath
 from multilayer_optical_mcp.model.ip_assets import IPLink, Service
 from multilayer_optical_mcp.model.qot_results import QoTResultStore
@@ -11,11 +10,11 @@ from multilayer_optical_mcp.model.whatif import (
     inject_degradation,
     loading_from_model,
 )
-from multilayer_optical_mcp.model.ip_routing import simulate_ip_routing, DroppedService
+from multilayer_optical_mcp.model.ip_routing import simulate_ip_routing
 from multilayer_optical_mcp.gnpy_adapter.adapter import recompute_qot_under_loading
 
 # reuse the one-edge synthesizable model + helpers from test_whatif
-from tests.model.test_whatif import _one_edge_model, _reg, MODE
+from tests.model.test_whatif import _one_edge_model, MODE
 
 
 def _ip_over_optical():

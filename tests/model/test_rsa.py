@@ -6,11 +6,10 @@ integration case pins the seam to the adapter on toy_2route.json.
 """
 from pathlib import Path
 
-import pytest
 
 from multilayer_optical_mcp.model.assets import ROADM
 from multilayer_optical_mcp.model.assets import (
-    FiberType, Fiber, Amplifier, OMS, Lightpath, SRLG, TransceiverMode,
+    FiberType, Fiber, Amplifier, OMS, SRLG, TransceiverMode,
 )
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel

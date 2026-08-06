@@ -90,7 +90,7 @@ def test_margin_negative_lightpath_has_no_lpe_edge():
 
 def test_wle_present_only_on_free_slots():
     n = _one_lightpath_model()
-    grid = SpectrumGrid.default()
+    SpectrumGrid.default()
     g = build_layered_graph(n)
     # slot 20 is occupied by lp-AB on oms-AB -> no WLE on layer 20
     assert wle_count_on_layer(g, "oms-AB", 20) == 0
@@ -111,8 +111,6 @@ def test_forbidden_asset_drops_lpe_and_wle():
 
 from multilayer_optical_mcp.model.assets import FiberType as _FT, Fiber as _F, Amplifier as _A, OMS as _O, Lightpath as _L
 from multilayer_optical_mcp.model.ip_assets import Router as _R, IPLink as _I, Service
-from multilayer_optical_mcp.model.multilayer_graph import place_demands
-from multilayer_optical_mcp.model.qot import QoTState
 
 
 class FakeQot:

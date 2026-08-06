@@ -1,8 +1,6 @@
-import json
 import tempfile
 from pathlib import Path
 
-import pytest
 
 from multilayer_optical_mcp.gnpy_adapter import synthesize as S
 from multilayer_optical_mcp.model.assets import (

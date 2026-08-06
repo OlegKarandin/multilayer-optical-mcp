@@ -27,6 +27,10 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List
 
+from .assets import Amplifier, Fiber, FiberType, OMS, ROADM, Transceiver
+from .modes import ModeRegistry
+from .optical_network import OpticalNetworkModel
+
 
 def split_link_into_spans(
     length_km: float,
@@ -61,10 +65,6 @@ def split_link_into_spans(
     spans[-1] = round(length_km - base_len * (best_n - 1), 2)
     return spans
 
-
-from .assets import Amplifier, Fiber, FiberType, OMS, ROADM, Transceiver
-from .modes import ModeRegistry
-from .optical_network import OpticalNetworkModel
 
 DEFAULT_AMP_NF_DB = 5.5
 DEFAULT_AMP_GAIN_DB = 20.0

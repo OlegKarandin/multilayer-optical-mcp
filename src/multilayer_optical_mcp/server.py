@@ -229,7 +229,6 @@ def build_app(*, model: NetworkModel | None = None,
         inject_degradation as _inject_degradation,
         inject_failure as _inject_failure,
         whatif_sensitivity as _whatif_sensitivity,
-        loading_from_model,
     )
     from .model.exposure import compute_exposure
     from .model.solvers import (

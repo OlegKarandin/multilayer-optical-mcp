@@ -7,7 +7,6 @@ the reverse chain's impairments — the asymmetric-degradation feature CLAUDE.md
 promises. A single-OMS legacy model with no reverse counterpart still falls back
 to reversed(uids).
 """
-import math
 import pytest
 
 from multilayer_optical_mcp.model.assets import (

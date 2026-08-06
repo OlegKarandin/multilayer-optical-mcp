@@ -221,7 +221,7 @@ def test_provision_new_runs_stitches_reused_leg_into_ip_path():
     assert ip_path == ("ipAB",)
     # Pure reuse: no new lightpath or IP link was provisioned.
     assert {lp.id for lp in work.list_lightpaths()} == {"lpAB"}
-    assert {l.id for l in work.list_ip_links()} == {"ipAB"}
+    assert {ip_link.id for ip_link in work.list_ip_links()} == {"ipAB"}
 
     # Close the loop: the returned ip_path is exactly what allocation.py's
     # _pack feeds into RerouteService(which="protection") for a real commit.

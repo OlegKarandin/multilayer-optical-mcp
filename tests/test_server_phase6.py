@@ -4,10 +4,8 @@ import math
 import pytest
 from multilayer_optical_mcp.server import build_app, MOD_FORMATS_YAML
 from multilayer_optical_mcp.model.assets import FiberType, Amplifier, Fiber, OMS, ROADM, Lightpath, Transceiver
-from multilayer_optical_mcp.model.ip_assets import IPLink, Router, Service
 from multilayer_optical_mcp.model.modes import load_modulation_formats
 from multilayer_optical_mcp.model.qot import QoTState
-from multilayer_optical_mcp.model.qot_results import QoTResultStore
 
 
 def _call(app, name, **kwargs):

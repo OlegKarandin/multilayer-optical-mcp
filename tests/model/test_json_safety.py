@@ -1,4 +1,3 @@
-import math
 
 from multilayer_optical_mcp.model.json_safety import safe_float
 

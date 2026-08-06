@@ -62,7 +62,7 @@ def test_failed_assets_isolated_on_branch(tmp_path):
     base = _one_edge_model()
     store = SnapshotStore(base)
     sid = store.create()
-    bid = store.branch(sid)
+    store.branch(sid)
     store.current().mark_failed(("fiber_0_1_0",))
     assert store.current().is_failed("fiber_0_1_0")
     assert not store.get(sid).is_failed("fiber_0_1_0")  # parent untouched
@@ -75,7 +75,7 @@ def test_failed_assets_isolated_on_branch(tmp_path):
 from multilayer_optical_mcp.model.whatif import (
     loading_from_model, margin_threshold_sweep, MarginSweepRow,
 )
-from multilayer_optical_mcp.model.assets import OMS, Lightpath
+from multilayer_optical_mcp.model.assets import Lightpath
 from multilayer_optical_mcp.model.qot import QoTState
 
 
@@ -117,7 +117,7 @@ def test_sweep_excludes_well_margined():
 # ---------------------------------------------------------------------------
 
 import math as _math
-from multilayer_optical_mcp.model.whatif import inject_failure, FailureReport
+from multilayer_optical_mcp.model.whatif import inject_failure
 
 
 def test_inject_failure_downs_crossing_lightpath():

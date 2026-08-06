@@ -16,7 +16,7 @@ def _empty():
 
 def test_max_snapshots_cap_evicts_oldest():
     store = SnapshotStore(initial=_empty(), max_snapshots=3)
-    s1 = store.create(); s2 = store.create(); s3 = store.create()
+    s1 = store.create(); s2 = store.create(); store.create()
     s4 = store.create()  # evicts s1
     with pytest.raises(KeyError):
         store.get(s1)

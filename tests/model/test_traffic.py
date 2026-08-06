@@ -36,8 +36,8 @@ def _star_model(leaf_len_km: float = 100.0) -> NetworkModel:
         n.add_router(Router(id=f"router_{node}", site=node))
     for leaf in ("A", "B", "C"):
         fid = f"fiber_H_{leaf}"
-        n.add_fiber(Fiber(fid, f"roadm_H", f"roadm_{leaf}", leaf_len_km, "SSMF"))
-        n.add_oms(OMS(f"oms_H_{leaf}", "H", leaf, (f"roadm_H", fid)))
+        n.add_fiber(Fiber(fid, "roadm_H", f"roadm_{leaf}", leaf_len_km, "SSMF"))
+        n.add_oms(OMS(f"oms_H_{leaf}", "H", leaf, ("roadm_H", fid)))
     return n
 
 

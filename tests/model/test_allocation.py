@@ -10,7 +10,7 @@ protected insufficient -> unplaced) against the new AllocationResult shape.
 import pytest
 
 from multilayer_optical_mcp.model.assets import ROADM
-from multilayer_optical_mcp.model.assets import FiberType, Fiber, Amplifier, OMS, SRLG, TransceiverMode
+from multilayer_optical_mcp.model.assets import FiberType, Fiber, Amplifier, OMS, TransceiverMode
 from multilayer_optical_mcp.model.ip_assets import Router
 from multilayer_optical_mcp.model.modes import ModeRegistry
 from multilayer_optical_mcp.model.network import NetworkModel

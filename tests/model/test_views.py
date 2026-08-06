@@ -124,8 +124,6 @@ def test_risk_groups_dict_carries_metadata():
 # ---------------------------------------------------------------------------
 # New tests for Task 7 serializers
 # ---------------------------------------------------------------------------
-from multilayer_optical_mcp.model.ip_assets import Service
-from multilayer_optical_mcp.model.qot import QoTState
 from multilayer_optical_mcp.model import views
 from tests.model.test_ip_routing import _two_link_model
 
@@ -140,7 +138,7 @@ def _model_with_services():
 def test_ip_topology_dict_annotates_capacity_and_load():
     n = _model_with_services()
     d = views.ip_topology_dict(n)
-    links = {l["id"]: l for l in d["ip_links"]}
+    links = {link["id"]: link for link in d["ip_links"]}
     assert links["ipAB"]["lightpath_id"] == "lpAB"
     assert links["ipAB"]["capacity_gbps"] == 200.0
     assert links["ipAB"]["load_gbps"] == 120.0
@@ -152,7 +150,7 @@ def test_ip_topology_dict_capacity_null_when_no_qot():
     # Wipe one lightpath's QoT so capacity is unknown, not a crash.
     n._qot_state.pop("lpAB")
     d = views.ip_topology_dict(n)
-    links = {l["id"]: l for l in d["ip_links"]}
+    links = {link["id"]: link for link in d["ip_links"]}
     assert links["ipAB"]["capacity_gbps"] is None
 
 
