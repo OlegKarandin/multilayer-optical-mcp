@@ -69,7 +69,7 @@ def test_dropped_traffic_violation_construction():
 def test_disjointness_collapse_violation_construction():
     v = DisjointnessCollapseViolation(
         state_index=0, asset_id="svc1", transient=False,
-        basis="risk_group", level="link",
+        basis="risk_group", level="link", level_applied=False,
         shared_assets=["fAB"], shared_groups=["rg1"],
     )
     assert v.type == "disjointness_collapse"

@@ -36,6 +36,12 @@ class RestorationResult:
     service_id: str
     demand_gbps: float
     candidates: Tuple[RestorationCandidate, ...]
+    protection_pending: bool = False        # True: svc had a protection_path before
+                                             # the failure, and every candidate here
+                                             # restores only the working leg -- caller
+                                             # must separately re-protect (phase 2:
+                                             # route_service(protected=True) + reroute_
+                                             # service(which="protection")) if desired.
 
 
 def compute_restoration(
@@ -51,7 +57,13 @@ def compute_restoration(
     is re-sorted here on (shortfall_gbps, cost_vector["scalar"]) rather than
     route_service's plain scalar order, because restoration must still surface a
     FULLY-restoring candidate ahead of a cheaper-but-partial one.
+
+    Deliberately restores the working leg only (protected=False) -- this is
+    phase 1 of a two-phase restoration workflow: get the service back up fast,
+    then separately decide whether to re-protect it. `protection_pending` on
+    the result flags whether that second phase is needed.
     """
+    svc = model.get_service(service_id)
     rs = route_service(model, qot, service_id, protected=False, avoid=avoid)
     candidates = tuple(
         RestorationCandidate(
@@ -67,4 +79,5 @@ def compute_restoration(
     candidates = tuple(sorted(candidates,
                               key=lambda c: (c.shortfall_gbps, c.cost_vector["scalar"])))
     status = _status(bool(candidates), any(c.shortfall_gbps == 0.0 for c in candidates))
-    return RestorationResult(status, service_id, rs.demand_gbps, candidates)
+    return RestorationResult(status, service_id, rs.demand_gbps, candidates,
+                             protection_pending=bool(svc.protection_path))

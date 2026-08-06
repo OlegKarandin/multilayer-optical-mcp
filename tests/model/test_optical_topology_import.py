@@ -56,7 +56,7 @@ def _tiny_graph():
 
 def test_optical_model_from_abstract_graph_matches_optical_half_of_full_build():
     """optical_model_from_abstract_graph must build the exact same optical layer
-    as model_from_abstract_graph (same _populate_optical call), just on a bare
+    as model_from_abstract_graph (same populate_optical call), just on a bare
     OpticalNetworkModel with no routers attached."""
     from multilayer_optical_mcp.model.network import NetworkModel
     from multilayer_optical_mcp.model.optical_network import OpticalNetworkModel

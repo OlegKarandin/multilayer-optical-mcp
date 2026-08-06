@@ -128,6 +128,7 @@ def disjointness_result_dict(res) -> Dict[str, Any]:
         "shared_assets": list(res.shared_assets),
         "shared_groups": list(res.shared_groups),
         "exhaustive": res.exhaustive,
+        "level_applied": res.level_applied,
     }
 
 
@@ -321,7 +322,8 @@ def restoration_result_dict(res) -> Dict[str, Any]:
     return {"status": res.status.value,
             "service_id": res.service_id,
             "demand_gbps": res.demand_gbps,
-            "candidates": [_cand(c) for c in res.candidates]}
+            "candidates": [_cand(c) for c in res.candidates],
+            "protection_pending": res.protection_pending}
 
 
 def objective_result_dict(res) -> Dict[str, Any]:

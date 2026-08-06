@@ -82,7 +82,7 @@ def _mode_infeasible_findings(model: NetworkModel) -> List[_Finding]:
             st = model.get_qot_state(lp.id)
         except LookupError:
             continue
-        if st.margin_db < 0:
+        if not st.mode_feasible:
             cur = model.modes.get(lp.mode_id)
             # Lower-rate modes the current GSNR WOULD satisfy. Non-empty => a
             # downshift recovers the link (capacity falls, but it stays up);
@@ -186,6 +186,7 @@ def _disjointness_findings(model: NetworkModel, basis: str, level: str) -> List[
         if not res.disjoint:
             out.append((ViolationType.DISJOINTNESS_COLLAPSE, svc.id,
                         {"basis": basis, "level": level,
+                         "level_applied": res.level_applied,
                          "shared_assets": list(res.shared_assets),
                          "shared_groups": list(res.shared_groups)}))
     return out
@@ -275,18 +276,26 @@ def _op_target(op) -> Optional[str]:
 
 
 def recompute_if_possible(model: NetworkModel, store: QoTResultStore) -> None:
-    """Recompute QoT for all lightpaths under the model's own loading. No-op when
-    there are no lightpaths (nothing to propagate). Best-effort: an adapter/GNPy
-    exception during recompute must not escape to validate_plan's caller as a raw
-    exception -- it would otherwise surface as a misleading INVALID_PLAN ("the
-    plan is malformed") when the actual failure is a QoT recompute error, not a
-    plan-structure problem. Swallow and leave this state's QoT at its prior
-    value, same best-effort contract commit.py's own callers of this function
-    already follow."""
+    """Resync QoT to the model's own committed loading. No-op when there are no
+    lightpaths (nothing to propagate). `only_missing=True`: only lightpaths the
+    model's own mutators already marked stale (add/remove/set_mode's targeted
+    invalidation, or apply_nf_delta/apply_loss_delta's full clear) get a real
+    GNPy recompute -- everything else already reflects the current committed
+    state, so re-deriving it would be redundant work, not a correctness
+    difference. This is what makes gating a single-op mutation with a
+    validate_plan-equivalent check viable cost-wise: recompute scales with what
+    actually went stale, not with total lightpath count. Best-effort: an
+    adapter/GNPy exception during recompute must not escape to validate_plan's
+    caller as a raw exception -- it would otherwise surface as a misleading
+    INVALID_PLAN ("the plan is malformed") when the actual failure is a QoT
+    recompute error, not a plan-structure problem. Swallow and leave this
+    state's QoT at its prior value, same best-effort contract commit.py's own
+    callers of this function already follow."""
     if model.list_lightpaths():
         try:
             recompute_qot_under_loading(model=model, store=store,
-                                        loading=loading_from_model(model))
+                                        loading=loading_from_model(model),
+                                        only_missing=True)
         except Exception:
             pass
 

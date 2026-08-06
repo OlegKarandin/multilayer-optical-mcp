@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import json
 import tempfile
-from collections import namedtuple
+from collections import namedtuple, OrderedDict
 from pathlib import Path
-from typing import Any, Dict, List
-from weakref import WeakKeyDictionary
+from typing import Any, Dict, List, Optional
 
 from ..model.optical_network import OpticalNetworkModel
 from .bands import AMP_BAND, SI_BAND, TRANSCEIVER_BAND
@@ -65,14 +64,48 @@ def _physical_fingerprint(model: OpticalNetworkModel) -> tuple:
     return (fiber_types, amps, roadms, transceivers, fibers, oms)
 
 
-# Module-level, single-threaded cache of the synthesized GNPy network per model.
-# Keyed by the OpticalNetworkModel instance (weak, so a dropped branch is auto-evicted);
-# the entry is reused only while the model's physical fingerprint is unchanged.
-# No GNPy object is ever stored on the OpticalNetworkModel itself — the adapter remains
-# the only component that holds GNPy state. Not guarded for concurrent access;
-# the server is single-threaded.
-_CacheEntry = namedtuple("_CacheEntry", "fingerprint equipment network design_gains")
-_NETWORK_CACHE: "WeakKeyDictionary[OpticalNetworkModel, _CacheEntry]" = WeakKeyDictionary()
+# Module-level, single-threaded cache of the synthesized GNPy network, keyed by
+# the model's PHYSICAL FINGERPRINT (a hashable tuple), not by OpticalNetworkModel object
+# identity. validate_plan/commit_plan/branch exploration all clone the model
+# before mutating -- a plan that only touches lightpaths/services/QoT (the
+# common case: provision/teardown/set_modulation_format/reroute) leaves the
+# clone's physical fingerprint byte-identical to its parent's, so keying by
+# fingerprint lets the clone reuse the parent's already-built network instead of
+# re-synthesizing from scratch (rebuilding is the dominant cost of a real GNPy
+# call -- see docs/... investigation into validate_plan's per-call cost).
+# Object-identity keying (the original design) missed exactly this case: every
+# clone was a guaranteed cache miss regardless of fingerprint match. Bounded
+# LRU (not weak-keyed) since a fingerprint, unlike a model object, isn't
+# reclaimed by a dropped clone going out of scope. Not guarded for concurrent
+# access; the server is single-threaded.
+_CacheEntry = namedtuple("_CacheEntry", "equipment network design_gains")
+_NETWORK_CACHE_MAX = 32
+_NETWORK_CACHE: "OrderedDict[tuple, _CacheEntry]" = OrderedDict()
+
+
+def _network_cache_get(fingerprint: tuple) -> Optional[_CacheEntry]:
+    entry = _NETWORK_CACHE.get(fingerprint)
+    if entry is not None:
+        _NETWORK_CACHE.move_to_end(fingerprint)   # LRU
+    return entry
+
+
+def _network_cache_put(fingerprint: tuple, entry: _CacheEntry) -> None:
+    _NETWORK_CACHE[fingerprint] = entry
+    _NETWORK_CACHE.move_to_end(fingerprint)
+    while len(_NETWORK_CACHE) > _NETWORK_CACHE_MAX:
+        _NETWORK_CACHE.popitem(last=False)
+
+
+def clear_network_cache() -> None:
+    """Reset the module-level GNPy-network cache. Fingerprint-keying (not
+    object-identity) means two unrelated tests/callers whose models happen to
+    fingerprint identically (e.g. two calls to the same toy-topology builder)
+    now share a cache entry across that boundary -- call this when a test's
+    own point is "observe a definitely-fresh synthesis" (counting temp dirs,
+    counting synthesis calls), since production code has no such requirement
+    and must never need this for correctness."""
+    _NETWORK_CACHE.clear()
 
 
 def _snapshot_design_gains(network) -> Dict[str, float]:
@@ -266,12 +299,17 @@ def model_to_gnpy_topology(model: OpticalNetworkModel) -> Dict[str, Any]:
 def build_gnpy_network(model: OpticalNetworkModel):
     """Return (equipment, network) built from the model, ready to propagate.
 
-    Cached per model instance and keyed by the model's physical fingerprint: a
-    repeated call with an unchanged model returns the same objects after resetting
-    every EDFA to its design-time operating point (undoing the propagation
-    effective_gain ratchet), so a bulk recompute over K lightpaths synthesizes the
-    network exactly once. Any physical mutation changes the fingerprint and triggers
-    a fresh build. Single-threaded; not guarded for concurrent access.
+    Cached by the model's physical fingerprint (fiber/amp/ROADM/transceiver/OMS
+    content — NOT lightpaths, services, or QoT): any model whose physical layer
+    fingerprints identically reuses the same built objects, whether it's the
+    same object called repeatedly (a bulk recompute over K lightpaths synthesizes
+    the network exactly once) or a DIFFERENT model that only diverges in
+    lightpaths/services/QoT -- e.g. `validate_plan`/`commit_plan`'s clone-then-
+    mutate-lightpaths pattern, which never touches the physical layer for the
+    common single-op case. Reuse resets every EDFA to its design-time operating
+    point first (undoing the propagation effective_gain ratchet). Any physical
+    mutation changes the fingerprint and triggers a fresh build. Single-threaded;
+    not guarded for concurrent access.
 
     The equipment config files (adv_nf_*.json, eqpt.json) are consumed at
     load_equipment time and never reopened, so the temp directory is deleted
@@ -281,8 +319,8 @@ def build_gnpy_network(model: OpticalNetworkModel):
     from gnpy.tools.json_io import network_from_json
 
     fingerprint = _physical_fingerprint(model)
-    entry = _NETWORK_CACHE.get(model)
-    if entry is not None and entry.fingerprint == fingerprint:
+    entry = _network_cache_get(fingerprint)
+    if entry is not None:
         _restore_design_gains(entry.network, entry.design_gains)
         return entry.equipment, entry.network
 
@@ -294,9 +332,9 @@ def build_gnpy_network(model: OpticalNetworkModel):
     network = network_from_json(model_to_gnpy_topology(model), equipment)
     gnpy_design_network(network, equipment)
 
-    _NETWORK_CACHE[model] = _CacheEntry(
-        fingerprint=fingerprint, equipment=equipment, network=network,
-        design_gains=_snapshot_design_gains(network))
+    entry = _CacheEntry(equipment=equipment, network=network,
+                        design_gains=_snapshot_design_gains(network))
+    _network_cache_put(fingerprint, entry)
     return equipment, network
 
 

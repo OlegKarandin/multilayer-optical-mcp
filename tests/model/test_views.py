@@ -204,7 +204,7 @@ def test_validation_report_dict_flattens_detail_for_every_violation_type():
             "reason": "link_down", "on_link": "ipAB", "demand_gbps": 50.0,
         }), DroppedTrafficViolation),
         (Violation(ViolationType.DISJOINTNESS_COLLAPSE, 0, "svc1", False, {
-            "basis": "risk_group", "level": "link",
+            "basis": "risk_group", "level": "link", "level_applied": False,
             "shared_assets": ["fAB"], "shared_groups": ["rg1"],
         }), DisjointnessCollapseViolation),
         (Violation(ViolationType.PROTECTION_NOT_VIABLE, 0, "svc1", False, {

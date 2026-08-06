@@ -98,6 +98,7 @@ class DisjointnessCollapseViolation(_ViolationBase):
     type: Literal["disjointness_collapse"] = "disjointness_collapse"
     basis: str
     level: str
+    level_applied: bool
     shared_assets: list[str]
     shared_groups: list[str]
 

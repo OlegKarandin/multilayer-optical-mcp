@@ -169,14 +169,14 @@ def test_materialized_baseline_has_no_drops(built):
 
 # ---------------------------------------------------- pair_density forwarding
 
-def _spy_generate_demands(monkeypatch, recorder):
-    """Replace scenario.generate_demands with a spy that records the
-    `pair_density` it was called with and returns one trivial demand, so the
+def _spy_generate_demands(monkeypatch, recorder, field="pair_density"):
+    """Replace scenario.generate_demands with a spy that records the named
+    kwarg it was called with and returns one trivial demand, so the
     convergence driver stays cheap (a real gravity build is ~minutes — see
     test_converges_within_caps). Proves forwarding without exercising the packer
     at scale."""
-    def spy(model, *, seed, scale, pair_density=None, **kw):
-        recorder.append(pair_density)
+    def spy(model, *, seed, scale, pair_density=None, protection_constraints=None, **kw):
+        recorder.append(pair_density if field == "pair_density" else protection_constraints)
         return [{"id": "d1", "src": "A", "dst": "Z", "demand_gbps": 100.0}]
     monkeypatch.setattr(scenario, "generate_demands", spy)
 
@@ -204,6 +204,75 @@ def test_pair_density_defaults_to_none(monkeypatch):
         target_mean_util=0.5, max_util_cap=0.95, settle=lambda w: None)
     assert seen
     assert all(pd is None for pd in seen)
+
+
+# ------------------------------------------------ protection_constraints forwarding
+
+def test_protection_constraints_forwarded_to_generate_demands(monkeypatch):
+    """The explicit `protection_constraints` dict reaches `generate_demands` on
+    every convergence sample. Before this, `build_operating_network` had no such
+    parameter at all, so a synthesized operating network could never request
+    srlg/risk_group-basis protection -- see traffic.generate_demands's own
+    `protection_constraints` docstring for why that matters."""
+    seen: list = []
+    _spy_generate_demands(monkeypatch, seen, field="protection_constraints")
+    constraints = {"basis": "srlg", "level": "srlg"}
+    build_operating_network(
+        _two_routes_with_routers(), seed=0, qot=_hi_qot(),
+        target_mean_util=0.5, max_util_cap=0.95,
+        protection_constraints=constraints, settle=lambda w: None)
+    assert seen
+    assert all(c == constraints for c in seen)
+
+
+def test_protection_constraints_defaults_to_none(monkeypatch):
+    """Omitting the kwarg forwards `None` -- prior behavior (no constraints,
+    protection falls back to basis=physical/level=link) is preserved."""
+    seen: list = []
+    _spy_generate_demands(monkeypatch, seen, field="protection_constraints")
+    build_operating_network(
+        _two_routes_with_routers(), seed=0, qot=_hi_qot(),
+        target_mean_util=0.5, max_util_cap=0.95, settle=lambda w: None)
+    assert seen
+    assert all(c is None for c in seen)
+
+
+def test_protection_constraints_produce_srlg_disjoint_protected_service():
+    """End-to-end (real packer, no spy): with an SRLG that the naive
+    physical/link-disjoint pair would share, requesting basis=srlg protection
+    at build time must route the packer around it -- the exact design-time
+    precondition CLAUDE.md's scenario 1 depends on (SRLG-disjoint now,
+    risk-group-correlated later)."""
+    from multilayer_optical_mcp.model.assets import SRLG
+    from multilayer_optical_mcp.model.solvers import check_disjointness
+
+    m = _triangle()
+    # Every pair of the triangle's three OMS shares node 0's ROADM by
+    # construction; tag one non-endpoint span so a naive protection choice
+    # would collide on it while an SRLG-aware one must route around it.
+    fibers = sorted(f for f in m._fibers if f.startswith("fiber_1_2"))
+    assert fibers, "expected a 1<->2 fiber in the triangle topology"
+    m.add_srlg(SRLG(id="srlg-onetwo", asset_ids=tuple(fibers)))
+
+    res = build_operating_network(
+        m, seed=0, qot=ConstQot(), target_mean_util=0.5, max_util_cap=0.95,
+        protected_fraction=1.0,
+        protection_constraints={"basis": "srlg", "level": "srlg"},
+        settle=lambda w: None)
+
+    protected = [s for s in res.model.list_services() if s.protection_path]
+    assert protected, "expected at least one protected service to check"
+    for svc in protected:
+        a = tuple(res.model.get_lightpath(res.model.get_ip_link_lightpath_id(ip)).oms_sequence
+                  for ip in svc.working_path)
+        b = tuple(res.model.get_lightpath(res.model.get_ip_link_lightpath_id(ip)).oms_sequence
+                  for ip in svc.protection_path)
+        a_flat = tuple(oms for seq in a for oms in seq)
+        b_flat = tuple(oms for seq in b for oms in seq)
+        result = check_disjointness(res.model, a_flat, b_flat, "srlg", "srlg")
+        assert result.disjoint, (
+            f"service {svc.id} was provisioned sharing SRLG srlg-onetwo despite "
+            f"basis=srlg protection_constraints: shared={result.shared_groups}")
 
 
 # ------------------------------------------------ real-adapter end-to-end (opt-in)

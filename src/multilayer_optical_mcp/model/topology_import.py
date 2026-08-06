@@ -2,7 +2,7 @@
 """IP-layer half of Phase 6a: NetworkModel <- an abstract node/edge graph.
 
 model_from_abstract_graph builds the optical layer via
-optical_topology_import._populate_optical (fiber types, per node roadm_/trx_/
+optical_topology_import.populate_optical (fiber types, per node roadm_/trx_/
 router_<id>, per edge two directed OMS) onto a NetworkModel, then adds one
 router_<id> per node. The pure-optical half (no IP-layer imports, ever) lives
 in optical_topology_import.py; this file is the IP-coupled side, so it imports
@@ -26,7 +26,7 @@ from typing import Any, Dict
 from .ip_assets import Router
 from .modes import ModeRegistry
 from .network import NetworkModel
-from .optical_topology_import import SSMF_LOSS_COEF_DB_PER_KM, _populate_optical
+from .optical_topology_import import SSMF_LOSS_COEF_DB_PER_KM, populate_optical
 
 
 def model_from_abstract_graph(
@@ -38,7 +38,7 @@ def model_from_abstract_graph(
     """Build a NetworkModel (optical layer plus one router per node) from an
     abstract node/edge graph."""
     n = NetworkModel(modes=modes)
-    _populate_optical(n, graph, fiber_loss_coef_db_per_km)
+    populate_optical(n, graph, fiber_loss_coef_db_per_km)
     for node in graph["nodes"]:
         n.add_router(Router(id=f"router_{node['id']}", site=str(node["id"])))
     return n

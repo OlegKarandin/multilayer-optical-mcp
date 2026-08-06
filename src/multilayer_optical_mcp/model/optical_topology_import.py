@@ -3,10 +3,10 @@
 graph. Zero IP-layer imports, module scope or otherwise — this is the file a
 downstream, IP-free consumer of the optical model depends on. The IP-layer
 build (routers on top) lives in topology_import.py, which imports
-_populate_optical from here; the dependency runs one way, same direction as
+populate_optical from here; the dependency runs one way, same direction as
 NetworkModel(OpticalNetworkModel).
 
-_populate_optical(n, graph, loss_coef) builds the optical layer (fiber types,
+populate_optical(n, graph, loss_coef) builds the optical layer (fiber types,
 per node roadm_/trx_<id>, per edge _edge_spans -> split_link_into_spans when
 span_lengths_km is absent/inconsistent, then _add_directed_oms TWICE for both
 directions, each emitting a booster + per-span (fiber, amp) + an OMS whose
@@ -102,7 +102,7 @@ def _edge_spans(edge: Dict[str, Any]) -> List[float]:
     return resolved
 
 
-def _populate_optical(
+def populate_optical(
     n: OpticalNetworkModel,
     graph: Dict[str, Any],
     fiber_loss_coef_db_per_km: float,
@@ -160,7 +160,7 @@ def optical_model_from_abstract_graph(
     graph. Importing this module pulls in zero IP-layer modules — see the
     isolation test in tests/model/test_optical_topology_import.py."""
     n = OpticalNetworkModel(modes=modes)
-    _populate_optical(n, graph, fiber_loss_coef_db_per_km)
+    populate_optical(n, graph, fiber_loss_coef_db_per_km)
     return n
 
 

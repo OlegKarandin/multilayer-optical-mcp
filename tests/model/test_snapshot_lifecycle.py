@@ -38,3 +38,40 @@ def test_default_no_cap_no_ttl():
     ids = [store.create() for _ in range(10)]
     for sid in ids:
         assert store.get(sid) is not None
+
+
+def test_active_branch_survives_cap_eviction():
+    """A long exploratory session (many create()/branch() calls elsewhere on
+    the same store) must not evict the branch you are actively working on --
+    it should be exempt from cap eviction until you branch/restore away from
+    it, even though it's the oldest entry by insertion order."""
+    store = SnapshotStore(initial=_empty(), max_snapshots=3)
+    root = store.create()
+    bid = store.branch(root)          # bid is now the active branch
+    for _ in range(10):               # far more than max_snapshots elsewhere
+        store.create()
+    assert store.get(bid) is not None
+    store.restore(bid)                # must not raise KeyError
+
+
+def test_active_branch_survives_ttl_reap():
+    store = SnapshotStore(initial=_empty(), ttl_seconds=0.05)
+    root = store.create()
+    bid = store.branch(root)
+    time.sleep(0.1)
+    store.reap()
+    assert store.get(bid) is not None
+
+
+def test_branching_away_unprotects_previous_branch():
+    """Once you branch/restore to a new id, the OLD current id loses its
+    eviction immunity -- protection tracks the single active branch, not
+    every branch ever created."""
+    store = SnapshotStore(initial=_empty(), max_snapshots=3)
+    root = store.create()
+    old_bid = store.branch(root)
+    store.branch(old_bid)              # moves current off old_bid
+    for _ in range(10):
+        store.create()
+    with pytest.raises(KeyError):
+        store.get(old_bid)

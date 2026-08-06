@@ -89,6 +89,7 @@ def build_operating_network(
     node_mass: Optional[Dict[str, float]] = None,
     mass_jitter: float = 0.15,
     pair_density: Optional[float] = None,
+    protection_constraints: Optional[dict] = None,
     spare_inventory: Optional[Dict[str, int]] = None,
     max_iters: int = 24,
     store=None,
@@ -101,7 +102,19 @@ def build_operating_network(
 
     `pair_density` is forwarded to `generate_demands`: `None` (default) keeps the
     full-matrix demand pattern; a value in (0, 1] sparsifies pair selection (see
-    that function's docstring for the exact weighted-Bernoulli contract)."""
+    that function's docstring for the exact weighted-Bernoulli contract).
+
+    `protection_constraints` is forwarded to `generate_demands` and attached to
+    every PROTECTED demand this builds (`{"basis": ..., "level": ..., "best_effort":
+    ...}`, the same shape `solve_allocation`'s per-demand `constraints` reads via
+    `allocation._demand_constraints`). `None` (default) preserves prior behavior:
+    protected demands carry no `constraints`, so the packer's disjoint-pair search
+    falls back to `basis="physical", level="link"`. Pass e.g.
+    `{"basis": "srlg", "level": "srlg"}` to provision the operating network's
+    protected services SRLG-disjoint at build time -- the design-time-disjoint
+    precondition CLAUDE.md's scenario 1 (SRLG-disjoint now, risk-group-correlated
+    later) depends on. Static SRLGs must already exist on `model` for this to have
+    any effect; it is a no-op if none are defined."""
     sites = sorted({r.site for r in model.list_routers()})
     if len(sites) < 2:
         return ScenarioResult(model.clone(), [], ScenarioReport(
@@ -121,7 +134,8 @@ def build_operating_network(
         demands = generate_demands(
             model, seed=seed, scale=scale, alpha=alpha, unit_gbps=unit_gbps,
             protected_fraction=protected_fraction, node_mass=node_mass,
-            mass_jitter=mass_jitter, pair_density=pair_density)
+            mass_jitter=mass_jitter, pair_density=pair_density,
+            protection_constraints=protection_constraints)
         if not demands:
             return _Sample(scale, [], None, model.clone(), 0.0, 0.0)
         result, work = solve_allocation_model(

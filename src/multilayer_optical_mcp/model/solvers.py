@@ -36,7 +36,9 @@ from typing import Iterator, List, Optional, Sequence, Tuple
 import networkx as nx
 
 from .network import NetworkModel
-from .exposure import path_basis_keys, split_shared_keys, oms_seq_asset_set
+from .exposure import (
+    path_basis_keys, split_shared_keys, oms_seq_asset_set, level_is_significant,
+)
 
 
 class SolverStatus(str, Enum):
@@ -76,6 +78,12 @@ class DisjointnessResult:
     # already-given paths), so its results are trivially always exhaustive
     # and it never needs to set this field.
     exhaustive: bool = True
+    # False iff `basis` never consults `level` at all (srlg/risk_group always
+    # use the coarsest whole-group reading regardless of level's value) -- see
+    # exposure.level_is_significant. Lets a caller that reports `level` back
+    # (e.g. a violation detail) avoid implying a narrower check ran than
+    # actually did.
+    level_applied: bool = True
 
 
 # Cap on *distinct node paths* enumerated for disjoint-pair search — NOT raw
@@ -486,6 +494,7 @@ def check_disjointness(
         path_b=OmsPath(_node_sequence(model, path_b), tuple(path_b)),
         shared_assets=shared_assets,
         shared_groups=shared_groups,
+        level_applied=level_is_significant(basis),
     )
 
 
@@ -544,7 +553,7 @@ def compute_disjoint_paths(
                 return DisjointnessResult(
                     status=SolverStatus.SOLUTION, disjoint=True,
                     basis=basis, level=level, path_a=pa, path_b=pb,
-                    exhaustive=exhaustive,
+                    exhaustive=exhaustive, level_applied=level_is_significant(basis),
                 )
             if best is None or len(shared) < best_overlap:
                 best = (pa, pb, shared)
@@ -557,9 +566,10 @@ def compute_disjoint_paths(
             status=SolverStatus.PARTIAL, disjoint=False,
             basis=basis, level=level, path_a=pa, path_b=pb,
             shared_assets=shared_assets, shared_groups=shared_groups,
-            exhaustive=exhaustive,
+            exhaustive=exhaustive, level_applied=level_is_significant(basis),
         )
     return DisjointnessResult(
         status=SolverStatus.NO_SOLUTION, disjoint=False,
         basis=basis, level=level, exhaustive=exhaustive,
+        level_applied=level_is_significant(basis),
     )

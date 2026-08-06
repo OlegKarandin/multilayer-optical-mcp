@@ -221,28 +221,23 @@ miss; it is first-class, not a side effect of the compute tool.
 Group tools by capability. Names are stable contract; argument schemas are typed.
 
 ### State (read-only)
-- `get_topology(layer)` — IP, optical, or both.
-- `get_lightpaths()` — active lightpaths with path, mode, loading.
-- `get_services()` — services with working/protection paths and grooming.
-- `get_traffic_matrix()` — IP demand matrix.
-- `list_srlgs()` / `get_srlg_members(id)` — static, design-time groups.
+`get_topology(layer)`, `get_lightpaths()`, `get_services()`, `get_traffic_matrix()`,
+`list_srlgs()` / `get_srlg_members(id)` — plain reads; see `server.py` docstrings for
+arg/return shape.
 
 ### IP-over-optical (read + reverse lookups)
-- `get_ip_topology()` — routers and links; each link annotated with its underlying
-  lightpath id, capacity (derived from mode), and current load.
-- `get_grooming_map()` — IP demand → lightpath assignments.
+`get_ip_topology()`, `get_grooming_map()` — plain reads; see `server.py` docstrings.
 - `get_affected_services(lightpath_or_asset)` — reverse lookup: which demands/
   services ride a given lightpath, or any lightpath crossing a given asset. The
   workhorse for every restoration scenario.
 
 ### State management (snapshots)
-- `snapshot_create()` → id
+`snapshot_create()`, `snapshot_restore(id)`, `snapshot_diff(a, b)` — plain reads/
+resets; see `server.py` docstrings.
 - `snapshot_branch(id)` → id — copy-on-write branch for exploration. The
   returned id names the branch POINT: a frozen snapshot of the parent state
   at that instant, not a live handle — call `snapshot_create()` again after
   mutating the branch to get an id for its post-mutation state.
-- `snapshot_restore(id)` — roll back to a known-good state.
-- `snapshot_diff(a, b)` — structured delta between two states.
 
 ### Physical layer (GNPy adapter)
 - `compute_qot(path, direction, mode, loading_state)` → `{gsnr, osnr, margin,
@@ -252,19 +247,19 @@ Group tools by capability. Names are stable contract; argument schemas are typed
   loading state (channels added/dropped change NLI). Accepts a constructed set,
   including the make-before-break overlap (old ∪ new), so transient states are
   evaluable without provisioning. The load-bearing call — see Risks.
-- `check_spectrum_feasibility(path, slot_width, center_freq)` → feasibility +
-  clash details.
-- `get_transceiver_modes()` → table of `(mode → required GSNR, line rate)`.
+`check_spectrum_feasibility(path, slot_width, center_freq)`, `get_transceiver_modes()`
+— plain reads; see `server.py` docstrings.
 
 ### Risk groups (the differentiating primitive)
 - `define_risk_group(asset_list, metadata)` → rg_id — runtime partition, beyond
   static SRLGs. Takes an **asset list**, never an event or geometry.
-- `list_risk_groups()` / `get_risk_group(id)`
+`list_risk_groups()` / `get_risk_group(id)` — plain reads; see `server.py` docstrings.
 - `get_exposure(service, risk_group)` → whether working **and** protection both
   intersect the group (the design-time-disjoint-but-now-correlated case).
 
 ### Routing & planning (deterministic solvers)
-- `compute_paths(src, dst, k, constraints)` — k-shortest under constraints.
+`compute_paths(src, dst, k, constraints)` — k-shortest under constraints; plain read,
+see `server.py` docstrings.
 - `compute_disjoint_paths(src, dst, basis, level, best_effort)` — find a disjoint
   pair. `basis ∈ {physical, srlg, risk_group, union}` (with the specific groups when
   not physical); `level ∈ {node, link, srlg, risk_group}`; `best_effort=true`
@@ -275,7 +270,8 @@ Group tools by capability. Names are stable contract; argument schemas are typed
   whether two *existing* paths are disjoint w.r.t. a given basis. Returns the shared
   assets/groups when they are not. This is the scenario-1 catch — re-checking a
   deployed working/protection pair against a freshly injected risk group.
-- `solve_rsa(demands, objective, constraints)` — routing + spectrum assignment.
+`solve_rsa(demands, objective, constraints)` — routing + spectrum assignment; plain
+read, see `server.py` docstrings.
 - `solve_allocation(demands, spare_inventory, weights)` — **heuristic**
   allocation for the joint case where many services contend for scarce transponders/
   spectrum. Operates over a multi-layer graph (IP demands routed over a layered

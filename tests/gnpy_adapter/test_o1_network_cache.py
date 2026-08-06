@@ -49,6 +49,7 @@ def test_build_leaves_no_temp_dirs(monkeypatch):
         return p
 
     monkeypatch.setattr(tempfile, "mkdtemp", spy_mkdtemp)
+    S.clear_network_cache()  # guarantee a fresh synthesis: this test counts them
     model = _toy_model()
     for _ in range(3):
         S.build_gnpy_network(model)
@@ -92,6 +93,41 @@ def test_physical_mutation_rebuilds():
     _eq1, net1 = S.build_gnpy_network(model)
     model.apply_nf_delta("amp_ila", 2.0)
     _eq2, net2 = S.build_gnpy_network(model)
+    assert net2 is not net1
+
+
+def test_clone_with_unchanged_physical_layer_reuses_cached_network():
+    """The actual fix: validate_plan/commit_plan/branch exploration always
+    clone() before mutating lightpaths/services -- a DIFFERENT NetworkModel
+    OBJECT, but (for the common case: provision/teardown/set_modulation_format/
+    reroute, none of which touch the physical registries) an IDENTICAL physical
+    fingerprint. Keying the cache by fingerprint rather than object identity
+    means the clone must reuse its parent's already-built network instead of
+    resynthesizing from scratch -- this is what makes gating a single-op
+    mutation with a validate_plan-equivalent check cost-viable."""
+    model = _toy_model()
+    eq1, net1 = S.build_gnpy_network(model)
+
+    clone = model.clone()
+    from multilayer_optical_mcp.model.assets import Lightpath
+    clone.add_lightpath(Lightpath(id="lp0", oms_sequence=("oms_syn",),
+                                  mode_id=MODE.id, center_freq_hz=193.4e12))
+    assert S._physical_fingerprint(clone) == S._physical_fingerprint(model)
+
+    eq2, net2 = S.build_gnpy_network(clone)
+    assert eq2 is eq1
+    assert net2 is net1
+
+
+def test_clone_with_changed_physical_layer_does_not_reuse_cached_network():
+    model = _toy_model()
+    _eq1, net1 = S.build_gnpy_network(model)
+
+    clone = model.clone()
+    clone.apply_nf_delta("amp_ila", 2.0)
+    assert S._physical_fingerprint(clone) != S._physical_fingerprint(model)
+
+    _eq2, net2 = S.build_gnpy_network(clone)
     assert net2 is not net1
 
 
@@ -167,6 +203,7 @@ def test_bulk_recompute_synthesizes_once(monkeypatch):
                         lambda *a, **k: created.append(Path(real_mkdtemp(*a, **k)))
                         or str(created[-1]))
 
+    S.clear_network_cache()  # guarantee a fresh synthesis: this test counts them
     model = _toy_model_with_lightpaths(4)
     store = QoTResultStore()
     loading = LoadingState(channels=tuple(

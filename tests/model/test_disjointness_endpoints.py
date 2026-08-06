@@ -124,3 +124,24 @@ def test_risk_group_over_only_endpoint_roadm_does_not_collapse():
                              basis="risk_group", level="risk_group")
     assert res.disjoint is True
     assert res.shared_groups == ()
+
+
+def test_level_applied_false_for_srlg_and_risk_group():
+    """`level` never affects the srlg/risk_group result (see path_basis_keys'
+    docstring) -- `level_applied` must say so honestly rather than implying a
+    level-specific check ran, whatever `level` value was passed."""
+    m = _importer_two_route_service()
+    for basis in ("srlg", "risk_group"):
+        for level in ("node", "link", "srlg", "risk_group"):
+            res = check_disjointness(m, ("oms_A_B",), ("oms_A_C", "oms_C_B"),
+                                     basis=basis, level=level)
+            assert res.level_applied is False, (basis, level)
+
+
+def test_level_applied_true_for_physical_and_union():
+    m = _importer_two_route_service()
+    for basis in ("physical", "union"):
+        for level in ("node", "link"):
+            res = check_disjointness(m, ("oms_A_B",), ("oms_A_C", "oms_C_B"),
+                                     basis=basis, level=level)
+            assert res.level_applied is True, (basis, level)

@@ -2,7 +2,7 @@ from __future__ import annotations
 import time
 import uuid
 from collections import OrderedDict
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 from .network import NetworkModel
 
 
@@ -18,13 +18,31 @@ class SnapshotStore:
         self._created_at: Dict[str, float] = {}
         self._max = max_snapshots
         self._ttl = ttl_seconds
+        # The id of the snapshot `_current` was branched/restored from -- the
+        # one id that must survive cap/TTL eviction. Without this, a long
+        # exploratory session (many create/branch/put calls elsewhere on the
+        # same store) can silently evict your OWN active branch's stored
+        # point, making snapshot_restore/get/diff on it fail even though you
+        # never stopped working on it. `create()` doesn't touch this: it
+        # doesn't change what's current, just records a copy of it.
+        self._current_id: Optional[str] = None
 
     def _store(self, sid: str, model: NetworkModel) -> None:
         self._snapshots[sid] = model
         self._created_at[sid] = time.monotonic()
-        if self._max is not None and len(self._snapshots) > self._max:
-            oldest, _ = self._snapshots.popitem(last=False)
-            self._created_at.pop(oldest, None)
+        while self._max is not None and len(self._snapshots) > self._max:
+            if not self._evict_oldest_protecting_current():
+                break
+
+    def _evict_oldest_protecting_current(self) -> bool:
+        """Pop the oldest snapshot that is NOT `_current_id`. Returns False if
+        every remaining entry is the protected current id (nothing to evict)."""
+        for sid in self._snapshots:               # OrderedDict: insertion order
+            if sid != self._current_id:
+                self._snapshots.pop(sid)
+                self._created_at.pop(sid, None)
+                return True
+        return False
 
     def current(self) -> NetworkModel:
         return self._current
@@ -46,6 +64,7 @@ class SnapshotStore:
         # object -- mutating current() after branch() would also silently
         # mutate the branch's own "point in time" snapshot, making
         # snapshot_restore(bid) a no-op instead of a real rollback.
+        self._current_id = bid    # protect the new branch point BEFORE storing
         self._store(bid, new.clone())
         self._current = new
         return bid
@@ -58,12 +77,14 @@ class SnapshotStore:
 
     def restore(self, sid: str) -> None:
         self._current = self._snapshots[sid].clone()
+        self._current_id = sid
 
     def reap(self) -> Tuple[str, ...]:
         if self._ttl is None:
             return ()
         now = time.monotonic()
-        expired = [sid for sid, t in self._created_at.items() if now - t > self._ttl]
+        expired = [sid for sid, t in self._created_at.items()
+                  if sid != self._current_id and now - t > self._ttl]
         for sid in expired:
             self._snapshots.pop(sid, None)
             self._created_at.pop(sid, None)

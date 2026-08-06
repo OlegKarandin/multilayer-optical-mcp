@@ -109,6 +109,17 @@ _SRLG = "srlg:"
 _RG = "rg:"
 
 
+def level_is_significant(basis: str) -> bool:
+    """True iff `level` actually affects path_basis_keys' output for `basis`.
+    `physical` and `union` both include a physical component that branches on
+    `level` (see add_physical below); `srlg`/`risk_group` never consult it --
+    they always use the coarsest/strictest whole-group-membership reading
+    regardless of `level`'s value (see path_basis_keys' docstring). Callers
+    that report `level` back to a caller (e.g. a violation detail) should use
+    this to avoid implying a narrower check ran than actually did."""
+    return basis in ("physical", "union")
+
+
 def path_basis_keys(
     model: NetworkModel,
     oms_sequence: Tuple[str, ...],

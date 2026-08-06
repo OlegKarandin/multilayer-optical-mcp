@@ -211,6 +211,6 @@ class NetworkModel(OpticalNetworkModel):
         state = self._qot_state.get(lp.id)
         if state is None:
             raise LookupError(f"no QoT state recorded for lightpath {lp.id!r}")
-        if state.margin_db < 0:
+        if not state.mode_feasible:
             return 0.0
         return self.modes.get(lp.mode_id).bitrate_gbps

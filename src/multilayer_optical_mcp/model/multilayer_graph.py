@@ -132,7 +132,7 @@ def _residual_gbps(model: NetworkModel, lp, load: Dict[str, float]) -> float:
             state = model.get_qot_state(lp.id)
         except LookupError:
             return 0.0
-        return 0.0 if state.margin_db < 0 else model.modes.get(lp.mode_id).bitrate_gbps
+        return model.modes.get(lp.mode_id).bitrate_gbps if state.mode_feasible else 0.0
     residual = float("inf")
     for ip_id in ip_ids:
         try:

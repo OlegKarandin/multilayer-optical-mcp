@@ -939,9 +939,23 @@ def unattributed_channel_freqs_hz(model: OpticalNetworkModel, loading: LoadingSt
 
 def recompute_qot_under_loading(
     *, model: OpticalNetworkModel, store: QoTResultStore, loading: LoadingState,
-    cache: Optional[QoTCache] = None,
+    cache: Optional[QoTCache] = None, only_missing: bool = False,
 ) -> dict[str, Tuple[QoTState, str]]:
     """Compute gated QoT for every lightpath in model under *loading*.
+
+    `only_missing=True` skips the real GNPy propagation (the expensive part —
+    everything else in this function, including the failed-asset sentinel
+    branch, is cheap bit arithmetic) for any lightpath that already has a
+    stored QoTState. This is ONLY safe when *loading* is `loading_from_model
+    (model)` -- i.e. the caller wants "resync whatever the model's own
+    invalidation (add_lightpath/remove_lightpath's `_invalidate_qot_sharing_
+    oms`, apply_nf_delta/apply_loss_delta's full clear) has marked stale,"
+    not "recompute everything fresh under a hypothetical/constructed loading
+    that may not match what a present QoTState was computed under." A present
+    entry is trusted verbatim; it is never revalidated against *loading*.
+    Default False preserves the original always-recompute-everything contract
+    for what-if/hypothetical-loading callers, where a present entry proves
+    nothing about validity under a NEW constructed loading.
 
     *loading* is honored verbatim (CLAUDE.md's adapter contract: a loading state
     is a first-class input, not "the current network") — including channels that
@@ -1024,6 +1038,19 @@ def recompute_qot_under_loading(
                 model.set_qot_state(lp.id, sentinel)
                 results[lp.id] = (sentinel, rid)
                 continue
+        if only_missing:
+            # The failed-crossing check above already ran unconditionally for
+            # THIS lightpath (mark_failed/clear_failed never invalidate
+            # _qot_state -- S8-1's sentinel re-derivation is what keeps a
+            # newly-failed crossing correct, and it must not be skipped here).
+            # Past that point, an already-present entry was left alone by
+            # every mutator's own invalidation (or never touched by one), so
+            # it is still valid under the model's current committed state.
+            try:
+                model.get_qot_state(lp.id)
+                continue
+            except LookupError:
+                pass
         probe_slot = grid.slot_of(lp.center_freq_hz)
         # Committed channels on lp's own OMS (unchanged, fiber-scoped) OR'd with
         # lit-but-uncommitted slots (additive, unscoped — see docstring).
