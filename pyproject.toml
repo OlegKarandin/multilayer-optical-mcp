@@ -25,7 +25,7 @@ dependencies = [
 server = ["mcp[cli]>=2.0"]
 # dev pulls in server too: the test suite imports server.py (tests/test_server_*.py,
 # tests/e2e/test_flood_scenario.py), which needs mcp.
-dev = ["multilayer-optical-mcp[server]", "pytest>=8", "pytest-cov>=5", "ruff>=0.5"]
+dev = ["multilayer-optical-mcp[server]", "pytest>=8", "pytest-cov>=5", "ruff==0.15.15"]
 
 [project.scripts]
 multilayer-optical-mcp = "multilayer_optical_mcp.server:main"
