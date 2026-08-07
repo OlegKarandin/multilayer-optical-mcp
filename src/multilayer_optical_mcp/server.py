@@ -11,7 +11,6 @@ Exposes:
 from __future__ import annotations
 
 from dataclasses import asdict
-from pathlib import Path
 
 from mcp.server import MCPServer
 
@@ -27,10 +26,7 @@ from .gnpy_adapter.adapter import (
     recompute_qot_under_loading as _recompute,
     unattributed_channel_freqs_hz as _unattributed_channel_freqs_hz,
 )
-
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-MOD_FORMATS_YAML = REPO_ROOT / "modulation_formats.yaml"
+from .topology_loader import MOD_FORMATS_YAML  # noqa: F401  (re-export; imported by tests and callers)
 
 
 def build_app(*, model: NetworkModel | None = None,
@@ -1092,5 +1088,42 @@ def build_app(*, model: NetworkModel | None = None,
 
 
 def main() -> None:
-    """Entry-point for running the MCP server (stdio transport)."""
-    build_app().run()
+    """Entry-point for running the MCP server (stdio transport). With
+    --topology, seeds the model from a topology JSON file; adding --state also
+    applies an operating-state file built by `multilayer-optical-mcp-build`
+    (see state_file.load_model_from_state_file). Without either, starts with
+    the empty NetworkModel as before."""
+    import argparse
+
+    from .state_file import StateFileError, load_model_from_state_file
+    from .topology_loader import load_model_from_topology_file
+
+    parser = argparse.ArgumentParser(prog="multilayer-optical-mcp")
+    parser.add_argument(
+        "--topology", type=str, default=None,
+        help="Path to a topology JSON file to seed the model with at startup",
+    )
+    parser.add_argument(
+        "--state", type=str, default=None,
+        help="Path to an operating-state file (requires --topology); adds the "
+             "lightpaths, IP links and services a prior build produced",
+    )
+    args = parser.parse_args()
+    if args.state and not args.topology:
+        parser.error("--state requires --topology: the state file is a delta on "
+                     "top of a topology, and is meaningless without one")
+
+    model = None
+    if args.topology:
+        modes = load_modulation_formats(MOD_FORMATS_YAML)
+        try:
+            if args.state:
+                model = load_model_from_state_file(args.topology, args.state, modes=modes)
+            else:
+                model = load_model_from_topology_file(args.topology, modes=modes)
+        except StateFileError as exc:
+            # Structured, actionable message (both fingerprints/paths -- see
+            # StateFileError's docstring) instead of a raw traceback: this is
+            # the realistic failure mode (topology rebuilt, state file not).
+            parser.error(str(exc))
+    build_app(model=model).run()

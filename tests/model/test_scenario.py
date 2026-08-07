@@ -166,6 +166,44 @@ def test_materialized_baseline_has_no_drops(built):
         assert u.capacity_gbps is not None and u.capacity_gbps > 0.0
 
 
+# ------------------------------------------------------ real unplaced reasons
+
+from multilayer_optical_mcp.model.scenario import _limit_from_reasons
+
+
+def test_limit_from_reasons_maps_disjointness_not_inventory():
+    assert _limit_from_reasons({"no disjoint feasible pair": 8}) == "no_disjoint_pair"
+
+
+def test_limit_from_reasons_still_recognizes_real_inventory_exhaustion():
+    assert _limit_from_reasons({"insufficient transponders": 3}) == "spare_inventory"
+
+
+def test_limit_from_reasons_degrades_to_other_not_to_a_wrong_label():
+    assert _limit_from_reasons({"something new nobody mapped": 2}) == "other"
+
+
+def test_limit_from_reasons_is_none_when_nothing_was_unplaced():
+    assert _limit_from_reasons({}) == "none"
+
+
+def test_limit_from_reasons_picks_the_most_common_reason():
+    reasons = {"no disjoint feasible pair": 1, "insufficient transponders": 5}
+    assert _limit_from_reasons(reasons) == "spare_inventory"
+
+
+def test_build_operating_network_exposes_allocation_and_reasons():
+    m = _triangle()
+    qot = ConstQot()
+    res = build_operating_network(m, seed=0, qot=qot, target_mean_util=0.5,
+                                  max_util_cap=0.95, settle=_fake_settle(qot))
+    # The winning AllocationResult is reachable, so a caller can read WHY a
+    # demand did not place instead of guessing from `limit`.
+    assert res.allocation is not None
+    assert res.report.unplaced_reasons == {}
+    assert sum(res.report.unplaced_reasons.values()) == res.report.unplaced_count
+
+
 # ---------------------------------------------------- pair_density forwarding
 
 def _spy_generate_demands(monkeypatch, recorder, field="pair_density"):

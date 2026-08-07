@@ -29,6 +29,7 @@ dev = ["multilayer-optical-mcp[server]", "pytest>=8", "pytest-cov>=5", "ruff==0.
 
 [project.scripts]
 multilayer-optical-mcp = "multilayer_optical_mcp.server:main"
+multilayer-optical-mcp-build = "multilayer_optical_mcp.build_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
