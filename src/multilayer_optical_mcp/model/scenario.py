@@ -85,7 +85,7 @@ def _default_settle(store) -> Callable[[NetworkModel], None]:
 # unmatched reason becomes "other", never a confidently wrong label.
 _REASON_LIMITS = (
     ("no disjoint", "no_disjoint_pair"),
-    ("inventory", "spare_inventory"),
+    ("transponder", "spare_inventory"),
 )
 
 

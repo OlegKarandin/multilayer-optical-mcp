@@ -176,7 +176,7 @@ def test_limit_from_reasons_maps_disjointness_not_inventory():
 
 
 def test_limit_from_reasons_still_recognizes_real_inventory_exhaustion():
-    assert _limit_from_reasons({"no spare inventory at src": 3}) == "spare_inventory"
+    assert _limit_from_reasons({"insufficient transponders": 3}) == "spare_inventory"
 
 
 def test_limit_from_reasons_degrades_to_other_not_to_a_wrong_label():
@@ -188,7 +188,7 @@ def test_limit_from_reasons_is_none_when_nothing_was_unplaced():
 
 
 def test_limit_from_reasons_picks_the_most_common_reason():
-    reasons = {"no disjoint feasible pair": 1, "no spare inventory at src": 5}
+    reasons = {"no disjoint feasible pair": 1, "insufficient transponders": 5}
     assert _limit_from_reasons(reasons) == "spare_inventory"
 
 
