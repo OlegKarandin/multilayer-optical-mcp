@@ -1,12 +1,25 @@
 """Operating-state file: fingerprint, dump, load, and the composed loader."""
 import json
 
-from multilayer_optical_mcp.model.assets import Lightpath
+import pytest
+
+from multilayer_optical_mcp.gnpy_adapter.loading import LoadingState
+from multilayer_optical_mcp.model.assets import Direction, Lightpath
 from multilayer_optical_mcp.model.ip_assets import IPLink, Service
+from multilayer_optical_mcp.model.ip_routing import simulate_ip_routing
 from multilayer_optical_mcp.model.modes import load_modulation_formats
+from multilayer_optical_mcp.model.objective import evaluate_objective
 from multilayer_optical_mcp.model.qot import QoTState
+from multilayer_optical_mcp.model.scenario import build_operating_network
+from multilayer_optical_mcp.model.snapshots import diff_models
 from multilayer_optical_mcp.model.topology_import import model_from_abstract_graph
-from multilayer_optical_mcp.state_file import FORMAT_VERSION, dump_state, topology_fingerprint
+from multilayer_optical_mcp.state_file import (
+    FORMAT_VERSION,
+    StateFileError,
+    dump_state,
+    load_state,
+    topology_fingerprint,
+)
 from multilayer_optical_mcp.topology_loader import MOD_FORMATS_YAML
 
 TOPOLOGY = {
@@ -123,3 +136,88 @@ def test_dump_state_sorts_collections_but_not_paths():
     assert [lp["id"] for lp in doc["lightpaths"]] == ["lp_0", "lp_1"]
     # ...but the OMS sequence keeps its physical order, unsorted.
     assert doc["lightpaths"][0]["oms_sequence"] == ["oms_b_c", "oms_c_a"]
+
+
+class ConstQot:
+    """Route-agnostic high GSNR: any path clears the top mode's threshold."""
+    def __call__(self, *, oms_sequence, direction, mode_id, loading):
+        return QoTState(gsnr_db=16.0, osnr_db=30.0, margin_db=0.0)
+
+
+def _fake_settle(qot):
+    def _settle(work):
+        for lp in work.list_lightpaths():
+            work.set_qot_state(lp.id, qot(oms_sequence=lp.oms_sequence,
+                                          direction=Direction.FORWARD,
+                                          mode_id=lp.mode_id,
+                                          loading=LoadingState.empty()))
+    return _settle
+
+
+def _bare():
+    modes = load_modulation_formats(MOD_FORMATS_YAML)
+    return model_from_abstract_graph(TOPOLOGY["graph"], modes=modes)
+
+
+def _built():
+    """A REAL packer-built operating network on the 3-node ring, GNPy-free."""
+    qot = ConstQot()
+    res = build_operating_network(_bare(), seed=0, qot=qot, target_mean_util=0.5,
+                                  max_util_cap=0.95, max_iters=6,
+                                  settle=_fake_settle(qot))
+    assert res.model.list_services(), "fixture must actually place something"
+    return res.model
+
+
+def _reload(built):
+    doc = dump_state(built, fingerprint="f", meta={})
+    fresh = _bare()
+    load_state(fresh, doc)
+    return fresh
+
+
+def test_round_trip_is_identical_across_every_registry():
+    built = _built()
+    delta = diff_models(built, _reload(built))
+    empty = {"added": (), "removed": (), "modified": ()}
+    assert delta == {name: empty for name in delta}, delta
+
+
+def test_round_trip_preserves_ip_routing_and_objective():
+    # Structural equality can still hide a derived-capacity change; assert the
+    # two behavioral read paths agree too.
+    built = _built()
+    reloaded = _reload(built)
+    assert simulate_ip_routing(reloaded) == simulate_ip_routing(built)
+    assert evaluate_objective(reloaded) == evaluate_objective(built)
+
+
+def test_load_state_rejects_an_unknown_format_version():
+    doc = dump_state(_built(), fingerprint="f", meta={})
+    doc["format_version"] = 99
+    with pytest.raises(StateFileError) as exc:
+        load_state(_bare(), doc)
+    assert "99" in str(exc.value)
+
+
+def test_load_state_rejects_a_lightpath_on_an_unknown_oms():
+    doc = dump_state(_built(), fingerprint="f", meta={})
+    doc["lightpaths"][0]["oms_sequence"] = ["oms_nope_nope"]
+    with pytest.raises(StateFileError) as exc:
+        load_state(_bare(), doc)
+    assert "oms_nope_nope" in str(exc.value)
+
+
+def test_load_state_rejects_a_service_on_an_unknown_ip_link():
+    doc = dump_state(_built(), fingerprint="f", meta={})
+    doc["services"][0]["working_path"] = ["ipl_nope"]
+    with pytest.raises(StateFileError) as exc:
+        load_state(_bare(), doc)
+    assert "ipl_nope" in str(exc.value)
+
+
+def test_load_state_rejects_a_malformed_record():
+    doc = dump_state(_built(), fingerprint="f", meta={})
+    del doc["lightpaths"][0]["mode_id"]
+    with pytest.raises(StateFileError):
+        load_state(_bare(), doc)
