@@ -23,9 +23,10 @@ real GNPy adapter, so QoT-free unit tests pass a no-op.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from statistics import mean
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Mapping, Optional
 
 from .allocation import QotEvaluator, solve_allocation_model, AllocationResult
 from .ip_routing import simulate_ip_routing
@@ -45,7 +46,9 @@ class ScenarioReport:
     transponders_used: int
     unplaced_count: int
     scale: float
-    limit: str                    # "none" | "max_util_cap" | "spare_inventory"
+    limit: str                    # "none" | "max_util_cap" | "no_disjoint_pair"
+                                  # | "spare_inventory" | "other"
+    unplaced_reasons: Mapping[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,7 @@ class ScenarioResult:
     model: NetworkModel           # THE artifact — the loaded operating steady state
     demands: List[dict]           # provenance: the demand list that produced it
     report: ScenarioReport
+    allocation: Optional[AllocationResult] = None   # winning pack, for unplaced reasons
 
 
 @dataclass
@@ -74,6 +78,31 @@ def _default_settle(store) -> Callable[[NetworkModel], None]:
         recompute_qot_under_loading(
             model=work, store=store, loading=loading_from_model(work))
     return _settle
+
+
+# Substring -> limit label, most specific first. Matching on a substring (not
+# equality) keeps this robust to the packer refining its reason wording; an
+# unmatched reason becomes "other", never a confidently wrong label.
+_REASON_LIMITS = (
+    ("no disjoint", "no_disjoint_pair"),
+    ("inventory", "spare_inventory"),
+)
+
+
+def _limit_from_reasons(reasons: Mapping[str, int]) -> str:
+    """Derive the `limit` label from the typed unplaced reasons.
+
+    Replaces an unconditional "spare_inventory" that was false by construction:
+    build_operating_network defaults to 10**6 transponders per site, so
+    inventory can never be what bound a default build.
+    """
+    if not reasons:
+        return "none"
+    top = max(reasons.items(), key=lambda kv: (kv[1], kv[0]))[0]
+    for needle, label in _REASON_LIMITS:
+        if needle in top.lower():
+            return label
+    return "other"
 
 
 def build_operating_network(
@@ -192,6 +221,7 @@ def build_operating_network(
 
     reached = best.mean_u >= target_mean_util - tol
     unplaced = len(best.result.unplaced) if best.result else 0
+    reasons = dict(Counter(r for _d, r in best.result.unplaced)) if best.result else {}
     if best.result is None:
         status, limit = SolverStatus.NO_SOLUTION, "none"
     elif reached and best.max_u <= max_util_cap:
@@ -199,7 +229,7 @@ def build_operating_network(
     elif cap_bound:
         status, limit = SolverStatus.PARTIAL, "max_util_cap"
     elif unplaced:
-        status, limit = SolverStatus.PARTIAL, "spare_inventory"
+        status, limit = SolverStatus.PARTIAL, _limit_from_reasons(reasons)
     else:
         # Below target but nothing hard-bound it: a quantization plateau (util
         # jumps in discrete steps as grooming concentrates), not a real limit.
@@ -216,8 +246,9 @@ def build_operating_network(
         unplaced_count=unplaced,
         scale=best.scale,
         limit=limit,
+        unplaced_reasons=reasons,
     )
-    return ScenarioResult(best.work, best.demands, report)
+    return ScenarioResult(best.work, best.demands, report, best.result)
 
 
 def _count_transponders(result: Optional[AllocationResult]) -> int:
