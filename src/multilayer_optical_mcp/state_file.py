@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -172,6 +173,18 @@ def _read_json(path: "str | Path") -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8-sig"))
 
 
+def running_gnpy_version() -> str:
+    """The GNPy package version importable right now, or "unknown" if GNPy is
+    not installed. Shared by build_cli (writes it into meta.gnpy_version at
+    build time) and load_model_from_state_file (compares it against the
+    stored value at load time)."""
+    from importlib.metadata import PackageNotFoundError, version
+    try:
+        return version("gnpy")
+    except PackageNotFoundError:
+        return "unknown"
+
+
 def load_model_from_state_file(
     topology_path: "str | Path", state_path: "str | Path", *, modes: "ModeRegistry",
 ) -> "NetworkModel":
@@ -180,16 +193,32 @@ def load_model_from_state_file(
     whose lightpaths reference OMS ids from a different topology would either
     fail with a confusing reference error or -- worse, if the ids happen to
     line up -- load a network whose physics do not match its routes.
+
+    Stored QoT is read back as-is regardless of which GNPy produced it, so a
+    `meta.gnpy_version` mismatch against the running install does not refuse
+    the load -- it only matters if the caller later calls
+    `recompute_qot_under_loading`, which would run under a different GNPy than
+    the one that produced the stored numbers. That is worth a warning, not a
+    refusal.
     """
     from .topology_loader import load_model_from_topology_file
 
     state = _read_json(state_path)
-    expected = state.get("meta", {}).get("topology_fingerprint")
+    meta = state.get("meta", {})
+    expected = meta.get("topology_fingerprint")
     actual = topology_fingerprint(_read_json(topology_path))
     if expected != actual:
         raise StateFileError(
             f"state file {state_path} was built from a different topology: "
             f"it expects {expected}, but {topology_path} fingerprints as {actual}")
+
+    stored_gnpy = meta.get("gnpy_version")
+    running_gnpy = running_gnpy_version()
+    if stored_gnpy and running_gnpy != "unknown" and stored_gnpy != running_gnpy:
+        print(f"warning: state file {state_path} was built with gnpy "
+              f"{stored_gnpy}, but this install has gnpy {running_gnpy}; "
+              f"stored QoT is used as-is, but recompute_qot_under_loading "
+              f"will run under the different GNPy install", file=sys.stderr)
 
     model = load_model_from_topology_file(topology_path, modes=modes)
     load_state(model, state)

@@ -122,3 +122,153 @@ def test_build_records_the_parameters_it_was_given(monkeypatch, topo, tmp_path):
     params = json.loads(out.read_text(encoding="utf-8"))["meta"]["params"]
     assert params["seed"] == 7
     assert params["pair_density"] == 0.02
+
+
+# --- Important #2: --out is validated before the (expensive) build runs ---
+
+def test_out_parent_directory_must_exist_before_the_build_runs(
+        monkeypatch, topo, tmp_path, capsys):
+    def fake_build(_model, **_kw):
+        raise AssertionError("build must not run when --out is invalid")
+    monkeypatch.setattr(build_cli, "build_operating_network", fake_build)
+
+    out = tmp_path / "does_not_exist" / "state.json"
+    with pytest.raises(SystemExit) as exc:
+        _run(monkeypatch, topo, out)
+    assert exc.value.code != 0
+    assert not out.exists()
+    assert "does not exist" in capsys.readouterr().err
+
+
+def test_out_in_an_existing_directory_proceeds_to_the_build(monkeypatch, topo, tmp_path):
+    # The companion positive case: a valid --out must not be rejected.
+    _patch_build(monkeypatch, _report())
+    out = tmp_path / "state.json"
+    _run(monkeypatch, topo, out)
+    assert out.exists()
+
+
+# --- Important #3: the CLI's flag -> builder-keyword wiring ---
+
+def _capture_build(monkeypatch, report):
+    """Like _patch_build, but records every keyword build_operating_network
+    was actually called with, so a test can assert the flag -> kwarg mapping
+    directly instead of just asserting the build "succeeded"."""
+    modes = load_modulation_formats(MOD_FORMATS_YAML)
+    model = model_from_abstract_graph(TOPOLOGY["graph"], modes=modes)
+    captured: dict = {}
+
+    def fake_build(_model, **kw):
+        captured.update(kw)
+        return ScenarioResult(model, [], report, None)
+
+    monkeypatch.setattr(build_cli, "build_operating_network", fake_build)
+    return captured
+
+
+def test_flags_reach_the_correct_builder_keywords(monkeypatch, topo, tmp_path):
+    captured = _capture_build(monkeypatch, _report())
+    out = tmp_path / "state.json"
+    _run(monkeypatch, topo, out,
+         "--seed", "3",
+         "--target-mean-util", "0.55",
+         "--max-util-cap", "0.8",
+         "--pair-density", "0.1",
+         "--unit-gbps", "50",
+         "--protected-fraction", "0.6",
+         "--max-iters", "9",
+         "--protection-basis", "srlg",
+         "--protection-level", "srlg",
+         "--protection-best-effort")
+
+    assert captured["seed"] == 3
+    assert captured["target_mean_util"] == 0.55
+    assert captured["max_util_cap"] == 0.8
+    assert captured["pair_density"] == 0.1
+    assert captured["unit_gbps"] == 50.0
+    assert captured["protected_fraction"] == 0.6
+    assert captured["max_iters"] == 9
+    assert captured["protection_constraints"] == {
+        "best_effort": True, "basis": "srlg", "level": "srlg"}
+
+
+def test_protection_constraints_flows_through_to_the_builder(monkeypatch, topo, tmp_path):
+    captured = _capture_build(monkeypatch, _report())
+    out = tmp_path / "state.json"
+    _run(monkeypatch, topo, out,
+         "--protection-basis", "risk_group",
+         "--protection-level", "risk_group",
+         "--protection-best-effort")
+    assert captured["protection_constraints"] == {
+        "best_effort": True, "basis": "risk_group", "level": "risk_group"}
+
+
+def test_protection_constraints_is_none_without_any_protection_flag(
+        monkeypatch, topo, tmp_path):
+    captured = _capture_build(monkeypatch, _report())
+    out = tmp_path / "state.json"
+    _run(monkeypatch, topo, out)
+    assert captured["protection_constraints"] is None
+
+
+def test_protection_constraints_direct_from_flags():
+    args = build_cli._parser().parse_args([
+        "--topology", "t.json", "--out", "o.json",
+        "--protection-basis", "srlg", "--protection-level", "link",
+        "--protection-best-effort"])
+    assert build_cli._protection_constraints(args) == {
+        "best_effort": True, "basis": "srlg", "level": "link"}
+
+
+def test_protection_constraints_direct_none_when_no_flags_set():
+    args = build_cli._parser().parse_args(["--topology", "t.json", "--out", "o.json"])
+    assert build_cli._protection_constraints(args) is None
+
+
+def test_protection_constraints_direct_best_effort_alone():
+    # best_effort=True with no basis/level: still non-None, and the dict must
+    # not silently gain unrequested basis/level keys.
+    args = build_cli._parser().parse_args([
+        "--topology", "t.json", "--out", "o.json", "--protection-best-effort"])
+    assert build_cli._protection_constraints(args) == {"best_effort": True}
+
+
+# --- Minor #7: NO_SOLUTION gate ordering and remediation hints ---
+
+def test_no_solution_gate_is_checked_before_the_zero_demands_gate(
+        monkeypatch, topo, tmp_path, capsys):
+    # The <2-site early return in scenario.py reports BOTH n_demands=0 and
+    # NO_SOLUTION with limit="none" -- the no_solution message (which can name
+    # the site-count issue) must win over the pair-density/unit-gbps advice,
+    # which cannot help a one-site topology.
+    _patch_build(monkeypatch, _report(
+        status=SolverStatus.NO_SOLUTION, n_demands=0, limit="none"))
+    out = tmp_path / "state.json"
+    with pytest.raises(SystemExit) as exc:
+        _run(monkeypatch, topo, out)
+    assert exc.value.code != 0
+    err = capsys.readouterr().err
+    assert "no_solution" in err
+    assert "--pair-density" not in err
+
+
+def test_no_solution_gate_names_a_remediation_flag_for_a_known_limit(
+        monkeypatch, topo, tmp_path, capsys):
+    _patch_build(monkeypatch, _report(
+        status=SolverStatus.NO_SOLUTION, limit="no_disjoint_pair"))
+    out = tmp_path / "state.json"
+    with pytest.raises(SystemExit) as exc:
+        _run(monkeypatch, topo, out)
+    assert exc.value.code != 0
+    assert "--protection-best-effort" in capsys.readouterr().err
+
+
+def test_unplaced_warning_names_a_remediation_flag_for_a_known_limit(
+        monkeypatch, topo, tmp_path, capsys):
+    _patch_build(monkeypatch, _report(
+        status=SolverStatus.PARTIAL, unplaced_count=3, limit="max_util_cap",
+        unplaced_reasons={"utilization cap": 3}))
+    out = tmp_path / "state.json"
+    _run(monkeypatch, topo, out)
+    err = capsys.readouterr().err
+    assert "--max-util-cap" in err or "--target-mean-util" in err

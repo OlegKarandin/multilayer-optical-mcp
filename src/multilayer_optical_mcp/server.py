@@ -1095,7 +1095,7 @@ def main() -> None:
     the empty NetworkModel as before."""
     import argparse
 
-    from .state_file import load_model_from_state_file
+    from .state_file import StateFileError, load_model_from_state_file
     from .topology_loader import load_model_from_topology_file
 
     parser = argparse.ArgumentParser(prog="multilayer-optical-mcp")
@@ -1116,8 +1116,14 @@ def main() -> None:
     model = None
     if args.topology:
         modes = load_modulation_formats(MOD_FORMATS_YAML)
-        if args.state:
-            model = load_model_from_state_file(args.topology, args.state, modes=modes)
-        else:
-            model = load_model_from_topology_file(args.topology, modes=modes)
+        try:
+            if args.state:
+                model = load_model_from_state_file(args.topology, args.state, modes=modes)
+            else:
+                model = load_model_from_topology_file(args.topology, modes=modes)
+        except StateFileError as exc:
+            # Structured, actionable message (both fingerprints/paths -- see
+            # StateFileError's docstring) instead of a raw traceback: this is
+            # the realistic failure mode (topology rebuilt, state file not).
+            parser.error(str(exc))
     build_app(model=model).run()

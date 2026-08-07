@@ -265,6 +265,43 @@ def test_load_model_from_state_file_tolerates_utf8_bom(topo_and_state):
     assert load_model_from_state_file(topo, state, modes=modes).list_services()
 
 
+def test_load_model_from_state_file_warns_on_gnpy_version_mismatch(
+        topo_and_state, monkeypatch, capsys):
+    topo, state = topo_and_state
+    doc = json.loads(state.read_text(encoding="utf-8"))
+    doc["meta"]["gnpy_version"] = "1.0.0"
+    state.write_text(json.dumps(doc), encoding="utf-8")
+    monkeypatch.setattr(
+        "multilayer_optical_mcp.state_file.running_gnpy_version", lambda: "2.0.0")
+    modes = load_modulation_formats(MOD_FORMATS_YAML)
+    load_model_from_state_file(topo, state, modes=modes)
+    err = capsys.readouterr().err
+    assert "1.0.0" in err and "2.0.0" in err
+
+
+def test_load_model_from_state_file_does_not_warn_when_gnpy_version_matches(
+        topo_and_state, monkeypatch, capsys):
+    topo, state = topo_and_state
+    doc = json.loads(state.read_text(encoding="utf-8"))
+    doc["meta"]["gnpy_version"] = "2.0.0"
+    state.write_text(json.dumps(doc), encoding="utf-8")
+    monkeypatch.setattr(
+        "multilayer_optical_mcp.state_file.running_gnpy_version", lambda: "2.0.0")
+    modes = load_modulation_formats(MOD_FORMATS_YAML)
+    load_model_from_state_file(topo, state, modes=modes)
+    assert capsys.readouterr().err == ""
+
+
+def test_load_model_from_state_file_does_not_warn_without_a_stored_gnpy_version(
+        topo_and_state, capsys):
+    # Nothing in meta about gnpy_version at all (e.g. an older build) -- there
+    # is nothing to compare, so no warning, not a crash.
+    topo, state = topo_and_state
+    modes = load_modulation_formats(MOD_FORMATS_YAML)
+    load_model_from_state_file(topo, state, modes=modes)
+    assert capsys.readouterr().err == ""
+
+
 def test_server_main_rejects_state_without_topology(monkeypatch, capsys):
     import sys
     from multilayer_optical_mcp import server
@@ -273,3 +310,30 @@ def test_server_main_rejects_state_without_topology(monkeypatch, capsys):
         server.main()
     assert exc.value.code != 0
     assert "--topology" in capsys.readouterr().err
+
+
+def test_server_main_reports_a_fingerprint_mismatch_without_a_traceback(
+        monkeypatch, tmp_path, capsys):
+    # The realistic real-world failure: topology got rebuilt, state file did
+    # not. main() must fail with a structured message, not a raw traceback.
+    import sys
+    from multilayer_optical_mcp import server
+
+    other = tmp_path / "other.json"
+    changed = json.loads(json.dumps(TOPOLOGY))
+    changed["graph"]["edges"][0]["length_km"] = 999.0
+    other.write_text(json.dumps(changed), encoding="utf-8")
+
+    state = tmp_path / "state.json"
+    doc = dump_state(_built(), fingerprint=topology_fingerprint(TOPOLOGY), meta={})
+    state.write_text(json.dumps(doc), encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [
+        "multilayer-optical-mcp", "--topology", str(other), "--state", str(state)])
+    with pytest.raises(SystemExit) as exc:
+        server.main()
+    assert exc.value.code != 0
+    err = capsys.readouterr().err
+    assert "sha256:" in err
+    assert str(other) in err and str(state) in err
+    assert "Traceback" not in err

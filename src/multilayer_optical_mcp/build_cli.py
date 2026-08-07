@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +21,7 @@ from .model.modes import load_modulation_formats
 from .model.qot_results import QoTCache, QoTResultStore
 from .model.scenario import build_operating_network
 from .model.solvers import SolverStatus
-from .state_file import dump_state, topology_fingerprint
+from .state_file import dump_state, running_gnpy_version, topology_fingerprint
 from .topology_loader import MOD_FORMATS_YAML, load_model_from_topology_file
 
 
@@ -61,21 +62,45 @@ def _protection_constraints(args) -> dict | None:
     return out
 
 
-def _gnpy_version() -> str:
-    """Provenance only. Stored QoT is read back as-is, so a version change does
-    not invalidate a state file -- it matters only if the client later calls
-    recompute_qot_under_loading, which is why the server warns rather than
-    refusing on a mismatch."""
-    from importlib.metadata import PackageNotFoundError, version
-    try:
-        return version("gnpy")
-    except PackageNotFoundError:
-        return "unknown"
+# Remediation hint per `limit` label (ScenarioReport's five-label vocabulary:
+# "none", "max_util_cap", "no_disjoint_pair", "spare_inventory", "other").
+# "other" is deliberately unmapped -- _limit_from_reasons already only falls
+# back to it when no known substring matched, so there is no single flag to
+# suggest.
+_LIMIT_HINTS = {
+    "max_util_cap": "raise --max-util-cap or lower --target-mean-util",
+    "no_disjoint_pair": "pass --protection-best-effort to relax the "
+                        "disjointness requirement",
+    "spare_inventory": "increase the spare transponder inventory",
+}
+
+
+def _limit_hint(limit: str) -> str:
+    if limit == "none":
+        # "none" covers both build_operating_network's own <2-site early
+        # return and the general "no scale ever produced a feasible
+        # allocation" case -- there is no single flag for either.
+        return ("the topology may have fewer than two sites, or no offered "
+                "load level produced a feasible allocation")
+    return _LIMIT_HINTS.get(limit, "")
+
+
+def _validate_out_path(parser: argparse.ArgumentParser, out: str) -> None:
+    """Fail fast on a bad --out before the (potentially tens-of-minutes) build
+    runs, not after: build_operating_network's cost is exactly what a state
+    file exists to avoid re-paying, so discarding it to a FileNotFoundError or
+    a permission error on write is the failure this guards against."""
+    parent = Path(out).resolve().parent
+    if not parent.is_dir():
+        parser.exit(2, f"--out's parent directory does not exist: {parent}\n")
+    if not os.access(parent, os.W_OK):
+        parser.exit(2, f"--out's parent directory is not writable: {parent}\n")
 
 
 def main() -> None:
     parser = _parser()
     args = parser.parse_args()
+    _validate_out_path(parser, args.out)
 
     modes = load_modulation_formats(MOD_FORMATS_YAML)
     raw = json.loads(Path(args.topology).read_text(encoding="utf-8-sig"))
@@ -99,25 +124,33 @@ def main() -> None:
         protection_constraints=_protection_constraints(args))
     rep = res.report
 
-    # Gate BEFORE writing: both of these produce a well-formed but useless file.
+    # Gate BEFORE writing: all of these produce a well-formed but useless file.
+    # NO_SOLUTION checked first: it subsumes the <2-site early return (which
+    # also reports n_demands=0), and that case needs the no_solution message,
+    # not the pair-density/unit-gbps advice below, which cannot help a
+    # one-site topology.
+    if rep.status is SolverStatus.NO_SOLUTION:
+        hint = _limit_hint(rep.limit)
+        detail = f"; {hint}" if hint else ""
+        parser.exit(2, f"build returned no_solution (limit={rep.limit})"
+                       f"{detail}; no state file written.\n")
     if rep.n_demands == 0:
         parser.exit(2, "build produced 0 demands: the gravity generator "
                        "quantizes each pair to round(offered / unit_gbps), so a "
                        "large full matrix rounds every pair to zero. Set "
                        "--pair-density (e.g. 0.02) or raise --unit-gbps.\n")
-    if rep.status is SolverStatus.NO_SOLUTION:
-        parser.exit(2, f"build returned no_solution (limit={rep.limit}); "
-                       f"no state file written.\n")
     if rep.unplaced_count:
+        hint = _limit_hint(rep.limit)
+        detail = f" ({hint})" if hint else ""
         print(f"warning: {rep.unplaced_count} demand(s) unplaced "
-              f"(limit={rep.limit}):", file=sys.stderr)
+              f"(limit={rep.limit}){detail}:", file=sys.stderr)
         for reason, count in sorted(rep.unplaced_reasons.items(),
                                     key=lambda kv: (-kv[1], kv[0])):
             print(f"  {count} x {reason}", file=sys.stderr)
 
     meta = {
         "topology_path": str(args.topology),
-        "gnpy_version": _gnpy_version(),
+        "gnpy_version": running_gnpy_version(),
         "built_at": datetime.now(timezone.utc).isoformat(),
         "params": params,
         "report": {
