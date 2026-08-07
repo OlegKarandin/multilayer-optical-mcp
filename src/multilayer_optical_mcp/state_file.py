@@ -21,6 +21,7 @@ from .model.ip_assets import IPLink, Service
 from .model.qot import QoTState
 
 if TYPE_CHECKING:                                   # import cycle-free typing
+    from .model.modes import ModeRegistry
     from .model.network import NetworkModel
 
 FORMAT_VERSION = 1
@@ -171,7 +172,9 @@ def _read_json(path: "str | Path") -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8-sig"))
 
 
-def load_model_from_state_file(topology_path, state_path, *, modes):
+def load_model_from_state_file(
+    topology_path: "str | Path", state_path: "str | Path", *, modes: "ModeRegistry",
+) -> "NetworkModel":
     """Import the topology, verify the state file was built from THAT topology,
     then apply the state. The fingerprint check is not a formality: a state file
     whose lightpaths reference OMS ids from a different topology would either
