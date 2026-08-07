@@ -11,7 +11,6 @@ Exposes:
 from __future__ import annotations
 
 from dataclasses import asdict
-from pathlib import Path
 
 from mcp.server import MCPServer
 
@@ -27,10 +26,7 @@ from .gnpy_adapter.adapter import (
     recompute_qot_under_loading as _recompute,
     unattributed_channel_freqs_hz as _unattributed_channel_freqs_hz,
 )
-
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-MOD_FORMATS_YAML = REPO_ROOT / "modulation_formats.yaml"
+from .topology_loader import MOD_FORMATS_YAML  # noqa: F401  (re-export; imported by tests and callers)
 
 
 def build_app(*, model: NetworkModel | None = None,
