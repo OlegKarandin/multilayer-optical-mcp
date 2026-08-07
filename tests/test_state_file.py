@@ -1,8 +1,7 @@
 """Operating-state file: fingerprint, dump, load, and the composed loader."""
 import json
 
-from multilayer_optical_mcp.gnpy_adapter.loading import LoadingState  # noqa: F401  (consumed by Task 3's tests, same import block)
-from multilayer_optical_mcp.model.assets import Direction, Lightpath  # noqa: F401  (Direction consumed by Task 3's tests)
+from multilayer_optical_mcp.model.assets import Lightpath
 from multilayer_optical_mcp.model.ip_assets import IPLink, Service
 from multilayer_optical_mcp.model.modes import load_modulation_formats
 from multilayer_optical_mcp.model.qot import QoTState
