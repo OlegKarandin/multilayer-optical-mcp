@@ -1,5 +1,6 @@
 """Operating-state file: fingerprint, dump, load, and the composed loader."""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -221,3 +222,54 @@ def test_load_state_rejects_a_malformed_record():
     del doc["lightpaths"][0]["mode_id"]
     with pytest.raises(StateFileError):
         load_state(_bare(), doc)
+
+
+from multilayer_optical_mcp.state_file import load_model_from_state_file
+
+
+@pytest.fixture
+def topo_and_state(tmp_path: Path):
+    topo = tmp_path / "topo.json"
+    topo.write_text(json.dumps(TOPOLOGY), encoding="utf-8")
+    state = tmp_path / "state.json"
+    doc = dump_state(_built(), fingerprint=topology_fingerprint(TOPOLOGY), meta={})
+    state.write_text(json.dumps(doc), encoding="utf-8")
+    return topo, state
+
+
+def test_load_model_from_state_file_restores_the_services(topo_and_state):
+    topo, state = topo_and_state
+    modes = load_modulation_formats(MOD_FORMATS_YAML)
+    model = load_model_from_state_file(topo, state, modes=modes)
+    assert model.list_services()
+    assert model.list_ip_links()
+    assert model.get_srlg("srlg_ab") is not None      # topology half still loads
+
+
+def test_load_model_from_state_file_rejects_a_mismatched_topology(topo_and_state, tmp_path):
+    _topo, state = topo_and_state
+    other = tmp_path / "other.json"
+    changed = json.loads(json.dumps(TOPOLOGY))
+    changed["graph"]["edges"][0]["length_km"] = 999.0
+    other.write_text(json.dumps(changed), encoding="utf-8")
+    modes = load_modulation_formats(MOD_FORMATS_YAML)
+    with pytest.raises(StateFileError) as exc:
+        load_model_from_state_file(other, state, modes=modes)
+    assert "sha256:" in str(exc.value)
+
+
+def test_load_model_from_state_file_tolerates_utf8_bom(topo_and_state):
+    topo, state = topo_and_state
+    state.write_bytes(b"\xef\xbb\xbf" + state.read_bytes())
+    modes = load_modulation_formats(MOD_FORMATS_YAML)
+    assert load_model_from_state_file(topo, state, modes=modes).list_services()
+
+
+def test_server_main_rejects_state_without_topology(monkeypatch, capsys):
+    import sys
+    from multilayer_optical_mcp import server
+    monkeypatch.setattr(sys, "argv", ["multilayer-optical-mcp", "--state", "s.json"])
+    with pytest.raises(SystemExit) as exc:
+        server.main()
+    assert exc.value.code != 0
+    assert "--topology" in capsys.readouterr().err

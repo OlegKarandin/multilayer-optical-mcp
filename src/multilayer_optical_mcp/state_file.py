@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .model.assets import Lightpath
@@ -162,3 +163,31 @@ def load_state(model: "NetworkModel", data: dict) -> None:
                 protection_path=tuple(rec.get("protection_path", ()))))
         except (ValueError, KeyError) as exc:
             raise StateFileError(f"service {rec.get('id')!r}: {exc}") from exc
+
+
+def _read_json(path: "str | Path") -> dict:
+    # utf-8-sig strips a leading BOM if present (a no-op otherwise) -- Windows
+    # editors commonly write one, same reason topology_loader uses it.
+    return json.loads(Path(path).read_text(encoding="utf-8-sig"))
+
+
+def load_model_from_state_file(topology_path, state_path, *, modes):
+    """Import the topology, verify the state file was built from THAT topology,
+    then apply the state. The fingerprint check is not a formality: a state file
+    whose lightpaths reference OMS ids from a different topology would either
+    fail with a confusing reference error or -- worse, if the ids happen to
+    line up -- load a network whose physics do not match its routes.
+    """
+    from .topology_loader import load_model_from_topology_file
+
+    state = _read_json(state_path)
+    expected = state.get("meta", {}).get("topology_fingerprint")
+    actual = topology_fingerprint(_read_json(topology_path))
+    if expected != actual:
+        raise StateFileError(
+            f"state file {state_path} was built from a different topology: "
+            f"it expects {expected}, but {topology_path} fingerprints as {actual}")
+
+    model = load_model_from_topology_file(topology_path, modes=modes)
+    load_state(model, state)
+    return model

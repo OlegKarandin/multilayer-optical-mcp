@@ -1089,11 +1089,13 @@ def build_app(*, model: NetworkModel | None = None,
 
 def main() -> None:
     """Entry-point for running the MCP server (stdio transport). With
-    --topology, seeds the model from a topology JSON file (see
-    topology_loader.load_model_from_topology_file) before serving; without
-    it, starts with the empty NetworkModel as before."""
+    --topology, seeds the model from a topology JSON file; adding --state also
+    applies an operating-state file built by `multilayer-optical-mcp-build`
+    (see state_file.load_model_from_state_file). Without either, starts with
+    the empty NetworkModel as before."""
     import argparse
 
+    from .state_file import load_model_from_state_file
     from .topology_loader import load_model_from_topology_file
 
     parser = argparse.ArgumentParser(prog="multilayer-optical-mcp")
@@ -1101,10 +1103,21 @@ def main() -> None:
         "--topology", type=str, default=None,
         help="Path to a topology JSON file to seed the model with at startup",
     )
+    parser.add_argument(
+        "--state", type=str, default=None,
+        help="Path to an operating-state file (requires --topology); adds the "
+             "lightpaths, IP links and services a prior build produced",
+    )
     args = parser.parse_args()
+    if args.state and not args.topology:
+        parser.error("--state requires --topology: the state file is a delta on "
+                     "top of a topology, and is meaningless without one")
 
     model = None
     if args.topology:
         modes = load_modulation_formats(MOD_FORMATS_YAML)
-        model = load_model_from_topology_file(args.topology, modes=modes)
+        if args.state:
+            model = load_model_from_state_file(args.topology, args.state, modes=modes)
+        else:
+            model = load_model_from_topology_file(args.topology, modes=modes)
     build_app(model=model).run()
