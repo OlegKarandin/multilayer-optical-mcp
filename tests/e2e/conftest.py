@@ -4,7 +4,6 @@ tests. Mirrors tests/model/test_scenario.py::test_german_17_end_to_end_real_adap
 
 from __future__ import annotations
 
-import json
 import os
 
 import pytest
@@ -14,7 +13,7 @@ from multilayer_optical_network.model.modes import default_modes
 from multilayer_optical_network.model.qot_results import QoTResultStore, QoTCache
 from multilayer_optical_network.model.allocation import make_adapter_evaluator
 from multilayer_optical_network.model.scenario import build_operating_network
-from multilayer_optical_network.model.topology_import import model_from_abstract_graph
+from multilayer_optical_network.topology_loader import load_model_from_topology_file
 
 
 @pytest.fixture(scope="session")
@@ -22,9 +21,8 @@ def german17_built():
     if not os.environ.get("OPTICAL_NET_RUN_GNPY_E2E"):
         pytest.skip("slow real-GNPy build; set OPTICAL_NET_RUN_GNPY_E2E=1 to run")
 
-    graph = json.loads(reference_topology("german_17").read_text(encoding="utf-8"))
     modes = default_modes()
-    model = model_from_abstract_graph(graph, modes=modes)
+    model = load_model_from_topology_file(reference_topology("german_17"), modes=modes)
     store = QoTResultStore()
     cache = QoTCache()
     qot = make_adapter_evaluator(model, store, cache=cache)
