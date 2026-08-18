@@ -519,13 +519,22 @@ def build_app(*, model: NetworkModel | None = None,
     def compute_disjoint_paths(
         src: str, dst: str,
         basis: str = "physical", level: str = "link",
-        best_effort: bool = False,
+        best_effort: bool = False, constraints: dict | None = None,
     ) -> dict:
         """Find a disjoint pair src->dst under a basis/level. status 'solution'
         for a fully-disjoint pair, 'partial' for the best-effort minimum-overlap
         pair, 'no_solution' when none disjoint and best_effort is false. Assets
         marked failed (inject_failure) are automatically excluded from the
-        search graph.
+        search graph, on top of any explicit `constraints["avoid"]`.
+
+        `basis`/`level` control what counts as *shared between the two
+        returned paths* — they are a disjointness-COMPARISON axis, not an
+        avoidance/exclusion mechanism: `basis="risk_group"` only guarantees
+        the two legs don't share risk-group membership with EACH OTHER, not
+        that either leg avoids the risk group's assets altogether. To force
+        both legs clear of a specific risk group (or any other asset/SRLG
+        set), pass `constraints={"avoid": {"risk_groups": [...]}}` (or
+        `"assets"`/`"srlgs"`) — same shape as `compute_paths`'s `constraints`.
 
         Caveat: `level` only has an effect for basis="physical" (and the
         physical component of basis="union"); for basis="srlg"/"risk_group"
@@ -548,7 +557,8 @@ def build_app(*, model: NetworkModel | None = None,
         `exhaustive=True` as "not known to be truncated," not as proof of
         completeness."""
         res = _compute_disjoint_paths(
-            snapshots.current(), src, dst, basis, level, best_effort)
+            snapshots.current(), src, dst, basis, level, best_effort,
+            constraints=constraints)
         return disjointness_result_dict(res)
 
     @app.tool()

@@ -84,6 +84,30 @@ def test_check_disjointness_tool_risk_group_catch():
     assert rg["shared_groups"] == ["rg-storm"]
 
 
+def test_compute_disjoint_paths_tool_constraints_avoid_is_threaded_through():
+    """compute_disjoint_paths's `basis`/`level` are a disjointness-COMPARISON
+    axis between the two returned legs, not an avoidance mechanism -- only
+    `constraints["avoid"]` excludes an asset from the search graph entirely
+    (same shape as compute_paths's `constraints`, which already threads it
+    through; this tool previously didn't). Regression test for that gap:
+    avoiding fiber-north (one of the two seeded routes' only physical
+    spans) removes oms-north from the search graph entirely, so no second
+    disjoint route remains and status must become 'no_solution' -- if
+    `constraints` were silently dropped (the pre-fix bug), the tool would
+    still find the oms-north/oms-south pair and report 'solution'."""
+    app = _seed_app()
+    unconstrained = call_tool(app, "compute_disjoint_paths", src="A", dst="B",
+                               basis="physical", level="link", best_effort=False)
+    assert unconstrained["status"] == "solution"
+
+    constrained = call_tool(
+        app, "compute_disjoint_paths", src="A", dst="B",
+        basis="physical", level="link", best_effort=False,
+        constraints={"avoid": {"assets": ["fiber-north"]}},
+    )
+    assert constrained["status"] == "no_solution"
+
+
 def test_compute_disjoint_paths_tool_solution_and_best_effort():
     app = _seed_app()
     sol = call_tool(app, "compute_disjoint_paths", src="A", dst="B",
