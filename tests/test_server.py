@@ -90,7 +90,13 @@ def test_snapshot_branch_requires_valid_parent():
     snap = call_tool(app, "snapshot_create")
     branch = call_tool(app, "snapshot_branch", parent_id=snap["id"])
     assert "id" in branch
-    assert branch["id"] != snap["id"]
+    # branch() names the branch POINT -- it echoes the parent id rather than
+    # minting a fresh one (SnapshotStore.branch() collapses onto restore()).
+    assert branch["id"] == snap["id"]
+    # current() is now a clone of that state; snapshotting it again mints a
+    # genuinely new id, per the documented "call snapshot_create() again" step.
+    after = call_tool(app, "snapshot_create")
+    assert after["id"] != snap["id"]
 
 
 def test_snapshot_restore_returns_restored_key():

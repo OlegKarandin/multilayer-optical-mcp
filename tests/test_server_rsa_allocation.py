@@ -103,16 +103,25 @@ def test_solve_rsa_shares_harvest_cache_across_tool_calls(monkeypatch):
 
     out1 = call_tool(app, "solve_rsa", demands=[demand])
     assert out1["status"] == "solution"
-    assert hits and not any(hits)   # first call: cache starts empty, all misses
+    # First call: the cache starts empty for every key, so each mode
+    # candidate's forward-direction probe misses and harvests. Its
+    # backward-direction probe for the SAME mode aliases onto the same key
+    # (harvest_cache_key omits direction -- see HarvestCache's docstring: a
+    # symmetric span's forward and backward requests share one entry) and
+    # hits within this very call. Not all-misses any more, but not all-hits
+    # either, since every mode tried still incurs its own first miss.
+    assert hits and not all(hits)
 
     hits.clear()
     out2 = call_tool(app, "solve_rsa", demands=[demand])
     assert out2["status"] == "solution"
-    # Second call over the SAME unchanged model reuses the first call's
-    # harvested comb -- proof the cache instance, not just its behavior,
-    # is shared across tool invocations (a coincidentally-identical fresh
-    # cache would show only misses here too).
-    assert hits and any(hits)
+    # Second call over the SAME unchanged model: every key it probes (both
+    # directions, every mode candidate) was already populated by call 1, so
+    # EVERY probe hits -- proof the cache INSTANCE, not just within-call
+    # forward/backward aliasing, is shared across tool invocations. A
+    # per-call-fresh cache would reproduce call 1's miss-then-hit pattern
+    # here too, so this is the assertion that actually discriminates.
+    assert hits and all(hits)
 
 
 def test_solve_allocation_greenfield_with_inventory():
